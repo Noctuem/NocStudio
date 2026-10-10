@@ -1,0 +1,303 @@
+{
+  "pictures": {
+    "kind": "image",
+    "mode": "pick",
+    "max_winners": 2,
+    "targets": {},
+    "candidates": [
+      {
+        "id": "a",
+        "title": "Cold reliquary",
+        "summary": "Blue-black steel, pale cyan light from the spire",
+        "files": [
+          "pictures/hall_1.jpg"
+        ],
+        "made_with": {
+          "tool": "image model",
+          "source": "tools/art/concept/room.py",
+          "prompt": "The great hall, whole room, blue-black steel, pale cyan light from the spire. Same layout as the reference.",
+          "seed": 40
+        }
+      },
+      {
+        "id": "b",
+        "title": "Brass and soot",
+        "summary": "Black iron with brass trim, amber work lamps",
+        "files": [
+          "pictures/hall_2.jpg"
+        ],
+        "made_with": {
+          "tool": "image model",
+          "source": "tools/art/concept/room.py",
+          "prompt": "The great hall, whole room, black iron with brass trim, amber work lamps. Same layout as the reference.",
+          "seed": 41
+        }
+      },
+      {
+        "id": "c",
+        "title": "Arterial",
+        "summary": "Near-black hall, the spire glowing blood red",
+        "files": [
+          "pictures/hall_3.jpg"
+        ],
+        "made_with": {
+          "tool": "image model",
+          "source": "tools/art/concept/room.py",
+          "prompt": "The great hall, whole room, near-black hall, the spire glowing blood red. Same layout as the reference.",
+          "seed": 42
+        }
+      },
+      {
+        "id": "d",
+        "title": "Sodium decay",
+        "summary": "Teal shadows under sodium-orange floods",
+        "files": [
+          "pictures/hall_4.jpg"
+        ],
+        "made_with": {
+          "tool": "image model",
+          "source": "tools/art/concept/room.py",
+          "prompt": "The great hall, whole room, teal shadows under sodium-orange floods. Same layout as the reference.",
+          "seed": 43
+        }
+      },
+      {
+        "id": "e",
+        "title": "Bone chapel",
+        "summary": "Grey-violet stone, cold white shafts from above",
+        "files": [
+          "pictures/hall_5.jpg"
+        ],
+        "made_with": {
+          "tool": "image model",
+          "source": "tools/art/concept/room.py",
+          "prompt": "The great hall, whole room, grey-violet stone, cold white shafts from above. Same layout as the reference.",
+          "seed": 44
+        }
+      },
+      {
+        "id": "f",
+        "title": "Ether bloom",
+        "summary": "Indigo dark, violet ether bleeding from the far wall",
+        "files": [
+          "pictures/hall_6.jpg"
+        ],
+        "made_with": {
+          "tool": "image model",
+          "source": "tools/art/concept/room.py",
+          "prompt": "The great hall, whole room, indigo dark, violet ether bleeding from the far wall. Same layout as the reference.",
+          "seed": 45
+        }
+      }
+    ],
+    "context": [
+      {
+        "file": "pictures/layout.jpg",
+        "label": "the layout every piece keeps"
+      }
+    ]
+  },
+  "textures": {
+    "kind": "texture",
+    "mode": "rate",
+    "max_winners": 1,
+    "targets": {},
+    "candidates": [
+      {
+        "id": "a",
+        "title": "Floor plate",
+        "summary": "Riveted steel plate, worn where feet go",
+        "files": [
+          "textures/floor.png"
+        ],
+        "made_with": {
+          "tool": "script",
+          "source": "tools/art/tex/floor.py",
+          "seed": 300
+        }
+      },
+      {
+        "id": "b",
+        "title": "Wall panel",
+        "summary": "Ribbed wall panel, blue-black, oil streaks",
+        "files": [
+          "textures/wall.png"
+        ],
+        "made_with": {
+          "tool": "script",
+          "source": "tools/art/tex/wall.py",
+          "seed": 301
+        }
+      },
+      {
+        "id": "c",
+        "title": "Pillar stone",
+        "summary": "Poured stone, pitted, cold grey",
+        "files": [
+          "textures/pillar.png"
+        ],
+        "made_with": {
+          "tool": "script",
+          "source": "tools/art/tex/pillar.py",
+          "seed": 302
+        }
+      },
+      {
+        "id": "d",
+        "title": "Catwalk grating",
+        "summary": "Bar grating, rust at the welds",
+        "files": [
+          "textures/catwalk.png"
+        ],
+        "made_with": {
+          "tool": "script",
+          "source": "tools/art/tex/catwalk.py",
+          "seed": 303
+        }
+      }
+    ],
+    "context": []
+  },
+  "models": {
+    "kind": "model",
+    "mode": "pick",
+    "max_winners": 1,
+    "targets": {
+      "height_m": 1.8,
+      "max_triangles": 1500,
+      "clips": [
+        "rest",
+        "stride",
+        "rake"
+      ]
+    },
+    "candidates": [
+      {
+        "id": "a",
+        "title": "Brute",
+        "summary": "Broad back, short neck",
+        "files": [
+          "models/figure_brute.glb"
+        ],
+        "made_with": {
+          "tool": "blender (script)",
+          "source": "tools/art/figure/make_brute.py",
+          "seed": 2,
+          "params": {
+            "height_m": 1.8
+          }
+        }
+      },
+      {
+        "id": "b",
+        "title": "Lank",
+        "summary": "Long arms, small head, deep hunch",
+        "files": [
+          "models/figure_lank.glb"
+        ],
+        "made_with": {
+          "tool": "blender (script)",
+          "source": "tools/art/figure/make_lank.py",
+          "seed": 3
+        }
+      },
+      {
+        "id": "c",
+        "title": "Husk",
+        "summary": "Narrow and upright, ribs showing",
+        "files": [
+          "models/figure_husk.glb"
+        ],
+        "made_with": {
+          "tool": "blender (script)",
+          "source": "tools/art/figure/make_husk.py",
+          "seed": 3
+        }
+      }
+    ],
+    "context": []
+  },
+  "sounds": {
+    "kind": "audio",
+    "mode": "pick",
+    "max_winners": 1,
+    "targets": {},
+    "candidates": [
+      {
+        "id": "a",
+        "title": "Dry crack",
+        "summary": "Short and dry, almost no tail",
+        "files": [
+          "sounds/shot_1.wav"
+        ],
+        "made_with": {
+          "tool": "synth (script)",
+          "source": "tools/art/sfx/shot.py",
+          "seed": 500
+        }
+      },
+      {
+        "id": "b",
+        "title": "Hall report",
+        "summary": "Longer tail, as if the big room answers",
+        "files": [
+          "sounds/shot_2.wav"
+        ],
+        "made_with": {
+          "tool": "synth (script)",
+          "source": "tools/art/sfx/shot.py",
+          "seed": 501
+        }
+      },
+      {
+        "id": "c",
+        "title": "Old console grain",
+        "summary": "Crushed to 11 kHz and 8 bits, then filtered",
+        "files": [
+          "sounds/shot_3.wav"
+        ],
+        "made_with": {
+          "tool": "synth (script)",
+          "source": "tools/art/sfx/shot.py",
+          "seed": 502
+        }
+      },
+      {
+        "id": "d",
+        "title": "Heavy thump",
+        "summary": "More sub, slower attack",
+        "files": [
+          "sounds/shot_4.wav"
+        ],
+        "made_with": {
+          "tool": "synth (script)",
+          "source": "tools/art/sfx/shot.py",
+          "seed": 503
+        }
+      }
+    ],
+    "context": []
+  },
+  "held": {
+    "kind": "audio",
+    "mode": "rate",
+    "max_winners": 1,
+    "targets": {},
+    "candidates": [
+      {
+        "id": "a",
+        "title": "Wet gurgle",
+        "summary": "",
+        "files": [
+          "held/loud_and_long.wav"
+        ],
+        "made_with": {
+          "tool": "synth (script)",
+          "source": "tools/art/sfx/tell.py",
+          "seed": 77
+        }
+      }
+    ],
+    "context": []
+  }
+}

@@ -1,0 +1,310 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Studio batch (batches/<id>/batch.json)",
+  "type": "object",
+  "description": "One decision put to the user. Written by studio.py new/add/file; do not edit by hand.",
+  "required": [
+    "schema",
+    "id",
+    "title",
+    "kind",
+    "mode",
+    "ask",
+    "candidates"
+  ],
+  "properties": {
+    "schema": {
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}-[a-z0-9-]+-r\\d+$"
+    },
+    "title": {
+      "type": "string"
+    },
+    "kind": {
+      "enum": [
+        "image",
+        "texture",
+        "model",
+        "audio",
+        "video",
+        "text",
+        "ingame",
+        "question",
+        "mixed"
+      ]
+    },
+    "mode": {
+      "enum": [
+        "pick",
+        "rate",
+        "question"
+      ],
+      "description": "pick: choose a winner. rate: judge each on its own. question: choose an answer."
+    },
+    "max_winners": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "slot": {
+      "type": "string",
+      "description": "The slot the winner fills. Empty when every candidate names its own."
+    },
+    "round": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "parent": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "The batch this is the next round of."
+    },
+    "created": {
+      "type": "string"
+    },
+    "filed": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "filed_by": {
+      "type": "string"
+    },
+    "ready": {
+      "type": "boolean",
+      "description": "True once the checks passed. Only ready batches are in the user's inbox."
+    },
+    "ask": {
+      "type": "string",
+      "description": "One sentence: what the user is choosing."
+    },
+    "look_at": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Where the user should look. Not what to conclude."
+    },
+    "brief": {
+      "type": "string",
+      "description": "What the makers were told (markdown)."
+    },
+    "targets": {
+      "type": "object",
+      "description": "Hard targets the checks enforce: height_m, height_tolerance_m, max_triangles, clips."
+    },
+    "launch": {
+      "type": "string",
+      "description": "For in-game batches: the line that starts the game."
+    },
+    "context": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "path",
+          "kind"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Relative to the batch folder, e.g. files/a/creature.glb"
+          },
+          "kind": {
+            "enum": [
+              "image",
+              "texture",
+              "model",
+              "audio",
+              "video",
+              "text",
+              "file"
+            ]
+          },
+          "role": {
+            "enum": [
+              "primary",
+              "preview",
+              "extra"
+            ]
+          },
+          "label": {
+            "type": "string"
+          },
+          "bytes": {
+            "type": "integer"
+          },
+          "facts": {
+            "type": "object"
+          }
+        }
+      },
+      "description": "Reference pictures shown beside the candidates."
+    },
+    "candidates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "title"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string",
+            "description": "The words over it in the game."
+          },
+          "body": {
+            "type": "string",
+            "description": "Markdown, for a question's option."
+          },
+          "recommended": {
+            "type": "boolean"
+          },
+          "carried_from": {
+            "type": "string",
+            "description": "<batch>/<candidate> it was carried from."
+          },
+          "slot": {
+            "type": "string"
+          },
+          "dest": {
+            "type": "string"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "path",
+                "kind"
+              ],
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "description": "Relative to the batch folder, e.g. files/a/creature.glb"
+                },
+                "kind": {
+                  "enum": [
+                    "image",
+                    "texture",
+                    "model",
+                    "audio",
+                    "video",
+                    "text",
+                    "file"
+                  ]
+                },
+                "role": {
+                  "enum": [
+                    "primary",
+                    "preview",
+                    "extra"
+                  ]
+                },
+                "label": {
+                  "type": "string"
+                },
+                "bytes": {
+                  "type": "integer"
+                },
+                "facts": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "made_with": {
+            "type": "object",
+            "description": "tool, model, seed, prompt, source (the script), params, refs."
+          },
+          "facts": {
+            "type": "object",
+            "description": "Measured from the file by the checks."
+          },
+          "checks": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "level",
+                "id",
+                "msg"
+              ],
+              "properties": {
+                "level": {
+                  "enum": [
+                    "ok",
+                    "warn",
+                    "error"
+                  ]
+                },
+                "id": {
+                  "type": "string"
+                },
+                "msg": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "import": {
+      "type": "object",
+      "properties": {
+        "dest": {
+          "type": "string",
+          "description": "Path in the game repo. Ends in / for a folder."
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "level",
+          "id",
+          "msg"
+        ],
+        "properties": {
+          "level": {
+            "enum": [
+              "ok",
+              "warn",
+              "error"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "msg": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

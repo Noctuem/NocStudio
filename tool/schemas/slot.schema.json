@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Studio slot (slots/<id>.json)",
+  "type": "object",
+  "description": "One thing the game needs. The id is the content id it feeds.",
+  "required": [
+    "schema",
+    "id",
+    "title",
+    "status"
+  ],
+  "properties": {
+    "schema": {
+      "const": 1
+    },
+    "id": {
+      "type": "string"
+    },
+    "title": {
+      "type": "string"
+    },
+    "kind": {
+      "type": "string"
+    },
+    "group": {
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "needed",
+        "placeholder",
+        "in_review",
+        "approved",
+        "in_game",
+        "parked"
+      ]
+    },
+    "needed_by": {
+      "type": "string"
+    },
+    "game_path": {
+      "type": "string"
+    },
+    "notes": {
+      "type": "string"
+    },
+    "open_batch": {
+      "type": "string"
+    },
+    "current": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "The approved version: version, batch, candidate(s), title, score, date, library."
+    },
+    "history": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  }
+}

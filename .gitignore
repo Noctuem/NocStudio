@@ -1,0 +1,5 @@
+# what each machine makes for itself
+studios.json
+ui.json
+__pycache__/
+*.pyc

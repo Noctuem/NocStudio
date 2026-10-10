@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Studio decision (one line of decisions/decisions.jsonl)",
+  "type": "object",
+  "description": "Append only. A later ruling retires an earlier one by naming it in supersedes.",
+  "required": [
+    "id",
+    "date",
+    "title",
+    "source",
+    "status"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^D-\\d{4,}$"
+    },
+    "date": {
+      "type": "string"
+    },
+    "title": {
+      "type": "string"
+    },
+    "his_words": {
+      "type": "string",
+      "description": "Exact. Never paraphrased."
+    },
+    "ruling": {
+      "type": "string",
+      "description": "What follows from the user's words; a reading they did not state is marked as one."
+    },
+    "source": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "enum": [
+            "batch",
+            "question",
+            "chat",
+            "playtest",
+            "spec",
+            "studio"
+          ]
+        },
+        "ref": {
+          "type": "string"
+        }
+      }
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "supersedes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "legacy": {
+      "type": "string",
+      "description": "The S number, for rows imported from the spec."
+    },
+    "status": {
+      "enum": [
+        "active",
+        "superseded",
+        "parked"
+      ]
+    }
+  }
+}

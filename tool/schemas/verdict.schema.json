@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Studio verdict (batches/<id>/verdict.json)",
+  "type": "object",
+  "description": "Written by the page when the user presses Submit. Never written for them.",
+  "required": [
+    "schema",
+    "batch",
+    "action",
+    "candidates",
+    "submitted"
+  ],
+  "properties": {
+    "schema": {
+      "const": 1
+    },
+    "batch": {
+      "type": "string"
+    },
+    "action": {
+      "enum": [
+        "ship",
+        "ship_and_iterate",
+        "another_round",
+        "park",
+        "answer"
+      ]
+    },
+    "note": {
+      "type": "string",
+      "description": "The user's note on the whole batch, exact."
+    },
+    "answer": {
+      "type": "string",
+      "description": "For a question: the user's answer in their own words."
+    },
+    "candidates": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "call": {
+            "enum": [
+              "winner",
+              "approve",
+              "keep",
+              "redo",
+              "reject",
+              null
+            ]
+          },
+          "score": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1,
+            "maximum": 10
+          },
+          "note": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "submitted": {
+      "type": "string"
+    },
+    "revision": {
+      "type": "integer"
+    }
+  }
+}

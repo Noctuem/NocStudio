@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>NocStudio</title>
+<script>try { if (localStorage.getItem('studio.theme') === 'light') document.documentElement.dataset.theme = 'light'; } catch (e) {}</script>
+<link rel="icon" href="/web/studio.ico">
+<link rel="stylesheet" href="/web/style.css">
+<style>
+  .projects { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr)); gap: 14px; }
+  .proj { display: flex; flex-direction: column; gap: 10px; text-align: left; cursor: pointer; background: var(--surface);
+    border: 1px solid var(--line); border-radius: var(--radius); padding: 18px 20px; min-height: 132px; }
+  .proj:hover, .proj:focus-visible { border-color: var(--accent); outline: none; }
+  .proj[disabled] { cursor: default; opacity: 0.55; border-color: var(--line); }
+  .proj .name { font: 700 22px/1.15 var(--font-display); font-stretch: 87%; color: var(--fg); }
+  .proj .where { font: 12px/1.4 var(--font-mono); color: var(--faint); overflow-wrap: anywhere; }
+  .proj .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: auto; }
+</style>
+</head>
+<body>
+<header class="top"><span class="brand"><b>Noc</b>Studio<small>Your projects</small></span></header>
+<main>
+  <section>
+    <h1 id="head">Your projects</h1>
+    <p class="lede">Pick one to open its Studio. It runs while this window is open and stops when you close it.</p>
+    <div class="projects" id="list"></div>
+    <div class="empty" id="none" hidden>No project has a Studio yet. In a project, say to Claude Code: <code class="i">create a studio page for this</code></div>
+  </section>
+</main>
+<script>
+(() => {
+  'use strict';
+  const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text !== undefined) n.textContent = text; return n; };
+  const list = document.getElementById('list'), none = document.getElementById('none');
+  let busy = false;
+  async function open(row, card) {
+    if (busy) return; busy = true;
+    card.querySelector('.chips').replaceChildren(el('span', 'chip accent', 'Starting'));
+    try {
+      const res = await fetch('/api/open', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ home: row.home }) });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'It did not start');
+      location.href = data.url;
+    } catch (e) { busy = false; card.querySelector('.chips').replaceChildren(el('span', 'chip bad', String(e.message || e))); }
+  }
+  function look(ui) {
+    if (ui.scale) document.documentElement.style.zoom = String(ui.scale);
+    if (ui.theme === 'light') document.documentElement.dataset.theme = 'light'; else delete document.documentElement.dataset.theme;
+    try { localStorage.setItem('studio.theme', ui.theme === 'light' ? 'light' : 'dark'); } catch (e) { /* private window */ }
+  }
+  function draw(rows) {
+    none.hidden = rows.length > 0;
+    list.replaceChildren(...rows.map((row) => {
+      const card = el('button', 'proj'); card.type = 'button';
+      const chips = el('div', 'chips');
+      if (row.missing) { card.disabled = true; chips.append(el('span', 'chip bad', 'Its folder is gone')); }
+      else {
+        chips.append(el('span', 'chip' + (row.judge ? ' accent' : ''), row.judge ? row.judge + ' to judge' : 'Nothing to judge'));
+        if (row.hands) chips.append(el('span', 'chip', row.hands + ' only you can do'));
+        if (row.sent) chips.append(el('span', 'chip', row.sent + ' waiting on Claude'));
+        if (row.running) chips.append(el('span', 'chip keep', 'Open'));
+        card.addEventListener('click', () => open(row, card));
+      }
+      card.append(el('div', 'name', row.name), el('div', 'where', row.repo || row.home), chips);
+      return card;
+    }));
+  }
+  async function load() {
+    if (busy) return;
+    try { const data = await (await fetch('/api/hub')).json(); look(data.ui || {}); draw(data.studios || []); } catch (e) { /* the app is closing */ }
+  }
+  load(); setInterval(load, 5000);
+  window.addEventListener('pageshow', () => { busy = false; load(); });
+})();
+</script>
+</body>
+</html>
