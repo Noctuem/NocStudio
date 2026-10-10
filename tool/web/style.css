@@ -347,7 +347,7 @@ main.hud { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 40
 .railhead h2 { color: var(--fg); }
 .railhead .count { font: 700 11px/1 var(--font-mono); padding: 3px 7px; border-radius: 9px; background: var(--accent); color: var(--accent-ink); }
 .railsub { margin-top: 10px; }
-.railhead .grow, .pillhead .grow, .nextup .grow, .steps .grow, .need .grow, details.setup summary .grow { flex: 1 1 auto; min-width: 0; }
+.railhead .grow, .pillhead .grow, .steps .grow, .need .grow, details.setup summary .grow { flex: 1 1 auto; min-width: 0; }
 .asks { display: flex; flex-direction: column; gap: 6px; }
 .need { background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); color: inherit; }
 .need.urgent { border-color: color-mix(in srgb, var(--bad) 60%, transparent); }
@@ -363,7 +363,8 @@ main.hud { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 40
 .askbody textarea { min-height: 34px; padding: 5px 9px; font-size: 13px; }
 .rail .say { flex-wrap: wrap; font-size: 13px; }
 .nextup { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
-.nextup li { display: flex; gap: 8px; align-items: baseline; padding-left: 12px; border-left: 2px solid var(--line); }
+.nextup li { display: flex; flex-direction: column; gap: 2px; padding-left: 12px; border-left: 2px solid var(--line); overflow-wrap: anywhere; }
+.nextup .sub { color: var(--muted); font-size: 12px; }
 
 .gauge { gap: 12px; }
 .gaugetop { display: flex; gap: 8px 22px; align-items: center; flex-wrap: wrap; }

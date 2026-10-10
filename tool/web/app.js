@@ -688,7 +688,7 @@
       sent.length ? h('div', { class: 'say' }, h('span', {}, sent.length + (sent.length === 1 ? ' verdict waits' : ' verdicts wait') + ' on Claude. Say to Claude Code:'), h('code', {}, SAY), copyButton(SAY)) : null,
       laterHands.length ? fold('later', false, 'brief', 'Yours later, nothing waits on these yet (' + laterHands.length + ')', h('div', { class: 'asks' }, laterHands.map(askRow))) : null,
       oldHands.length ? fold('answered', false, 'brief', 'Answered (' + oldHands.length + ')', h('div', { class: 'asks' }, oldHands.map(askRow))) : null,
-      next.length ? [h('h2', { class: 'railsub' }, 'Next up'), h('ul', { class: 'nextup' }, next.map(([text, eta]) => h('li', {}, h('span', { class: 'grow', html: inline(text) }), eta ? h('span', { class: 'chip' }, eta) : null)))] : null);
+      next.length ? [h('h2', { class: 'railsub' }, 'Next up'), h('ul', { class: 'nextup' }, next.map(([text, eta]) => h('li', {}, h('span', { html: inline(text) }), eta ? h('span', { class: 'sub' }, eta) : null)))] : null);
     return h('main', { class: 'hud' }, col, rail);
   }
 
