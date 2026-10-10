@@ -228,7 +228,7 @@ def set_lane(studio: Studio, lid: str, *, name: str = "", milestone: str = "", s
     if fresh:
         lane = {"id": safe_id(lid, "lane"), "name": name or lid, "state": "building", "started": iso_now()}
         rows.append(lane)
-    session = session or os.environ.get("STUDIO_SESSION", "")
+    session = session or os.environ.get("STUDIO_SESSION", "") or (_caller(studio) if fresh else "")
     for key, value in (("name", name), ("milestone", milestone), ("step", step), ("state", state), ("eta", eta),
                        ("note", note), ("session", session)):
         if value:
@@ -248,6 +248,12 @@ def set_lane(studio: Studio, lid: str, *, name: str = "", milestone: str = "", s
         if next(s for s in m["steps"] if s["id"] == lane["step"]).get("status") == "planned":
             set_step(studio, lane["milestone"], lane["step"], status="building")
     return lane
+
+
+def _caller(studio: Studio) -> str:
+    """The session that is most likely running this command, when it could not say: the only one that moved just now."""
+    recent = [s["id"] for s in sessions(studio) if s["state"] in ("working", "background") and s["quiet"] <= 20]
+    return recent[0] if len(recent) == 1 else ""
 
 
 def end_lane(studio: Studio, lid: str, *, note: str = "", step_status: str = "") -> dict:

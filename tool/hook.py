@@ -228,6 +228,17 @@ def record(home: str, e: dict) -> None:
             return
     try:
         write(path, apply(dict(read(path, {}), id=session), e))
+        trace = live / "trace.log"  # the last few hundred events, one line each, for seeing what Claude Code really sent
+        try:
+            if trace.stat().st_size > 256_000:
+                os.replace(trace, live / "trace.old.log")
+        except OSError:
+            pass
+        with open(trace, "a", encoding="utf-8", newline="\n") as fh:
+            fh.write(" ".join(filter(None, [now(), session[:8], e.get("hook_event_name") or "?", e.get("tool_name") or "",
+                                            f"agent={e['agent_id']}" if e.get("agent_id") else "",
+                                            f"type={e['agent_type']}" if e.get("agent_type") else "",
+                                            f"note={e['notification_type']}" if e.get("notification_type") else ""])) + "\n")
         if e.get("hook_event_name") == "SessionStart":
             for old in live.glob("*.json"):  # forget sessions that ended a day ago
                 if old != path and time.time() - old.stat().st_mtime > KEEP_ENDED:
