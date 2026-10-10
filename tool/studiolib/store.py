@@ -14,9 +14,11 @@ needs a database, a network or a package outside the standard library.
       library/<slot>/v<n>/...     the approved masters, with where they came from
       decisions/decisions.jsonl   every ruling, in the user's words, append only
       playtests/triage.json       what happened to each playtest note
-      overview/roadmap.json       the milestones and where each stands
-      overview/now.json           the current build: what is built, what is next
-      overview/hands.json         what only the user can do
+      overview/roadmap.json       the milestones, each with its steps
+      overview/now.json           the goal, the current build, what is next
+      overview/hands.json         what waits on the user: things to do and questions to answer
+      overview/lanes.json, events.jsonl, days.json    work in progress, the log, a snapshot a day (board.py)
+      live/<session>.json         what each Claude Code session is doing now (tool/hook.py); not history
       motions/<id>.glb            a character with its motions baked in as clips, by the game itself
 """
 from __future__ import annotations
@@ -51,6 +53,7 @@ SLOT_STATUS = ("needed", "placeholder", "in_review", "approved", "in_game", "par
 TRIAGE_STATUS = ("open", "planned", "fixed", "wontfix", "question")
 MILESTONE_STATUS = ("done", "current", "next", "later", "parked")
 HAND_STATUS = ("open", "later", "done", "parked")  # later: the user's, but nothing waits on it yet
+HAND_KINDS = ("action", "decision", "play", "info")  # something to do, a question to answer, a build to try, a thing to know
 # how the user likes the page: one answer for every Studio here (STUDIO_PREFS names another file, for a test)
 PREFS = Path(os.environ.get("STUDIO_PREFS") or Path(__file__).resolve().parents[2] / "ui.json")
 SAMPLE = "sample-"  # a batch id that starts so is made-up: kept under samples/, never counted or acted on
@@ -1069,6 +1072,11 @@ class Studio:
                 row[key] = value
         if row.get("status") not in MILESTONE_STATUS:
             raise StudioError(f"milestone status must be one of: {', '.join(MILESTONE_STATUS)}")
+        if "weight" in row:
+            try:
+                row["weight"] = float(row["weight"])
+            except (TypeError, ValueError):
+                raise StudioError("a milestone's weight is a number: 1 for an ordinary one, 2 for one twice the work") from None
         row["updated"] = iso_now()
         write_json(self.overview_dir / "roadmap.json", {"schema": SCHEMA, "milestones": rows})
         return row
@@ -1112,7 +1120,18 @@ class Studio:
                 row[key] = value
         if row.get("status") not in HAND_STATUS:
             raise StudioError(f"hand status must be one of: {', '.join(HAND_STATUS)}")
+        if row.setdefault("kind", "action") not in HAND_KINDS:
+            raise StudioError(f"an ask is one of: {', '.join(HAND_KINDS)}")
+        row["urgent"] = bool(row.get("urgent"))
         row["updated"] = iso_now()
+        self._save_hands(rows)
+        return row
+
+    def close_hand(self, hid: str, answer: str) -> dict:
+        """The user answered somewhere else (in chat, say): their words go on the ask and it is closed."""
+        rows = self.hands()
+        row = self._hand(rows, hid)
+        row.update(status="done", his_note=answer.strip(), answered=iso_now(), seen=True, updated=iso_now())
         self._save_hands(rows)
         return row
 
@@ -1176,7 +1195,11 @@ class Studio:
         return value
 
     def overview(self) -> dict:
-        return {"now": self.now(), "game": self.game_git(), "milestones": self.roadmap(), "hands": self.hands()}
+        from . import board, setup
+        hooks = bool(setup.hooks_installed())
+        return {"now": self.now(), "game": self.game_git(), "milestones": self.roadmap(), "hands": self.hands(),
+                "board": board.view(self), "live": board.live(self), "hooks": hooks,
+                "setup": board.checklist(self, hooks)}
 
     # ------------------------------------------------- the files behind a slot
     def game_file(self, rel: str) -> Path:

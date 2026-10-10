@@ -176,3 +176,73 @@ def create(repo, project: str = "", home: str = "", port: int = 0, registry: Pat
             pass  # no git, or no identity set: the home works without history
     return {"project": project, "home": str(home_dir), "repo": str(repo), "port": port, "skill": str(skill),
             "section": str(section), "launcher": str(home_dir / "studio.cmd"), "s": values["S"], "git": committed}
+
+
+# ------------------------------------------------- Claude Code's hooks, in the user's own settings
+HOOK = KIT / "tool" / "hook.py"
+HOOK_EVENTS = ("SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PermissionRequest", "Notification",
+               "Stop", "StopFailure", "SubagentStart", "SubagentStop", "TaskCreated", "TaskCompleted", "CwdChanged")
+WAITED_FOR = ("SessionStart", "CwdChanged")  # these tell the session its own id, so they finish before it goes on
+
+
+def claude_settings() -> Path:
+    import os
+    return Path(os.environ.get("STUDIO_CLAUDE_SETTINGS") or Path.home() / ".claude" / "settings.json")
+
+
+def _ours(hook: dict) -> bool:
+    return isinstance(hook, dict) and any(Path(str(a)).name == "hook.py" and "tool" in Path(str(a)).parts
+                                          for a in hook.get("args") or [])
+
+
+def _hook_command() -> dict:
+    import sys
+    if sys.platform == "win32":  # the launcher outlives a Python upgrade; a path to python.exe would not
+        return {"type": "command", "command": "py", "args": [f"-{sys.version_info[0]}.{sys.version_info[1]}", str(HOOK)]}
+    return {"type": "command", "command": sys.executable, "args": [str(HOOK)]}
+
+
+def hooks_installed(path: Path | None = None) -> list[str]:
+    """The events Claude Code reports to this kit's hook today."""
+    try:
+        data = read_json(path or claude_settings(), {}) or {}
+    except StudioError:
+        return []
+    return [event for event, groups in (data.get("hooks") or {}).items()
+            if any(_ours(h) and str(HOOK) in [str(a) for a in h.get("args") or []]
+                   for g in groups if isinstance(g, dict) for h in g.get("hooks") or [])]
+
+
+def install_hooks(path: Path | None = None, remove: bool = False) -> dict:
+    """Add this kit's hook to Claude Code's settings, or take it out. Every other setting is left as it is."""
+    path = path or claude_settings()
+    data = read_json(path, {}) or {}  # a settings file that does not parse is refused, never rewritten
+    if not isinstance(data, dict) or not isinstance(data.get("hooks", {}), dict):
+        raise StudioError(f"{path}: not the shape Claude Code's settings have; nothing was changed")
+    backup = ""
+    if path.exists():
+        import shutil
+        copy = path.with_name(path.name + ".before-nocstudio")
+        if not copy.exists():
+            shutil.copy2(path, copy)
+        backup = str(copy)
+    hooks = data.setdefault("hooks", {})
+    for event in list(hooks):  # take out any earlier copy of ours, wherever the kit lived then
+        groups = []
+        for g in hooks[event] if isinstance(hooks[event], list) else []:
+            if isinstance(g, dict) and isinstance(g.get("hooks"), list):
+                g = dict(g, hooks=[h for h in g["hooks"] if not _ours(h)])
+                if not g["hooks"]:
+                    continue
+            groups.append(g)
+        if groups:
+            hooks[event] = groups
+        else:
+            del hooks[event]
+    if not remove:
+        for event in HOOK_EVENTS:
+            hooks.setdefault(event, []).append({"hooks": [dict(_hook_command(), **({} if event in WAITED_FOR else {"async": True}))]})
+    if not hooks:
+        del data["hooks"]
+    write_json(path, data)
+    return {"settings": str(path), "backup": backup, "events": [] if remove else list(HOOK_EVENTS)}

@@ -4,8 +4,8 @@
 
 **A local project hub for work you build with AI coding agents.**
 
-See where the project stands, judge what the agent made, and keep every ruling you give it,
-in one window on your own machine.
+See how far along the project is and what every session is doing right now, judge what the
+agent made, and keep every ruling you give it, in one window on your own machine.
 
 ![The Overview of an example project](docs/screenshots/overview.png)
 
@@ -18,23 +18,43 @@ Everything else piles up in chat: six candidate pictures in a folder, "which of 
 do you prefer?", a decision you made three weeks ago that the next session has never heard of,
 and a growing list of things only you can do.
 
-NocStudio gives all of that one place. The agent **files** what you must judge. You **judge** it
-in a page built for looking, listening and comparing. Nothing happens until you say
-**"process my studio verdicts"**, and then the agent acts on exactly what you marked, in your
-words.
+NocStudio gives all of that one place. The agent keeps a **board** you look at instead of asking
+for a status update. It **files** what you must judge, and you **judge** it in a page built for
+looking, listening and comparing. Nothing happens until you say **"process my studio
+verdicts"**, and then the agent acts on exactly what you marked, in your words.
 
 It is a small Python program and a folder of plain files. No account, no cloud, no packages to
 install, and nothing leaves your machine.
 
 ## What you get
 
-### An overview that answers "where are we?"
+### An overview you look at instead of asking
 
-The first page shows how far along the project is, the build in hand and what comes next, the
-road of milestones, what the project still lacks by group, and **everything that waits on you**:
-batches to judge, fixes to confirm, and the chores only you can do, each with Done and Not now.
-It also shows how many commits the project has made since the summary was written, so a stale
-page looks stale.
+The first page is a live board:
+
+- **One number for the whole project.** Each milestone is broken into steps, and the percentage
+  is counted from where each step stands (planned, being built, built, tested, done). Nobody
+  types it.
+- **Running now.** Claude Code's hooks report what every session in the project is doing as it
+  happens: working or waiting for you, the last thing it did, which subagents and background
+  workflows are running, how many of its tasks are done. The agent adds what each piece of work
+  is and when it should land.
+- **Day by day.** A chart of progress per day, with bars for steps landed and a red mark on days
+  with a setback, and the date the project is done if the last week's pace holds.
+- **Milestones and a log.** Each milestone with its bar, its ETA and its steps; merges, publishes
+  and setbacks in a log, newest first.
+- **Needs you.** A rail of everything that waits on you: batches to judge, builds to try, chores
+  only you can do, and questions only you can answer. Each ask says what it blocks and **what
+  the agent will do if you say nothing**, so work does not stop while you are away.
+
+### Organised from the start
+
+Say **"start a new project"** or **"plan this project in its Studio"** to Claude Code. It reads
+what the project already has, drafts the goal, the milestones and the steps of the first one,
+asks you only what you alone can answer, and writes the plan in. A Studio that has not been
+planned yet says so on its Overview, with a checklist of what is missing.
+
+![A new project's Overview, with the checklist of what is still missing](docs/screenshots/new.png)
 
 ### An inbox built for judging
 
@@ -110,11 +130,13 @@ You need Windows 10 or 11, [Python 3.11 or newer](https://www.python.org/downloa
 git clone https://github.com/Noctuem/NocStudio.git
 cd NocStudio
 py -3.11 tool\selftest.py
-py -3.11 tool\studio.py create C:\path\to\your\project
+py -3.11 tool\studio.py install-skill
+py -3.11 tool\studio.py hooks install
 py -3.11 tool\studio.py app --install
 ```
 
-Then open **NocStudio** from the Start menu, pick your project, and go to **Inbox → Samples**.
+Then, in your project, say to Claude Code: **set up a studio for this project**. Open
+**NocStudio** from the Start menu, pick the project, and try **Inbox → Samples** while it works.
 
 The full walk-through, including how to teach your agent to use it, is in
 [docs/QUICKSTART.md](docs/QUICKSTART.md).
@@ -130,9 +152,15 @@ Code the rules:
 3. You only see what passes the checks.
 4. Nothing happens on a verdict until you say so.
 5. Your words are quoted, never paraphrased.
+6. The board is kept true as work happens: a step moves, work starts or lands, a merge, a
+   publish, a setback.
+7. Every question for you goes in Needs you with the default the agent will use. It does not
+   stop and wait unless nothing can go on without your answer.
 
 The agent works through one command (`studio.py new`, `add`, `file`, `todo`, `done`, `decide`,
-`save`, and a few more). You work in the page. Between you is a folder of JSON and media files
+`step`, `lane`, `log`, `ask`, `save`, and a few more). Claude Code's hooks report session
+activity on their own: `studio.py hooks install` adds them to your own Claude Code settings
+(keeping a copy from before), they only watch, and a project without a Studio is left alone. You work in the page. Between you is a folder of JSON and media files
 that either side can read, and that lives in its own git repository so the history of what you
 judged is kept.
 
@@ -141,8 +169,8 @@ instructions can use it too. It has only been used with Claude Code.
 
 ## What it is made of
 
-- **Python 3.11, standard library only.** The server, the checks, the 3D motion baker and the
-  app launcher have no dependencies.
+- **Python 3.11, standard library only.** The server, the checks, the 3D motion baker, the
+  session hook and the app launcher have no dependencies.
 - **One page of plain JavaScript and CSS.** No build step. [three.js](https://threejs.org) is
   vendored for the 3D viewer.
 - **Plain files.** A Studio home is folders of JSON, markdown and your media. You can read it,
@@ -150,8 +178,9 @@ instructions can use it too. It has only been used with Claude Code.
 - **Local only.** The server listens on `127.0.0.1` and refuses requests from anywhere else.
 
 ```
-tool/             the program: studio.py (the command), studiolib/ (the server and store),
-                  web/ (the page), samples_src/ (placeholder files for the Samples), selftest.py
+tool/             the program: studio.py (the command), hook.py (what Claude Code's hooks run),
+                  studiolib/ (the server and store), web/ (the page),
+                  samples_src/ (placeholder files for the Samples), selftest.py
 claude/templates/ the skill and the CLAUDE.md section each project gets
 docs/             the quick start and the screenshots
 ```

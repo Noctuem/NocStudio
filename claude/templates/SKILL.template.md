@@ -1,13 +1,13 @@
 ---
 name: studio
-description: The Studio is where the user sees where {{PROJECT}} stands, judges everything its makers produce, and where their rulings are kept. Use this skill whenever work produces something the user must judge (concept art, textures, models, animations, sounds, tuning or feel options, design questions with options), whenever they say anything like "process my verdicts", "process my studio verdicts", "act on my reviews", "what did I pick" or "what is waiting on me", whenever they rule on something in chat or in a playtest note, before asking them to look at any file, folder or in-app option or to do something only they can do, and whenever a build is delivered, a milestone moves or the plan changes (the overview must stay true).
+description: The Studio is where the user sees where {{PROJECT}} stands, judges everything its makers produce, and where their rulings are kept. Use this skill whenever work produces something the user must judge (concept art, textures, models, animations, sounds, tuning or feel options, design questions with options), whenever they say anything like "process my verdicts", "process my studio verdicts", "act on my reviews", "what did I pick", "what is waiting on me" or "plan this project in its Studio", whenever they rule on something in chat or in a playtest note, before asking them to look at any file, folder or in-app option or to do something only they can do, whenever you have a question for them, and whenever work starts, lands, merges, is published or hits a setback, a build is delivered, a milestone moves or the plan changes (the Overview must stay true).
 ---
 
 # The Studio for {{PROJECT}}
 
 One folder outside this repo: `{{HOME}}`. The user reads and judges in a local
-web page (Overview, Inbox, Library, Decisions, and Playtests when a playtest
-folder is set); you work through one command. Below, `S` is
+web page (Overview, Inbox, Library, Decisions, Build, and Playtests when a
+playtest folder is set); you work through one command. Below, `S` is
 
     {{S}}
 
@@ -18,8 +18,9 @@ under the studio home; the commands keep slots, the log and the batches in step.
 
 1. **Anything the user must judge is a batch.** Never ask them to open a
    folder, and never ask for a pick in chat. That includes "which of these two
-   do you prefer" and every design question with options to weigh. A quick
-   question that has no options to weigh is asked in chat.
+   do you prefer" and every design question with options to weigh. A
+   question with a plain answer goes in Needs you as a decision, with your
+   default (below); ask in chat only when nothing can go on without it.
 2. **One batch, one decision, six candidates at most.** If you made twelve,
    choose the six worth their time, or split by what is being decided.
 3. **They see only what passes the checks.** `S file` refuses a batch with a
@@ -151,35 +152,138 @@ and sound it matches is shown or played there (`assets/audio/*/step_*.wav`).
 not judged is `placeholder`. A master approved before the Studio existed comes
 in with `S adopt <slot> <file> --note "<their words>" --date <day> --source "<where from>"`.
 
-## Keeping the overview true
+## Keeping the Overview true
 
-The Overview is the first page the user opens. Three things on it are yours to
-keep current; a stale overview is worse than none.
+The Overview is the first page the user opens, and they look at it instead of
+asking you where things stand. It shows one percentage for the whole project,
+what is running now, the milestones with their steps, a chart by day, a log,
+and a rail of everything that needs them. All of it is counted from what you
+record, so a stale Overview is worse than none. Your standing rules, in every
+session:
 
-- **The build in hand.** When a build is delivered, a fix lands that they
-  will see, or the plan changes, in the same session:
-  ```
-  S now --headline "<one sentence: where the project stands>" --build <build id> --spec <plan of record> \
-        --gate "<the last test run, in a few words>" \
-        --built "<something they can see in the build>" [--built ...] --next "<what comes next>" [--next ...] \
-        [--known "<known and left as it is>"] [--start "<a line that starts the build>"]
-  ```
-  A list you pass replaces the old one; what you leave out stays. `S now`
-  with no flag prints what stands. The page shows how many commits the repo
-  has made since this was written, so staleness is visible.
-- **The road.** `S milestone set <id> --name "<name>" --status done|current|next|later|parked
-  --goal "<what it is>" --question "<what their verdict answers>" --note "<where it stands>"`.
-  Milestones show in the order they were first added.
-- **What only they can do** (try a build, a check on another machine, a
-  purchase, a paper). Never leave such an ask only in chat or in a document:
-  ```
-  S hand set <id> --title "<the thing, as an instruction>" --detail "<why, and what to look for>" \
-        --gates "<what waits on it>" --time "<how long it takes>" [--run "<a line to copy>"] \
-        --group <a short group name> --status open|later
-  ```
-  `open` is on their list now; `later` is theirs but nothing waits on it yet.
-  They mark each Done or Not now on the page, with a note. `S todo` prints
-  what they answered; act on it, then `S hand seen <id>`.
+- **Report each real event when it happens**, not at the end of the session:
+  work starts, work lands, a merge, a publish, a setback, an ETA that slips.
+- **Every question for the user goes in Needs you**, with the default you will
+  use if they do not answer. Do not ask in chat what the Overview already
+  shows, and do not stop to wait unless nothing can go on without the answer.
+- **Keep ETAs honest**: a clock time or a date, revised when it slips, with a
+  setback in the log that says why.
+- **Never invent.** Steps, statuses and dates come from the project's real
+  plan and history.
+
+### The plan: milestones and steps
+
+```
+S milestone set <id> --name "<name>" --status done|current|next|later|parked \
+      --goal "<what it is>" --question "<what their verdict answers>" --note "<where it stands>" \
+      [--eta "<when it should be done>"] [--weight 2]
+S step set <milestone> <step id> --name "<the step, as the user would say it>" --status <status>
+S step list [<milestone>]
+```
+
+A step is something that is either done or not, small enough to land in a day
+or two. Its status is where it truly stands: `planned`, `building`, `built`
+(made, not yet proven), `tested` (proven by a test or a run), `done` (accepted
+and in the project), `parked`, or `dropped` (no longer in the plan; a step is
+never deleted). The percentage is counted from these: done 1, tested 0.85,
+built 0.6, building 0.3. A milestone is the average of its steps; the project
+is the average of its milestones, by `--weight` (1 unless one is plainly more
+work). Break the current milestone into steps before work on it starts; later
+ones can hold a few coarse steps until they are near. Milestones show in the
+order they were first added. Only the user's recorded verdict makes a
+milestone that ends on their verdict `done`.
+
+`S plan` prints the whole plan as one JSON document; `S plan <file>` writes
+one in (it adds and changes, and removes nothing).
+
+If the Overview says "Getting organised", or the user says "plan this project
+in its Studio", the plan has holes. Read what the project has, draft the goal,
+the road and the steps of the milestone in hand, show the user the outline to
+correct, ask only what they alone can answer, and write it in with
+`S plan <file>`. The goal goes in `S now --goal`, in their words.
+
+### Running now: lanes
+
+A lane is one piece of work in progress. Start one when you begin something
+that takes more than a few minutes, and whenever you hand work to a subagent,
+a workflow or a background task:
+
+```
+S lane set <id> --name "<the work, in a few words>" --milestone <id> --step <step id> \
+      --eta "<16:30, or a date>" [--note "<where it stands, one line>"] [--state building|testing|waiting|stuck]
+S lane done <id> [--step-status built|tested|done] [--note "<how it ended>"]
+```
+
+Starting a lane on a planned step marks the step `building`. `lane done
+--step-status` moves the step and takes the lane off the board. Update the
+note, the ETA and the state as it goes: `stuck` with the reason in the note,
+`waiting` when it waits on the user (with an ask in Needs you). Never leave a
+lane on the board that nobody is working.
+
+Claude Code's hooks also report, by themselves, what each session is doing
+(working, waiting, which agents are running); that needs nothing from you.
+`S hooks status` says whether they are installed on this machine.
+
+### The log
+
+A step that reaches `done` and a lane that starts or ends log themselves. Add
+what the tool cannot know, when it happens:
+
+```
+S log merge "<what merged>"
+S log publish "<what was published or delivered>"
+S log setback "<what went wrong, and what it costs>"
+S log note "<worth remembering>"            [--milestone <id>] [--step <id>]
+```
+
+A setback is logged the moment you know of it, not when it is fixed.
+
+### Needs you: asks
+
+Anything that waits on the user and is not a batch: something only they can
+do, or a question only they can answer. Never leave one only in chat or in a
+document.
+
+```
+S ask set <id> --kind action|decision|play|info \
+      --title "<the thing, as an instruction or a question>" --detail "<why, and what to look for>" \
+      --gates "<what it blocks>" --default "<what you will do if they say nothing>" \
+      --time "<how long it takes them>" [--run "<a line to copy>"] [--urgent] \
+      --group <a short group name> --status open|later
+```
+
+- `decision` is a question with a plain answer; if there are options to
+  weigh, file a question batch instead. `play` is a build to try. `action` is
+  a chore (a check on another machine, a purchase, a paper). `info` is
+  something they should know and need not answer.
+- Give every decision a `--default`. If work reaches that point unanswered,
+  act on the default and say so in the log.
+- `--urgent` only when work is stopped on it. `later` is theirs, but nothing
+  waits on it yet.
+
+They answer on the page. `S todo` prints what they said; act on it, then
+`S ask seen <id>`. If they answer in chat instead, close it with their words:
+`S ask answered <id> --answer "<their words, exact>"`.
+
+### The build in hand
+
+When a build is delivered, a fix lands that they will see, or the plan
+changes, in the same session:
+
+```
+S now --headline "<one sentence: where the project stands>" --build <build id> --spec <plan of record> \
+      --gate "<the last test run, in a few words>" \
+      --built "<something they can see in the build>" [--built ...] \
+      --next "<what comes next> :: <when>" [--next ...] \
+      [--known "<known and left as it is>"] [--start "<a line that starts the build>"] \
+      [--goal "<what the project is and what done looks like>"] \
+      [--finish "<your honest estimate for the whole project>"] [--counter "<Name>=<have>/<of>"]
+```
+
+A list you pass replaces the old one; what you leave out stays. `S now` with
+no flag prints what stands. Counters are what the user counts the project by
+(`Levels=2/9`). The page shows how many commits the repo has made since this
+was written, so staleness is visible.
 
 ## Playtest notes
 
@@ -221,6 +325,7 @@ say so to the user in one line; do not leave it silent.
 ## Checking your own work
 
 - `S check <batch>` runs the checks without filing.
-- `S status` shows what waits on the user and what waits on you; `S hand list`
-  and `S milestone list` print the rest of the overview.
+- `S status` shows how far along the project is, what is running, what waits
+  on the user and what waits on you, and says when the board is not true.
+  `S step list`, `S lane list`, `S ask list` and `S log` print the rest.
 - Before you say a batch is filed, confirm `S file` printed "Filed."

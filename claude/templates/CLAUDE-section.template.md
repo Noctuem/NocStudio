@@ -9,6 +9,8 @@ Use the `studio` skill; `S` is `{{S}}`.
 - When they say "process my studio verdicts" (or anything like it), run `S todo` and do what it
   lists; close each with `S done`.
 - A ruling they make in chat goes on the log in their words: `S decide`.
-- Something only they can do is `S hand set`, not a line in a document.
-- Keep the Overview true: `S now` when a build is delivered or the plan changes, `S milestone set`
-  when a milestone moves. `S status` answers "what is waiting on me?".
+- Anything else that waits on them (a chore only they can do, a question with a plain answer) is
+  `S ask set`, with the default you will use; never a line in chat or in a document.
+- Keep the Overview true as you work, not afterwards: `S step set` when a step moves, `S lane set`
+  and `S lane done` for work in progress, `S log` for a merge, a publish or a setback, `S now` when a
+  build is delivered. `S status` answers "where are we?" and "what is waiting on me?".

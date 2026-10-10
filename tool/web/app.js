@@ -116,6 +116,7 @@
   } : {
     state: () => call('GET', '/api/state'),
     pulse: () => call('GET', '/api/pulse'),
+    live: () => call('GET', '/api/live'),
     batch: (id) => call('GET', '/api/batch/' + encodeURIComponent(id)),
     saveDraft: (id, v) => call('PUT', '/api/batch/' + encodeURIComponent(id) + '/draft', v),
     submit: (id, v) => call('POST', '/api/batch/' + encodeURIComponent(id) + '/submit', v),
@@ -439,15 +440,15 @@
       count ? h('span', { class: 'count' + (hot ? ' hot' : '') }, String(count)) : null);
     return h('header', { class: 'top' },
       link('overview', { class: 'brand' }, h('b', {}, 'Noc'), 'Studio', h('small', {}, st.project || '')),
-      h('nav', { class: 'nav', 'aria-label': 'Sections' }, tab('overview', 'Overview'), tab('inbox', 'Inbox', mine, true), tab('library', 'Library'), tab('decisions', 'Decisions', st.decisions.length), st.has_playtests === false ? null : tab('playtests', 'Playtests', confirmQ, true)),
+      h('nav', { class: 'nav', 'aria-label': 'Sections' }, tab('overview', 'Overview'), tab('inbox', 'Inbox', mine, true), tab('library', 'Library'), tab('decisions', 'Decisions', st.decisions.length), tab('build', 'Build'), st.has_playtests === false ? null : tab('playtests', 'Playtests', confirmQ, true)),
       h('span', { class: 'spacer' }),
       st.hub ? h('a', { class: 'btn small', href: st.hub, title: 'Back to the list of your projects' }, 'All projects') : null, scaleControl(), themeControl(),
       st.static ? h('span', { class: 'sample' }, 'Sample data. Candidates are placeholders drawn by script.') : null);
   }
-  async function render(r) {
+  async function render(r, keep) { // keep: the same page drawn again with new facts, so the user stays where they were
     cleanup(); closeOver();
     r = r || route();
-    const app = $('#app');
+    const app = $('#app'), rail = keep && $('.rail'), railAt = rail ? rail.scrollTop : 0;
     try {
       if (!S.state) S.state = await API.state();
       if (!UI.synced) { UI.synced = true; const ui = S.state.ui || {}; if (ui.scale) setScale(ui.scale); if (ui.theme) setTheme(ui.theme); }
@@ -459,104 +460,259 @@
       else if (r === 'library') page = libraryPage();
       else if (r === 'decisions') page = decisionsPage();
       else if (r === 'playtests') page = playtestsPage();
+      else if (r === 'build') page = buildPage();
       else page = overviewPage();
       app.replaceChildren(top(r), page);
-      window.scrollTo(0, 0);
+      if (!keep) window.scrollTo(0, 0);
+      else if (railAt && $('.rail')) $('.rail').scrollTop = railAt;
     } catch (err) {
       app.replaceChildren(S.state ? top(r) : '', h('main', {}, h('div', { class: 'empty' }, String(err.message || err), ' ', link('inbox', {}, 'Back to the inbox'))));
     }
   }
 
   // ---------------------------------------------------------------- overview
-  const MSTONE = { done: 'Done', current: 'You are here', next: 'Next', later: 'Later', parked: 'Parked' };
+  const MSTONE = { done: 'Done', current: 'In hand', next: 'Next', later: 'Later', parked: 'Parked' };
   const ORDER = ['needed', 'placeholder', 'in_review', 'approved', 'in_game', 'parked'];
-  function handRow(x) {
-    const note = h('textarea', { class: 'field', rows: 1, placeholder: 'Anything to add (optional)', 'aria-label': 'Note on ' + x.title });
-    const send = async (action) => {
-      try { await API.hand(x.id, action, note.value); S.state = await API.state(); toast({ done: 'Marked done', park: 'Set aside', reopen: 'Open again' }[action]); render(); }
+  const STEP = { planned: 'Planned', building: 'Being built', built: 'Built', tested: 'Tested', done: 'Done', parked: 'Parked', dropped: 'Dropped' };
+  const BAR = ['done', 'tested', 'built', 'building'];
+  const ASK = { action: 'To do', decision: 'Decide', play: 'Try it', info: 'To know' };
+  const LIVE = { working: 'Working', waiting: 'Waiting for you', asking: 'Needs your OK', background: 'Background work running', stuck: 'Stopped on an error', ended: 'Ended' };
+  const LANE = { building: 'Building', testing: 'Testing', waiting: 'Waiting', stuck: 'Stuck' };
+  const EVENT = { start: 'Start', done: 'Landed', merge: 'Merge', publish: 'Publish', setback: 'Setback', note: 'Note' };
+  const PLAN_SAY = 'plan this project in its Studio';
+
+  // what the user left open or closed stays so through live updates and the next visit
+  const OPEN = (() => {
+    let map = {};
+    try { map = JSON.parse(localStorage.getItem('nocstudio.open') || '{}'); } catch (e) { /* no storage: nothing is remembered */ }
+    const key = (k) => ((S.state || {}).project || '') + '|' + k;
+    return { get: (k, d) => (key(k) in map ? map[key(k)] : d),
+      set: (k, v) => { map[key(k)] = v; try { localStorage.setItem('nocstudio.open', JSON.stringify(map)); } catch (e) { /* as above */ } } };
+  })();
+  function fold(key, open, cls, summary, ...body) {
+    const el = h('details', { class: cls, open: OPEN.get(key, open), 'data-fold': key }, h('summary', {}, summary), body);
+    el.addEventListener('toggle', () => OPEN.set(key, el.open));
+    return el;
+  }
+  const dayName = (iso) => { const d = new Date(iso + (iso.length === 10 ? 'T12:00:00' : '')); return isNaN(d) ? iso : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }); };
+  const span = (sec) => (sec < 90 ? Math.max(1, Math.round(sec)) + ' s' : sec < 5400 ? Math.round(sec / 60) + ' min' : Math.round(sec / 3600) + ' h');
+  const pctText = (n) => Math.round(n) + '%';
+  const split = (text) => { const at = String(text).indexOf(' :: '); return at < 0 ? [String(text), ''] : [text.slice(0, at), text.slice(at + 4)]; };
+
+  function askRow(x) {
+    S.notes = S.notes || {};
+    const open = x.status === 'open' || x.status === 'later', decide = x.kind === 'decision';
+    const note = h('textarea', { class: 'field', rows: 1, placeholder: decide ? 'Your answer, in your words' : 'Anything to add (optional)', 'aria-label': 'Note on ' + x.title,
+      value: S.notes[x.id] || '', oninput: (e) => { S.notes[x.id] = e.target.value; } });
+    const send = async (action, text) => {
+      try { await API.hand(x.id, action, text === undefined ? note.value : text); delete S.notes[x.id]; S.state = await API.state(); toast({ done: decide ? 'Answered' : 'Marked done', park: 'Set aside', reopen: 'Open again' }[action]); render(null, true); }
       catch (e) { toast(e.message); }
     };
-    const open = x.status === 'open' || x.status === 'later';
-    return h('div', { class: 'row hand' },
-      h('div', { class: 'grow' },
-        h('div', { class: 'title' }, x.title, x.group ? h('span', { class: 'chip', style: 'margin-left:8px' }, x.group) : null),
-        x.detail ? h('div', { class: 'sub' }, x.detail) : null,
-        (x.gates || x.time) ? h('div', { class: 'sub' }, [x.gates ? 'Waits on it: ' + x.gates : '', x.time ? 'Takes you: ' + x.time : ''].filter(Boolean).join(' · ')) : null,
-        x.run ? h('div', { class: 'runline' }, h('code', { class: 'i' }, x.run), copyButton(x.run)) : null,
-        !open && x.his_note ? h('blockquote', {}, x.his_note) : null),
-      open ? h('div', { class: 'handact' }, note, h('div', { class: 'btns' },
-        h('button', { class: 'btn small', type: 'button', onclick: () => send('done') }, 'Done'),
-        h('button', { class: 'btn small', type: 'button', onclick: () => send('park') }, 'Not now')))
-        : h('div', { class: 'handact' }, h('div', { class: 'btns' }, h('span', { class: 'chip ' + (x.status === 'done' ? 'ok' : '') }, x.status === 'done' ? 'Done' : 'Set aside'),
-          h('button', { class: 'btn small', type: 'button', onclick: () => send('reopen') }, 'Open again'))));
+    const fact = (label, text) => (text ? h('div', { class: 'fact' }, h('span', {}, label), h('span', { html: inline(text) })) : null);
+    const body = h('div', { class: 'askbody' },
+      x.detail ? h('p', { html: inline(x.detail) }) : null,
+      fact('Blocks', x.gates), fact('If you say nothing', x.default), fact('Takes you', x.time), fact('Waiting since', when(x.created)),
+      x.run ? h('div', { class: 'runline' }, h('code', { class: 'i' }, x.run), copyButton(x.run)) : null,
+      !open && x.his_note ? h('blockquote', {}, x.his_note) : null,
+      open ? [note, h('div', { class: 'btns' },
+        decide ? h('button', { class: 'btn small primary', type: 'button', onclick: () => (note.value.trim() ? send('done') : toast('Write your answer first')) }, 'Answer') : h('button', { class: 'btn small primary', type: 'button', onclick: () => send('done') }, 'Mark done'),
+        decide && x.default ? h('button', { class: 'btn small', type: 'button', onclick: () => send('done', 'Use the default: ' + x.default) }, 'Use the default') : null,
+        x.status === 'open' ? h('button', { class: 'btn small', type: 'button', onclick: () => send('park') }, 'Not now') : null)]
+        : h('div', { class: 'btns' }, h('button', { class: 'btn small', type: 'button', onclick: () => send('reopen') }, 'Open again')));
+    return fold('ask:' + x.id, !!x.urgent, 'need' + (x.urgent && open ? ' urgent' : ''),
+      [h('span', { class: 'chip' + (open ? ' accent' : '') }, open ? (ASK[x.kind] || 'To do') : (x.status === 'done' ? 'Done' : 'Set aside')),
+        h('span', { class: 'grow' }, x.title), x.urgent && open ? h('span', { class: 'chip bad' }, 'Urgent') : null], body);
   }
+
+  // what moves by the second: the lanes Claude reports and the sessions the hooks see
+  function runningBody(live, hooks) {
+    const sessions = live.sessions || [], lanes = live.lanes || [], seen = new Set(), out = [];
+    const sessionLine = (s) => {
+      const bits = [LIVE[s.state] || s.state];
+      if (s.state === 'working' && s.quiet > 240) bits.push('quiet for ' + span(s.quiet));
+      else if (s.since) bits.push('for ' + span(Math.max(1, (Date.now() - new Date(s.since)) / 1000)));
+      return bits.join(' · ');
+    };
+    const sessionBits = (s) => [
+      s.doing ? h('div', { class: 'doing' }, s.doing) : (s.state !== 'working' && s.said ? h('div', { class: 'doing said' }, s.said) : null),
+      (s.agents || []).length ? h('div', { class: 'agents' }, s.agents.map((a) => h('div', {}, h('span', { class: 'dot live' }), h('b', {}, a.type), a.doing ? ' · ' + a.doing : ''))) : null,
+      (s.background || []).length ? h('div', { class: 'agents' }, s.background.map((b) => h('div', {}, h('span', { class: 'dot live' }), h('b', {}, b.type), b.what ? ' · ' + b.what : ''))) : null,
+      s.tasks && s.tasks.of ? h('div', { class: 'tasks' }, h('div', { class: 'bar-status' }, h('i', { class: 'sp-done', style: 'width:' + (100 * s.tasks.done / s.tasks.of) + '%' })), h('span', {}, s.tasks.done + ' of ' + s.tasks.of + ' tasks')) : null];
+    for (const lane of lanes) {
+      const s = sessions.find((x) => x.id === lane.session);
+      if (s) seen.add(s.id);
+      const moving = (lane.state === 'building' || lane.state === 'testing') && (!s || s.state === 'working' || s.state === 'background');
+      out.push(h('div', { class: 'pill ' + lane.state + (s && s.state === 'asking' ? ' asking' : '') },
+        h('div', { class: 'pillhead' }, h('span', { class: 'dot' + (moving ? ' live' : '') }), h('b', { class: 'grow' }, lane.name),
+          lane.eta ? h('span', { class: 'chip' }, 'ETA ' + lane.eta) : null),
+        h('div', { class: 'sub' }, [lane.milestone || '', s ? sessionLine(s) : (LANE[lane.state] || lane.state) + (lane.updated ? ' · updated ' + when(lane.updated) : '')].filter(Boolean).join(' · ')),
+        lane.note ? h('div', { class: 'lanenote', html: inline(lane.note) }) : null, s ? sessionBits(s) : null));
+    }
+    for (const s of sessions) {
+      if (seen.has(s.id)) continue;
+      out.push(h('div', { class: 'pill session ' + s.state },
+        h('div', { class: 'pillhead' }, h('span', { class: 'dot' + (s.state === 'working' || s.state === 'background' ? ' live' : '') }),
+          h('b', { class: 'grow' }, s.title || s.prompt || 'A Claude Code session'), s.where ? h('span', { class: 'chip' }, s.where) : null),
+        h('div', { class: 'sub' }, sessionLine(s)), sessionBits(s)));
+    }
+    if (!out.length) return [h('div', { class: 'empty' }, 'Nothing is running. ', hooks ? 'A Claude Code session in the project shows here as soon as it starts.'
+      : 'Sessions will show here on their own once live reporting is on: say to Claude Code, “turn on the Studio\'s live reporting”.')];
+    return [h('div', { class: 'pills' }, out)];
+  }
+
+  function dayChart(days) {
+    const W = 920, H = 190, L = 34, R = 10, T = 14, B = 24, n = days.length;
+    const top = Math.min(100, Math.max(20, Math.ceil(Math.max(...days.map((d) => d.pct)) / 10) * 10 + 10));
+    const most = Math.max(3, ...days.map((d) => d.landed));
+    const x = (i) => L + (n === 1 ? 0.5 : i / (n - 1)) * (W - L - R), y = (p) => T + (1 - p / top) * (H - T - B);
+    const ns = 'http://www.w3.org/2000/svg';
+    const el = (tag, attrs, text) => { const e = document.createElementNS(ns, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (text) { const t = document.createElementNS(ns, 'title'); t.textContent = text; e.append(t); } return e; };
+    const svg = el('svg', { viewBox: '0 0 ' + W + ' ' + H, class: 'chart', role: 'img', 'aria-label': 'Progress by day, from ' + pctText(days[0].pct) + ' to ' + pctText(days[n - 1].pct) });
+    for (const p of [0, top / 2, top]) {
+      svg.append(el('line', { x1: L, x2: W - R, y1: y(p), y2: y(p), class: 'cgrid' }));
+      const label = el('text', { x: L - 6, y: y(p) + 4, class: 'axis', 'text-anchor': 'end' }); label.textContent = Math.round(p); svg.append(label);
+    }
+    const bw = Math.max(3, Math.min(18, (W - L - R) / n * 0.5));
+    days.forEach((d, i) => {
+      if (d.landed) svg.append(el('rect', { x: x(i) - bw / 2, width: bw, y: y(0) - (d.landed / most) * (H - T - B) * 0.45, height: (d.landed / most) * (H - T - B) * 0.45, class: 'landed' },
+        dayName(d.date) + ': ' + d.landed + (d.landed === 1 ? ' step landed' : ' steps landed')));
+    });
+    svg.append(el('path', { d: days.map((d, i) => (i ? 'L' : 'M') + x(i).toFixed(1) + ' ' + y(d.pct).toFixed(1)).join(' '), class: 'cline' }));
+    days.forEach((d, i) => {
+      svg.append(el('circle', { cx: x(i), cy: y(d.pct), r: n > 30 ? 2 : 3, class: 'cpt' }, dayName(d.date) + ': ' + pctText(d.pct)));
+      if (d.setbacks) svg.append(el('path', { d: 'M' + (x(i) - 5) + ' ' + (T - 8) + ' h10 l-5 9 z', class: 'setback' }, dayName(d.date) + ': ' + d.setbacks + (d.setbacks === 1 ? ' setback' : ' setbacks')));
+    });
+    for (const i of [...new Set([0, Math.floor((n - 1) / 2), n - 1])]) {
+      const label = el('text', { x: x(i), y: H - 6, class: 'axis', 'text-anchor': i === 0 ? 'start' : i === n - 1 ? 'end' : 'middle' }); label.textContent = dayName(days[i].date); svg.append(label);
+    }
+    return svg;
+  }
+
   function overviewPage() {
-    const st = S.state, ov = st.overview || {}, now = ov.now || {}, game = ov.game || {}, ms = ov.milestones || [], hands = ov.hands || [];
+    const st = S.state, ov = st.overview || {}, now = ov.now || {}, game = ov.game || {}, hands = ov.hands || [];
+    const board = ov.board || { pct: 0, share: {}, counts: {}, milestones: ov.milestones || [], days: [], pace: {}, events: [], lanes: [] };
+    const ms = board.milestones || [], cur = ms.find((m) => m.status === 'current');
     const mine = st.batches.filter((b) => b.status === 'open' || b.status === 'draft');
     const sent = st.batches.filter((b) => b.status === 'submitted');
     const confirms = st.playtests.reduce((n, p) => n + p.reports.filter((x) => x.triage.status === 'fixed' && x.triage.confirmed == null).length, 0);
-    const openHands = hands.filter((x) => x.status === 'open'), laterHands = hands.filter((x) => x.status === 'later'), oldHands = hands.filter((x) => x.status === 'done' || x.status === 'parked');
+    const openHands = hands.filter((x) => x.status === 'open').sort((a, b) => (b.urgent ? 1 : 0) - (a.urgent ? 1 : 0));
+    const laterHands = hands.filter((x) => x.status === 'later'), oldHands = hands.filter((x) => x.status === 'done' || x.status === 'parked');
     const owed = mine.length + (confirms ? 1 : 0) + openHands.length;
-    const main = h('main', {});
+    const col = h('div', { class: 'hudmain' });
 
-    // where the game stands, in one line
-    const cur = ms.find((m) => m.status === 'current');
-    main.append(h('section', {},
-      h('h1', {}, now.headline || st.project || 'Overview'),
-      h('div', { class: 'meta', style: 'display:flex;gap:6px;flex-wrap:wrap;align-items:center' },
-        cur ? h('span', { class: 'chip accent' }, cur.id + ' · ' + cur.name) : null,
-        now.build ? h('span', { class: 'chip' }, 'Build ' + now.build) : (game.version ? h('span', { class: 'chip' }, 'Version ' + game.version) : null),
-        now.gate ? h('span', { class: 'chip ok' }, 'Gate ' + now.gate) : null,
-        game.branch ? h('span', { class: 'chip' }, game.branch + ' @ ' + game.head) : null,
-        now.updated ? h('span', { class: 'sub muted' }, 'written ' + when(now.updated)) : null,
-        game.since_now ? h('span', { class: 'chip redo', title: 'The project repo has moved since this summary was written' }, game.since_now + ' commit' + (game.since_now === 1 ? '' : 's') + ' since') : null)));
+    // a project that has not been planned yet says so, and says how
+    const todo = (ov.setup || []).filter((x) => !x.optional), left = todo.filter((x) => !x.done);
+    if (left.length) col.append(fold('setup', true, 'setup',
+      [h('span', { class: 'grow' }, 'Getting organised'), h('span', { class: 'chip accent' }, (todo.length - left.length) + ' of ' + todo.length)],
+      h('ul', { class: 'ticks' }, (ov.setup || []).map((x) => h('li', { class: x.done ? 'done' : '' }, h('span', { class: 'tick' }, x.done ? '✓' : ''), x.title, x.optional && !x.done ? h('span', { class: 'muted' }, ' (if it has any)') : null))),
+      h('div', { class: 'say' }, h('span', {}, 'In the project, say to Claude Code:'), h('code', {}, PLAN_SAY), copyButton(PLAN_SAY)),
+      h('p', { class: 'muted' }, 'It reads what the project already has, asks you what only you can answer, and fills in the rest.')));
 
-    if (!now.headline && !ms.length && !hands.length && !(st.slots || []).length && !st.batches.length) main.append(h('div', { class: 'empty' },
-      'This Studio is new and empty. In the project, tell Claude Code: ', h('code', { class: 'i' }, 'move this project into its Studio'),
-      '. It fills in the milestones, the build in hand, the asset list and your rulings, and asks you what it cannot find.'));
+    // how far along, in one number
+    const done = board.milestones_done || 0;
+    col.append(h('section', { class: 'gauge' },
+      h('div', { class: 'gaugetop' },
+        h('div', { class: 'big num' }, pctText(board.pct || 0)),
+        h('div', { class: 'grow' }, h('h1', { class: (now.headline || '').length > 110 ? 'long' : '' }, now.headline || st.project || 'Overview'), now.goal ? h('p', { class: 'muted', html: inline(now.goal) }) : null)),
+      h('div', { class: 'bar-status tall', role: 'img', 'aria-label': BAR.map((k) => STEP[k] + ' ' + Math.round((board.share || {})[k] || 0) + '%').join(', ') },
+        BAR.filter((k) => (board.share || {})[k]).map((k) => h('i', { class: 'sp-' + k, style: 'width:' + board.share[k] + '%', title: STEP[k] + ': ' + ((board.counts || {})[k] || 0) }))),
+      h('div', { class: 'legend' }, BAR.concat(['planned']).map((k) => h('span', {}, h('span', { class: 'dot sp-' + k }), STEP[k] + ' ', h('b', {}, String((board.counts || {})[k] || 0)))),
+        h('span', { class: 'muted' }, board.steps ? board.steps + ' steps in all' : 'No steps yet')),
+      ms.length ? h('div', { class: 'track', role: 'img', 'aria-label': ms.map((m) => m.id + ' ' + MSTONE[m.status]).join(', ') },
+        ms.map((m) => h('div', { class: 'seg ' + m.status, title: m.name + ': ' + MSTONE[m.status] + (m.steps ? ', ' + pctText(m.pct) : '') }, h('b', {}, m.id), h('span', {}, m.name)))) : null,
+      ms.length ? h('p', { class: 'muted' }, done + ' of ' + ms.length + ' milestones complete') : null));
 
-    // everything the user owes
-    const owe = h('div', { class: 'rows' });
-    for (const b of mine) owe.append(link('b.' + b.id, { class: 'row' },
-      h('div', { class: 'grow' }, h('div', { class: 'title' }, b.title), h('div', { class: 'sub' }, b.ask)),
-      h('span', { class: 'chip' }, KIND[b.kind] || b.kind), h('span', { class: 'chip accent' }, b.status === 'draft' ? 'Started' : (b.mode === 'question' ? 'Answer' : 'Judge ' + b.count))));
-    if (confirms) owe.append(link('playtests', { class: 'row' },
-      h('div', { class: 'grow' }, h('div', { class: 'title' }, confirms === 1 ? 'One fix to confirm' : confirms + ' fixes to confirm'), h('div', { class: 'sub' }, 'Marked fixed from your playtest notes. Play the build and say whether each is.')),
-      h('span', { class: 'chip accent' }, 'Confirm')));
-    for (const x of openHands) owe.append(handRow(x));
-    main.append(h('section', {},
-      h('div', { class: 'sec-head' }, h('h2', {}, 'Waiting on you' + (owed ? ' · ' + owed : '')), h('p', {}, 'To judge, to confirm, and what only you can do.')),
-      owed ? owe : h('div', { class: 'empty' }, 'Nothing waits for you.'),
-      sent.length ? h('div', { class: 'say' }, h('span', {}, sent.length + (sent.length === 1 ? ' verdict waits' : ' verdicts wait') + ' on Claude. Say to Claude Code:'), h('code', {}, SAY), copyButton(SAY)) : null,
-      laterHands.length ? h('details', { class: 'brief' }, h('summary', {}, 'Yours later, nothing waits on these yet (' + laterHands.length + ')'), h('div', { class: 'rows', style: 'margin-top:8px' }, laterHands.map(handRow))) : null,
-      oldHands.length ? h('details', { class: 'brief' }, h('summary', {}, 'Done and set aside (' + oldHands.length + ')'), h('div', { class: 'rows', style: 'margin-top:8px' }, oldHands.map(handRow))) : null));
+    // the few facts worth a glance
+    const tile = (label, value, sub, href) => h(href ? 'a' : 'div', { class: 'stat', href: href || null }, h('span', { class: 'label' }, label), h('span', { class: 'value' }, value), sub ? h('span', { class: 'sub' }, sub) : null);
+    const pace = board.pace || {};
+    const tiles = [
+      cur ? tile('In hand', cur.id + ' · ' + cur.name, [cur.unplanned ? 'no steps yet' : pctText(cur.pct), cur.eta ? 'ETA ' + cur.eta : ''].filter(Boolean).join(' · ')) : null,
+      pace.finish ? tile('Done at this pace', dayName(pace.finish), '+' + pace.per_day + ' points a day over ' + pace.over_days + (pace.over_days === 1 ? ' day' : ' days'))
+        : (board.days || []).length > 1 ? tile('Done at this pace', 'No telling', 'nothing moved in the last ' + (pace.over_days || 7) + ' days') : null,
+      now.finish ? tile('Claude\'s estimate', now.finish, 'for the whole project') : null,
+      (now.counters || []).map((c) => tile(c.name, c.have + ' / ' + c.of)),
+      now.build || game.version ? tile('Build', now.build || game.version, game.since_now ? game.since_now + (game.since_now === 1 ? ' commit' : ' commits') + ' since it was written up' : (now.gate || ''), '#build') : null];
+    if (tiles.flat().filter(Boolean).length) col.append(h('div', { class: 'tiles' }, tiles));
 
-    // the build in hand
-    const list = (title, items, cls) => (items || []).length ? h('div', { class: 'ovcol' }, h('h3', {}, title), h('ul', { class: cls || 'look' }, items.map((x) => h('li', { html: inline(x) })))) : null;
-    const commits = game.commits || [];
-    if (now.headline || commits.length) main.append(h('section', {},
-      h('div', { class: 'sec-head' }, h('h2', {}, 'Now'), now.spec ? h('p', { class: 'mono' }, now.spec) : null),
-      h('div', { class: 'ovgrid' }, list('In the build', now.built), list('Next', now.next)),
-      (now.start || []).length ? h('div', { class: 'ovcol' }, h('h3', {}, 'Start it'), now.start.map((line) => h('div', { class: 'runline' }, h('code', { class: 'i' }, line), copyButton(line)))) : null,
-      (now.known || []).length ? h('details', { class: 'brief' }, h('summary', {}, 'Known and left as it is (' + now.known.length + ')'), h('ul', { class: 'plain' }, now.known.map((x) => h('li', { html: inline(x) })))) : null,
-      commits.length ? h('details', { class: 'brief' }, h('summary', {}, 'Latest work in the project repo'),
-        h('div', { class: 'rows', style: 'margin-top:8px' }, commits.map((c) => h('div', { class: 'row' }, h('span', { class: 'mono muted' }, c.sha), h('div', { class: 'grow' }, c.subject), h('span', { class: 'sub' }, when(c.date)))))) : null));
-
-    // the road
-    if (ms.length) {
-      const done = ms.filter((m) => m.status === 'done').length;
-      main.append(h('section', {},
-        h('div', { class: 'sec-head' }, h('h2', {}, 'How far along'), h('p', {}, done + ' of ' + ms.length + ' milestones done' + (cur ? ' · now: ' + cur.name : ''))),
-        h('div', { class: 'track', role: 'img', 'aria-label': ms.map((m) => m.id + ' ' + MSTONE[m.status]).join(', ') }, ms.map((m) => h('div', { class: 'seg ' + m.status, title: m.name + ': ' + MSTONE[m.status] }, h('b', {}, m.id), h('span', {}, m.name)))),
-        h('div', { class: 'rows' }, ms.map((m) => h('details', { class: 'ms ' + m.status, open: m.status === 'current' },
-          h('summary', {}, h('span', { class: 'mid' }, m.id), h('span', { class: 'grow' }, h('span', { class: 'title' }, m.name), m.note ? h('span', { class: 'sub' }, ' · ' + m.note) : null),
-            h('span', { class: 'status' }, h('span', { class: 'dot ms-' + m.status }), MSTONE[m.status] || m.status)),
-          h('div', { class: 'msbody' }, m.goal ? h('p', { html: inline(m.goal) }) : null,
-            m.question ? h('p', { class: 'muted' }, 'Your verdict answers: ', h('i', {}, m.question)) : null,
-            m.estimate ? h('p', { class: 'mono muted' }, 'Estimate: ' + m.estimate) : null))))));
+    // running now: redrawn by itself every few seconds
+    const running = h('div', { class: 'runbody' }, runningBody(ov.live || {}, ov.hooks));
+    col.append(h('section', {}, h('div', { class: 'sec-head' }, h('h2', {}, 'Running now'), h('p', {}, ov.hooks ? 'Live from the project\'s sessions.' : '')), running));
+    if (!STATIC && API.live) {
+      const timer = setInterval(async () => { try { const live = await API.live(); (S.state.overview || {}).live = live; running.replaceChildren(...runningBody(live, ov.hooks)); } catch (e) { /* next beat */ } }, 3000);
+      S.cleanup.push(() => clearInterval(timer));
     }
 
-    // what the game still lacks
+    // day by day
+    const days = board.days || [];
+    if (days.length > 1) col.append(h('section', {},
+      h('div', { class: 'sec-head' }, h('h2', {}, 'Day by day'), h('p', {}, 'The line is how far along; bars are steps landed; a red mark is a setback.')), dayChart(days)));
+
+    // the road, and the steps of each stretch
+    if (ms.length) col.append(h('section', {},
+      h('div', { class: 'sec-head' }, h('h2', {}, 'Milestones')),
+      h('div', { class: 'rows' }, ms.map((m) => fold('ms:' + m.id, false, 'ms ' + m.status,
+        [h('span', { class: 'mid' }, m.id), h('span', { class: 'grow' }, h('span', { class: 'title' }, m.name), m.note ? h('span', { class: 'sub' }, ' · ' + m.note) : null),
+          m.eta && m.status !== 'done' ? h('span', { class: 'chip' }, 'ETA ' + m.eta) : null,
+          h('span', { class: 'mbar' }, h('span', { class: 'bar-status' }, h('i', { class: 'sp-done', style: 'width:' + m.pct + '%' })), h('span', { class: 'num' }, m.unplanned ? '–' : pctText(m.pct))),
+          h('span', { class: 'status' }, h('span', { class: 'dot ms-' + m.status }), MSTONE[m.status] || m.status)],
+        h('div', { class: 'msbody' }, m.goal ? h('p', { html: inline(m.goal) }) : null,
+          m.question ? h('p', { class: 'muted' }, 'Your verdict answers: ', h('i', {}, m.question)) : null,
+          (m.steps || []).length ? h('ul', { class: 'steps' }, m.steps.map((s) => h('li', { class: 'st ' + s.status }, h('span', { class: 'dot sp-' + s.status }), h('span', { class: 'grow' }, s.name, s.note ? h('span', { class: 'muted' }, ' · ' + s.note) : null),
+            h('span', { class: 'sub' }, STEP[s.status] + (s.date ? ' · ' + dayName(s.date) : '')))))
+            : (m.status === 'done' ? null : h('p', { class: 'muted' }, 'No steps yet, so its progress cannot be counted.'))))))));
+
+    // the log
+    const log = board.events || [];
+    if (log.length) {
+      const row = (e) => h('div', { class: 'row ev ' + e.kind }, h('span', { class: 'chip ' + ({ setback: 'bad', merge: 'ok', publish: 'ok', done: 'keep' }[e.kind] || '') }, EVENT[e.kind] || e.kind),
+        h('div', { class: 'grow' }, h('span', { html: inline(e.text) }), e.milestone ? h('span', { class: 'muted' }, ' · ' + e.milestone) : null), h('span', { class: 'sub' }, when(e.ts)));
+      col.append(h('section', {}, h('div', { class: 'sec-head' }, h('h2', {}, 'Log'), h('p', {}, 'Newest first.')),
+        h('div', { class: 'rows' }, log.slice(0, 10).map(row)),
+        log.length > 10 ? fold('log', false, 'brief', 'Earlier (' + (log.length - 10) + ')', h('div', { class: 'rows', style: 'margin-top:8px' }, log.slice(10).map(row))) : null));
+    }
+
+    if (!ms.length && !hands.length && !st.batches.length && !left.length) col.append(h('div', { class: 'empty' }, 'Nothing here yet.'));
+
+    // the rail: everything that waits on the user, and what comes next
+    const asks = h('div', { class: 'asks' });
+    for (const b of mine) asks.append(link('b.' + b.id, { class: 'need go' },
+      h('span', { class: 'chip accent' }, b.status === 'draft' ? 'Started' : (b.mode === 'question' ? 'Answer' : 'Judge ' + b.count)), h('span', { class: 'grow' }, b.title), h('span', { class: 'chip' }, KIND[b.kind] || b.kind)));
+    if (confirms) asks.append(link('playtests', { class: 'need go' }, h('span', { class: 'chip accent' }, 'Confirm'), h('span', { class: 'grow' }, confirms === 1 ? 'One fix to confirm in the build' : confirms + ' fixes to confirm in the build')));
+    for (const x of openHands) asks.append(askRow(x));
+    const setAll = (open) => { asks.querySelectorAll('details').forEach((d) => { d.open = open; OPEN.set(d.dataset.fold, open); }); };
+    const next = (now.next || []).map(split);
+    const rail = h('aside', { class: 'rail', 'aria-label': 'Needs you' },
+      h('div', { class: 'railhead' }, h('h2', {}, 'Needs you'), owed ? h('span', { class: 'count hot' }, String(owed)) : null, h('span', { class: 'grow' }),
+        openHands.length > 1 ? [h('button', { class: 'btn small', type: 'button', onclick: () => setAll(true) }, 'Open all'), h('button', { class: 'btn small', type: 'button', onclick: () => setAll(false) }, 'Close all')] : null),
+      owed ? asks : h('div', { class: 'empty' }, 'Nothing waits on you.'),
+      sent.length ? h('div', { class: 'say' }, h('span', {}, sent.length + (sent.length === 1 ? ' verdict waits' : ' verdicts wait') + ' on Claude. Say to Claude Code:'), h('code', {}, SAY), copyButton(SAY)) : null,
+      laterHands.length ? fold('later', false, 'brief', 'Yours later, nothing waits on these yet (' + laterHands.length + ')', h('div', { class: 'asks' }, laterHands.map(askRow))) : null,
+      oldHands.length ? fold('answered', false, 'brief', 'Answered (' + oldHands.length + ')', h('div', { class: 'asks' }, oldHands.map(askRow))) : null,
+      next.length ? [h('h2', { class: 'railsub' }, 'Next up'), h('ul', { class: 'nextup' }, next.map(([text, eta]) => h('li', {}, h('span', { class: 'grow', html: inline(text) }), eta ? h('span', { class: 'chip' }, eta) : null)))] : null);
+    return h('main', { class: 'hud' }, col, rail);
+  }
+
+  // ------------------------------------------------------------ the build in hand
+  function buildPage() {
+    const st = S.state, ov = st.overview || {}, now = ov.now || {}, game = ov.game || {}, main = h('main', {});
+    const list = (title, items, cls) => ((items || []).length ? h('div', { class: 'ovcol' }, h('h3', {}, title), h('ul', { class: cls || 'look' }, items.map((x) => h('li', { html: inline(split(x)[0]) })))) : null);
+    const commits = game.commits || [];
+    main.append(h('section', {},
+      h('h1', {}, now.build ? 'Build ' + now.build : 'The build in hand'),
+      h('div', { class: 'meta', style: 'display:flex;gap:6px;flex-wrap:wrap;align-items:center' },
+        now.gate ? h('span', { class: 'chip ok' }, 'Gate ' + now.gate) : null,
+        game.branch ? h('span', { class: 'chip' }, game.branch + ' @ ' + game.head) : null,
+        now.spec ? h('span', { class: 'chip' }, now.spec) : null,
+        now.updated ? h('span', { class: 'sub muted' }, 'written ' + when(now.updated)) : null,
+        game.since_now ? h('span', { class: 'chip redo', title: 'The project repo has moved since this was written' }, game.since_now + ' commit' + (game.since_now === 1 ? '' : 's') + ' since') : null)));
+    if (!(now.built || []).length && !(now.start || []).length && !commits.length) main.append(h('div', { class: 'empty' }, 'No build has been written up yet.'));
+    main.append(h('section', {}, h('div', { class: 'ovgrid' }, list('In the build', now.built), list('Next', now.next)),
+      (now.start || []).length ? h('div', { class: 'ovcol' }, h('h3', {}, 'Start it'), now.start.map((line) => h('div', { class: 'runline' }, h('code', { class: 'i' }, line), copyButton(line)))) : null,
+      (now.known || []).length ? fold('known', false, 'brief', 'Known and left as it is (' + now.known.length + ')', h('ul', { class: 'plain' }, now.known.map((x) => h('li', { html: inline(x) })))) : null,
+      commits.length ? fold('commits', false, 'brief', 'Latest work in the project repo',
+        h('div', { class: 'rows', style: 'margin-top:8px' }, commits.map((c) => h('div', { class: 'row' }, h('span', { class: 'mono muted' }, c.sha), h('div', { class: 'grow' }, c.subject), h('span', { class: 'sub' }, when(c.date)))))) : null));
+
+    // what the project still lacks
     const slots = st.slots || [];
     if (slots.length) {
       const groups = {}; slots.forEach((s) => { const g = groups[s.group || 'Other'] = groups[s.group || 'Other'] || { n: 0 }; g.n++; g[s.status] = (g[s.status] || 0) + 1; });
@@ -1220,7 +1376,7 @@
         const fresh = S.state.batches.filter((b) => b.status === 'open' && !before.has(b.id));
         if (fresh.length) toast('New in your inbox: ' + fresh[0].title);
         const r = route();
-        if (!r.startsWith('b.') && !r.startsWith('s.') && !S.over && !/^(TEXTAREA|INPUT)$/.test((document.activeElement || {}).tagName || '')) render(r);
+        if (!r.startsWith('b.') && !r.startsWith('s.') && !S.over && !/^(TEXTAREA|INPUT)$/.test((document.activeElement || {}).tagName || '')) render(r, true);
         else { const bar = $('.top'); if (bar) bar.replaceWith(top(r)); }
       }
     } catch (e) { /* the server is restarting; try again on the next beat */ }

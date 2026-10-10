@@ -26,8 +26,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from studiolib import bake, checks, server, setup  # noqa: E402
-from studiolib.store import (HAND_STATUS, KINDS, MILESTONE_STATUS, MODES, SLOT_STATUS, TRIAGE_STATUS,  # noqa: E402
+from studiolib import bake, board, checks, server, setup  # noqa: E402
+from studiolib.store import (HAND_KINDS, HAND_STATUS, KINDS, MILESTONE_STATUS, MODES, SLOT_STATUS, TRIAGE_STATUS,  # noqa: E402
                              Studio, StudioError)
 
 
@@ -167,6 +167,12 @@ def cmd_status(a):
         groups.setdefault(b["status"], []).append(b)
     building = [b for b in s.batch_ids() if s.load_batch(b)["status"] == "building"]
     print(f"{state['project']}  ({s.home})")
+    view = state["overview"]["board"]
+    cur = next((m for m in view["milestones"] if m.get("status") == "current"), None)
+    print(f"\n{view['pct']:g}% of the way, {view['milestones_done']} of {len(view['milestones'])} milestones done"
+          + (f"; now {cur['id']} {cur.get('name', '')} at {cur['pct']:g}%" if cur else ""))
+    for lane in view["lanes"]:
+        print(f"  running  {lane['id']}  {lane['name']}  [{lane['state']}]" + (f"  eta {lane['eta']}" if lane.get("eta") else ""))
     print(f"\nWaiting on the user: {len(groups['open']) + len(groups['draft'])}")
     for b in groups["open"] + groups["draft"]:
         print(f"  {b['id']}  {b['title']}  [{b['kind']}, {b['count']}]" + ("  (they have started)" if b["status"] == "draft" else ""))
@@ -180,7 +186,7 @@ def cmd_status(a):
             print(f"  {x['id']}  {x['title']}")
     unseen = s.unseen_hands()
     if unseen:
-        print(f"\nHe answered, and nobody has read it: {len(unseen)}   (studio.py todo)")
+        print(f"\nThe user answered, and nobody has read it: {len(unseen)}   (studio.py todo)")
     if building:
         print(f"\nNot filed yet: {len(building)}")
         for b in building:
@@ -198,7 +204,9 @@ def cmd_status(a):
 
 
 def reminders(s: Studio) -> None:
-    """What a session must not leave behind: unsaved history, and a copy of the skill that has fallen behind."""
+    """What a session must not leave behind: a board that is not true, unsaved history, a skill that has fallen behind."""
+    for line in board.advice(s):
+        print(f"\n{line}")
     n = s.unsaved()
     if n:
         print(f"\nThe Studio has {n} unsaved change{'s' if n != 1 else ''} (the user's verdicts and answers on the page count). "
@@ -421,20 +429,93 @@ def cmd_triage(a):
 def cmd_milestone(a):
     s = Studio(find_home(a.home))
     if a.action == "list":
-        for m in s.roadmap():
-            print(f"{m['status']:8} {m['id']:4} {m.get('name', '')}" + (f"  ({m['note']})" if m.get("note") else ""))
+        for m in board.view(s)["milestones"]:
+            print(f"{m['status']:8} {m['id']:4} {m['pct']:5g}%  {m.get('name', '')}" + (f"  eta {m['eta']}" if m.get("eta") else "")
+                  + (f"  ({m['note']})" if m.get("note") else ""))
         return
     if not a.id:
         raise StudioError("milestone set needs an id")
     m = s.set_milestone(a.id, name=a.name, status=a.status, goal=a.goal, question=a.question, note=a.note,
-                        estimate=a.estimate)
+                        estimate=a.estimate, eta=a.eta, weight=a.weight)
+    board.snapshot(s)
     print(f"{m['id']}: {m['status']}")
+
+
+def cmd_step(a):
+    s = Studio(find_home(a.home))
+    if a.action == "list":
+        for m in board.view(s)["milestones"]:
+            if a.milestone and m["id"] != a.milestone:
+                continue
+            print(f"{m['id']}  {m.get('name', '')}  {m['pct']:g}%")
+            for step in m.get("steps") or []:
+                print(f"  {step['status']:9} {step['id']:28} {step.get('name', '')}")
+        return
+    if not a.milestone or not a.id:
+        raise StudioError("step set <milestone> <step id> --name \"...\" --status ...")
+    step = board.set_step(s, a.milestone, a.id, name=a.name, status=a.status, note=a.note, date=a.date)
+    print(f"{a.milestone} {step['id']}: {step['status']}   ({board.view(s)['pct']:g}% of the way)")
+
+
+def cmd_lane(a):
+    s = Studio(find_home(a.home))
+    if a.action == "list":
+        for lane in board.lanes(s):
+            print(f"{lane['state']:9} {lane['id']:24} {lane['name']}" + (f"  eta {lane['eta']}" if lane.get("eta") else ""))
+        return
+    if not a.id:
+        raise StudioError(f"lane {a.action} needs an id")
+    if a.action == "done":
+        lane = board.end_lane(s, a.id, note=a.note, step_status=a.step_status)
+        print(f"{lane['id']}: off the board")
+        return
+    lane = board.set_lane(s, a.id, name=a.name, milestone=a.milestone, step=a.step, state=a.state, eta=a.eta, note=a.note)
+    print(f"{lane['id']}: {lane['state']}")
+
+
+def cmd_log(a):
+    s = Studio(find_home(a.home))
+    if not a.kind:
+        for e in board.events(s, 20):
+            print(f"{e['ts']}  {e['kind']:8} {e['text']}")
+        return
+    board.log(s, a.kind, " ".join(a.text), milestone=a.milestone, step=a.step)
+    print(f"logged: {a.kind}")
+
+
+def cmd_plan(a):
+    s = Studio(find_home(a.home))
+    if not a.file:
+        print(json.dumps(board.plan(s), indent=2, ensure_ascii=False))
+        return
+    try:
+        data = json.loads(Path(a.file).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as err:
+        raise StudioError(f"{a.file}: {err}") from err
+    n = board.apply_plan(s, data)
+    print(f"Planned: {n['milestones']} milestones, {n['steps']} steps, {n['asks']} asks, {n['slots']} slots. "
+          f"{board.view(s)['pct']:g}% of the way.")
+
+
+def cmd_hooks(a):
+    if a.action == "status":
+        events = setup.hooks_installed()
+        print(f"Claude Code reports {len(events)} kinds of event to {setup.HOOK}" if events
+              else f"Not installed: studio.py hooks install   (it edits {setup.claude_settings()})")
+        return
+    out = setup.install_hooks(remove=a.action == "remove")
+    print(f"{'Removed from' if a.action == 'remove' else 'Installed in'} {out['settings']}"
+          + (f"\n  as it was before: {out['backup']}" if out["backup"] else ""))
+    if a.action == "install":
+        print("Every Claude Code session in a project that has a Studio now shows on its Overview while it works.\n"
+              "Sessions already open pick it up within a few seconds, or when they next start.")
 
 
 def cmd_now(a):
     s = Studio(find_home(a.home))
-    fields = {"headline": a.headline, "build": a.build, "gate": a.gate, "spec": a.spec,
-              "built": a.built, "next": a.next, "known": a.known, "start": a.start}
+    fields = {"headline": a.headline, "build": a.build, "gate": a.gate, "spec": a.spec, "goal": a.goal,
+              "finish": a.finish, "built": a.built, "next": a.next, "known": a.known, "start": a.start,
+              "counters": [board.counter(c) for c in a.counter]}
     if any(v not in (None, "", []) for v in fields.values()):
         s.set_now(**fields)
     print(json.dumps(s.now(), indent=2, ensure_ascii=False))
@@ -445,7 +526,7 @@ def cmd_hand(a):
     if a.action == "list":
         for x in s.hands():
             flag = "  (the user answered, not read yet)" if x.get("answered") and not x.get("seen") else ""
-            print(f"{x['status']:7} {x['id']:28} {x['title']}{flag}")
+            print(f"{x['status']:7} {x.get('kind', 'action'):9} {x['id']:28} {x['title']}{flag}")
         return
     if not a.id:
         raise StudioError(f"hand {a.action} needs an id")
@@ -453,8 +534,15 @@ def cmd_hand(a):
         s.see_hand(a.id)
         print(f"{a.id}: read")
         return
+    if a.action == "answered":
+        if not a.answer:
+            raise StudioError("hand answered <id> --answer \"<their words, exact>\"")
+        s.close_hand(a.id, a.answer)
+        print(f"{a.id}: closed with their answer")
+        return
     x = s.set_hand(a.id, title=a.title, detail=text_arg(a.detail, a.detail_file), gates=a.gates, time=a.time,
-                   run=a.run, status=a.status, group=a.group)
+                   run=a.run, status=a.status, group=a.group, kind=a.kind, default=a.default,
+                   urgent=True if a.urgent else (False if a.no_urgent else None))
     print(f"{x['id']}: {x['status']}")
 
 
@@ -621,7 +709,41 @@ def main(argv=None) -> int:
     c.add_argument("--question", default="", help="the question the user's verdict answers")
     c.add_argument("--note", default="", help="where it stands today, one line")
     c.add_argument("--estimate", default="")
+    c.add_argument("--eta", default="", help="when it should be done: a date or a day, revised when it slips")
+    c.add_argument("--weight", default="", help="how much of the whole it is: 1 for an ordinary milestone, 2 for twice the work")
     c.set_defaults(fn=cmd_milestone)
+
+    c = sub.add_parser("step", help="the steps of a milestone; the Overview counts how far along the project is from them")
+    c.add_argument("action", choices=("set", "list")); c.add_argument("milestone", nargs="?", default="")
+    c.add_argument("id", nargs="?", default="")
+    c.add_argument("--name", default="", help="the step as the user would say it")
+    c.add_argument("--status", default="", choices=("",) + board.STEP_STATUS,
+                   help="planned, building, built (made, not yet proven), tested, done (accepted and in the project), parked, dropped")
+    c.add_argument("--note", default=""); c.add_argument("--date", default="", help="only to record a step that landed on an earlier day")
+    c.set_defaults(fn=cmd_step)
+
+    c = sub.add_parser("lane", help="work in progress right now: what the Overview shows under Running now")
+    c.add_argument("action", choices=("set", "done", "list")); c.add_argument("id", nargs="?", default="")
+    c.add_argument("--name", default="", help="the work, in a few words")
+    c.add_argument("--milestone", default=""); c.add_argument("--step", default="", help="the step it is on; a planned step becomes building")
+    c.add_argument("--state", default="", choices=("",) + board.LANE_STATE)
+    c.add_argument("--eta", default="", help="when it should land: a clock time or a date, revised when it slips")
+    c.add_argument("--note", default="", help="where it stands, one line")
+    c.add_argument("--step-status", default="", choices=("",) + board.STEP_STATUS, help="done: where the work leaves its step")
+    c.set_defaults(fn=cmd_lane)
+
+    c = sub.add_parser("log", help="one line in the project's log: a merge, a publish, a setback; with no kind, prints the last lines")
+    c.add_argument("kind", nargs="?", default="", choices=("",) + board.EVENT_KINDS); c.add_argument("text", nargs="*")
+    c.add_argument("--milestone", default=""); c.add_argument("--step", default="")
+    c.set_defaults(fn=cmd_log)
+
+    c = sub.add_parser("plan", help="the whole plan as one JSON document: prints it, or with a file, writes one in")
+    c.add_argument("file", nargs="?", default="", help="a plan to add or change: goal, milestones with steps, counters, asks, slots")
+    c.set_defaults(fn=cmd_plan)
+
+    c = sub.add_parser("hooks", help="have Claude Code report what each session is doing, so the Overview shows it live")
+    c.add_argument("action", choices=("install", "remove", "status"))
+    c.set_defaults(fn=cmd_hooks)
 
     c = sub.add_parser("now", help="the current build for the overview; with no flag, prints it")
     c.add_argument("--headline", default="", help="one sentence: where the game stands today")
@@ -632,10 +754,17 @@ def main(argv=None) -> int:
     c.add_argument("--next", action="append", default=[], help="what comes next; repeat (replaces the list)")
     c.add_argument("--known", action="append", default=[], help="known and left as it is; repeat (replaces the list)")
     c.add_argument("--start", action="append", default=[], help="a line that starts the build; repeat (replaces the list)")
+    c.add_argument("--goal", default="", help="what the project is and what done looks like, in a sentence or two")
+    c.add_argument("--finish", default="", help="your honest estimate of when the whole project is done")
+    c.add_argument("--counter", action="append", default=[], help="something the user counts the project by, as Name=have/of; repeat (replaces the list)")
     c.set_defaults(fn=cmd_now)
 
-    c = sub.add_parser("hand", help="what only the user can do (try a build, a check on another machine, a paper)")
-    c.add_argument("action", choices=("set", "list", "seen")); c.add_argument("id", nargs="?", default="")
+    c = sub.add_parser("hand", aliases=["ask"], help="what waits on the user: something only they can do, or a question only they can answer")
+    c.add_argument("action", choices=("set", "list", "seen", "answered")); c.add_argument("id", nargs="?", default="")
+    c.add_argument("--kind", default="", choices=("",) + HAND_KINDS, help="action (default), decision, play, info")
+    c.add_argument("--default", default="", help="what you will do if they do not answer")
+    c.add_argument("--urgent", action="store_true", help="work is stopped on it"); c.add_argument("--no-urgent", action="store_true")
+    c.add_argument("--answer", default="", help="answered: their words, exact, when they answered in chat")
     c.add_argument("--title", default=""); c.add_argument("--detail", default=""); c.add_argument("--detail-file", default="")
     c.add_argument("--gates", default="", help="what waits on it")
     c.add_argument("--time", default="", help="how long it takes the user")

@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import struct
+import subprocess
 import sys
 import tempfile
 import threading
@@ -23,7 +25,7 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from studiolib import bake, server, setup  # noqa: E402
+from studiolib import bake, board, server, setup  # noqa: E402
 from studiolib.store import Studio, StudioError  # noqa: E402
 
 FAILED = []
@@ -107,6 +109,7 @@ def main() -> int:
     print(f"Studio self-test, Python {sys.version.split()[0]}")
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         tmp = Path(tmp)
+        os.environ["STUDIO_CLAUDE_SETTINGS"] = str(tmp / "claude" / "settings.json")  # never the user's own
         home, game, src = tmp / "studio", tmp / "game", tmp / "src"
         game.mkdir(); src.mkdir()
         studio = Studio.init(home, "Self-test", str(game))
@@ -179,6 +182,97 @@ def main() -> int:
         check(status == 200 and studio.unseen_hands()[0]["his_note"] == "walked it", "what the user marks done on the page reaches Claude's queue")
         studio.see_hand("walk")
         check(studio.unseen_hands() == [], "and leaves it once read")
+
+        # the board: progress counted from steps, work in progress, the log, a snapshot a day
+        studio.set_milestone("M2", name="Two rooms", status="next", weight=3)
+        board.set_step(studio, "M1", "walls", name="Walls", status="done", date="2026-01-02")
+        board.set_step(studio, "M1", "door", name="A door", status="tested")
+        board.set_step(studio, "M1", "light", name="Light")
+        board.set_step(studio, "M1", "cut", name="A cut idea", status="dropped")
+        view = board.view(studio)
+        m1 = view["milestones"][0]
+        check(abs(m1["pct"] - 100 * (1 + 0.85 + 0) / 3) < 0.1 and abs(view["pct"] - m1["pct"] / 4) < 0.1 and view["counts"]["done"] == 1
+              and view["steps"] == 3, "progress is counted from the steps: a dropped step is left out, a heavier milestone weighs more")
+        check(view["days"][0]["date"] <= "2026-10-01" or len(view["days"]) == board.CHART_DAYS, "a step that landed on an earlier day is on the chart")
+        lane = board.set_lane(studio, "light", name="Lighting the room", milestone="M1", step="light", eta="16:30")
+        check(lane["state"] == "building" and board.view(studio)["milestones"][0]["steps"][2]["status"] == "building"
+              and board.events(studio)[-1]["kind"] == "start", "a lane that starts on a planned step marks it building, and says so in the log")
+        board.log(studio, "setback", "The lamp flickers on the laptop")
+        board.end_lane(studio, "light", step_status="done")
+        view = board.view(studio)
+        check(not view["lanes"] and view["events"][0]["kind"] == "done" and view["events"][1]["kind"] == "setback"
+              and view["days"][-1]["setbacks"] == 1 and view["days"][-1]["pct"] == view["pct"],
+              "a lane that lands leaves the board; the log and today's point on the chart follow")
+        try:
+            board.set_lane(studio, "x", name="X", milestone="M1", step="nope"); check(False, "a lane on a step that does not exist is refused")
+        except StudioError:
+            check(True, "a lane on a step that does not exist is refused")
+        plan = board.plan(studio)
+        plan["milestones"].append({"id": "M3", "name": "Three rooms", "status": "later", "steps": [{"id": "roof", "name": "A roof"}]})
+        made = board.apply_plan(studio, dict(plan, goal="A house.", counters=["Rooms=1/3"],
+                                             asks=[{"id": "paint", "kind": "decision", "title": "Paint it?", "default": "Leave it bare", "urgent": True}]))
+        ask = next(x for x in studio.hands() if x["id"] == "paint")
+        check(made["milestones"] == 3 and len(studio.roadmap()) == 3 and studio.now()["goal"] == "A house." and studio.now()["counters"][0]["of"] == 3
+              and ask["kind"] == "decision" and ask["urgent"] and ask["status"] == "open", "a whole plan is written in at once: milestones, steps, the goal, counters, asks")
+        studio.close_hand("paint", "Bare is fine.")
+        check(next(x for x in studio.hands() if x["id"] == "paint")["his_note"] == "Bare is fine." and studio.unseen_hands() == [],
+              "an ask the user answered in chat is closed with their words")
+        board.set_step(studio, "M1", "door", status="done")
+        check(any("M1" in line for line in board.advice(studio)) and [x["id"] for x in state["overview"]["setup"] if not x["done"]],
+              "a board that is not true is pointed out: every step done on a milestone still open")
+
+        # the sessions, as Claude Code's hooks report them
+        hooks = tmp / "hooks.json"
+        setup.register("Self-test", home, game, 1, hooks)
+        hook_env = dict(os.environ, STUDIO_REGISTRY=str(hooks), LOCALAPPDATA=str(tmp / "local"))
+
+        def hook(**event) -> None:
+            run = subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "hook.py")], input=json.dumps(event).encode(),
+                                 capture_output=True, env=hook_env)
+            assert run.returncode == 0 and not run.stdout and not run.stderr, run
+
+        deep = game / "content"
+        deep.mkdir(exist_ok=True)
+        hook(session_id="s-1", cwd=str(deep), hook_event_name="SessionStart", source="startup")
+        hook(session_id="s-1", cwd=str(deep), hook_event_name="UserPromptSubmit", prompt="Light the room\nand test it")
+        hook(session_id="s-1", cwd=str(deep), hook_event_name="PreToolUse", tool_name="Edit", tool_input={"file_path": str(deep / "room.scene")})
+        hook(session_id="s-1", cwd=str(deep), hook_event_name="SubagentStart", agent_id="a1", agent_type="Explore")
+        hook(session_id="s-2", cwd=str(tmp), hook_event_name="SessionStart")  # a folder with no Studio
+        status, live = http("GET", base + "/api/live")
+        one = live["sessions"][0] if status == 200 and live["sessions"] else {}
+        check(len(live["sessions"]) == 1 and one["state"] == "working" and one["prompt"] == "Light the room and test it"
+              and one["doing"] == "Editing room.scene" and one["agents"][0]["type"] == "Explore" and one["where"] == "content",
+              "a session's hooks say what it is doing, and the page can ask; a folder with no Studio is left alone")
+        hook(session_id="s-1", cwd=str(deep), hook_event_name="SubagentStop", agent_id="a1")
+        hook(session_id="s-1", cwd=str(deep), hook_event_name="Stop", last_assistant_message="The room is lit.",
+             background_tasks=[{"type": "workflow", "status": "running", "description": "review"}])
+        one = board.sessions(studio)[0]
+        check(one["state"] == "background" and not one["agents"] and one["said"] == "The room is lit." and one["background"][0]["type"] == "workflow",
+              "a session that stops with work still running in the background says so")
+        hook(session_id="s-1", cwd=str(deep), hook_event_name="SessionEnd")
+        check(board.sessions(studio)[0]["state"] == "ended" and (home / "live" / ".gitignore").exists(), "a session that ends is marked ended, and none of this is history")
+
+        # the hooks go into Claude Code's settings beside whatever is there, and come out again
+        settings = setup.claude_settings()
+        settings.parent.mkdir(parents=True)
+        theirs = {"model": "opus", "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "echo mine"}]}]}}
+        settings.write_text(json.dumps(theirs), encoding="utf-8")
+        check(setup.hooks_installed() == [], "hooks are not there until they are installed")
+        setup.install_hooks(); setup.install_hooks()
+        data = json.loads(settings.read_text(encoding="utf-8"))
+        check(set(setup.hooks_installed()) == set(setup.HOOK_EVENTS) and data["model"] == "opus" and len(data["hooks"]["Stop"]) == 2
+              and data["hooks"]["Stop"][0] == theirs["hooks"]["Stop"][0] and "async" not in data["hooks"]["SessionStart"][0]["hooks"][0]
+              and data["hooks"]["PreToolUse"][0]["hooks"][0]["async"] is True
+              and json.loads(Path(str(settings) + ".before-nocstudio").read_text(encoding="utf-8")) == theirs,
+              "installing twice leaves one hook per event, the user's own settings as they were, and a copy from before")
+        setup.install_hooks(remove=True)
+        check(json.loads(settings.read_text(encoding="utf-8")) == theirs, "removing them puts the settings back")
+        settings.write_text("{ not json", encoding="utf-8")
+        try:
+            setup.install_hooks(); check(False, "a settings file that does not parse is refused, not rewritten")
+        except StudioError:
+            check(settings.read_text(encoding="utf-8") == "{ not json", "a settings file that does not parse is refused, not rewritten")
+        settings.unlink()
 
         # an asset the user can open: what the game holds, by file, folder or glob
         (game / "content/audio/core").mkdir(parents=True); (game / "content/audio/tape").mkdir(parents=True)
@@ -318,8 +412,6 @@ def main() -> int:
               "the theme the user picks is kept with it, one answer for every Studio")
 
         # the record: a session saves the home, and the save reaches the remote
-        import os
-        import subprocess
         for key, value in (("GIT_AUTHOR_NAME", "Self-test"), ("GIT_AUTHOR_EMAIL", "selftest@example.invalid"),
                            ("GIT_COMMITTER_NAME", "Self-test"), ("GIT_COMMITTER_EMAIL", "selftest@example.invalid")):
             os.environ.setdefault(key, value)

@@ -1,6 +1,6 @@
 # Quick start
 
-Ten minutes from a clone to judging your first batch.
+Ten minutes from a clone to a planned project and your first judged batch.
 
 ## What you need
 
@@ -91,31 +91,60 @@ one line: *"Pistol shots is in the Studio (4 to judge)."* You judge it in the pa
 and the session reads what you marked, ships the winner, starts another round from your notes,
 or parks it, and records the decision.
 
-### Let the agent move your project in
+## 6. Plan the project with your agent
 
-An empty Studio is not much use. If your project already has milestones, assets and decisions
-written down, ask the agent to move them in. Install the setup skill once:
+An empty Studio is not much use: the Overview counts progress from a plan, so the project needs
+one. Install the setup skill once:
 
 ```
 py -3.11 tool\studio.py install-skill
 ```
 
-Then, in any project, say to Claude Code:
+Then say one of these to Claude Code:
 
-> create a studio page for this
+| Say | When |
+|---|---|
+| **start a new project** | You have an idea and no folder yet. It makes the folder, the Studio and the plan. |
+| **set up a studio for this project** | The project exists and has no Studio. This replaces step 2 and step 5. |
+| **plan this project in its Studio** | The Studio exists and its Overview says "Getting organised". |
 
-It makes the Studio, reads your project, asks you what the files cannot answer, and fills in the
-road of milestones, the build in hand, the asset list, your standing rulings and the things only
-you can do.
+It reads what the project already has, drafts the plan and shows it to you as a short outline to
+correct, and asks only what you alone can answer:
+
+- the **goal**: what the project is and what done looks like, in your words
+- the **milestones** from here to done, each ending in something you can see or try
+- the **steps** of the first milestone, each small enough to land in a day or two
+- what you **count** the project by (levels, pages, endpoints), if anything
+- your **house rules**: standing decisions every session must follow
+- what **only you can do**, and what may go ahead on its default without waiting for you
+
+Then it writes the plan in. The Overview's "Getting organised" checklist shows what is still
+missing until nothing is.
+
+## 7. Turn on live reporting
+
+```
+py -3.11 tool\studio.py hooks install
+```
+
+This adds NocStudio's hook to your own Claude Code settings (`~/.claude/settings.json`), one
+entry per event, and keeps a copy of the file as it was (`settings.json.before-nocstudio`). From
+then on every Claude Code session in a project that has a Studio shows under **Running now** on
+its Overview: working or waiting for you, the last thing it did, which subagents and background
+workflows are running. Sessions in a git worktree of the project are found too.
+
+The hook only watches. It prints nothing, never blocks a session, writes only to the Studio's
+`live` folder (which is left out of the Studio's git history), and does nothing at all in a
+project without a Studio. `py -3.11 tool\studio.py hooks remove` takes it out again.
 
 ## The daily loop
 
 | You | Your agent |
 |---|---|
-| Open NocStudio, read the Overview | Keeps the Overview true when a build is delivered or the plan changes |
+| Open NocStudio and look at the Overview instead of asking for a status update | Moves steps as they land, keeps a lane with an ETA for each piece of work in progress, logs merges, publishes and setbacks |
+| Answer what is in Needs you, or leave it and let the default stand | Puts every question there with the default it will use, and goes on working |
 | Judge what is in the Inbox | Files batches; the checks hold back what breaks a rule |
-| Say "process my studio verdicts" | Runs `studio.py todo`, acts on each verdict, closes it with a decision |
-| Mark chores Done or Not now | Reads your answers the next time it processes |
+| Say "process my studio verdicts" | Runs `studio.py todo`, acts on each verdict and each answer, closes it with a decision |
 | | Ends its work with `studio.py save`, which commits the Studio's record (and pushes, if you gave the home a remote) |
 
 ## Commands your agent uses
@@ -129,7 +158,11 @@ S todo                            the verdicts you submitted, with the steps for
 S import / done                   copy a winner into the project; close a verdict with a decision
 S decide                          record a ruling you made in chat
 S slot set / adopt                the asset list; bring in something approved before the Studio existed
-S now / milestone set / hand set  the Overview: the build in hand, the road, what only you can do
+S milestone set / step set / plan the road and its steps; the whole plan as one document
+S lane set / lane done / log      work in progress with an ETA; merges, publishes and setbacks
+S ask set / ask answered          what waits on you: a chore, a build to try, a question with a default
+S now                             the build in hand, the goal, counters, what comes next
+S hooks install / remove / status live reporting from Claude Code's sessions
 S motion bake / set / link        motions that loop in the 3D viewer
 S status / save                   what waits on whom; commit and push the record
 ```
@@ -154,5 +187,6 @@ Each Studio has a `studio.toml` in its home:
   `studio.py save` will push to it.
 - **Remove a Studio:** delete its home folder and its line in `studios.json`, and delete
   `.claude\skills\studio` from the project.
-- **Remove NocStudio:** delete the Start menu shortcut and the cloned folder. The app keeps a
+- **Remove NocStudio:** run `py -3.11 tool\studio.py hooks remove`, then delete the Start menu
+  shortcut and the cloned folder. The app keeps a
   browser profile and a log in `%LOCALAPPDATA%\NocStudio`; delete that too.

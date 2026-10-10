@@ -150,6 +150,9 @@ def make_handler(home: Path, allowed_hosts: set[str], quiet: bool = False, hub: 
                         return self.send_json(dict(studio.state(), hub=hub))
                     if parts[1:] == ["pulse"]:
                         return self.send_json({"stamp": studio.stamp()})
+                    if parts[1:] == ["live"]:
+                        from . import board
+                        return self.send_json(board.live(studio))
                     if len(parts) == 3 and parts[1] == "batch":
                         return self.send_json(studio.load_batch(parts[2]))
                     return self.fail(404, "no such route")
