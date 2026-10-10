@@ -70,7 +70,7 @@ The page knows how to show each kind of work:
 |---|---|
 | Pictures | Zoom and pan, compare up to four side by side with linked zoom, a reference shown above |
 | Textures | Tile them at any size to see the repeat |
-| 3D models | Turn, zoom, wireframe, a 1.8 m reference figure, play the clips the model carries |
+| 3D models | Each piece framed to fill the view whatever its size; turn, zoom, wireframe, a 1.8 m reference figure, play the clips the model carries |
 | Motions | Each candidate loops in place in the 3D viewer, at full, half or quarter speed |
 | Sounds | Waveform, length and peak level, play them in turn, loop one |
 | Video | Looping clips side by side |

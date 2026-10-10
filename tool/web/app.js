@@ -234,11 +234,28 @@
     bar.computeLineDistances(); g.add(bar);
     return g;
   }
+  // the box a piece fills. A skinned mesh is measured in the pose it holds, from a sample of its vertices.
+  function bounds3(root) {
+    const box = new THREE.Box3(), part = new THREE.Box3(), p = new THREE.Vector3();
+    root.updateMatrixWorld(true);
+    root.traverse((n) => {
+      const pos = n.geometry && n.geometry.attributes.position;
+      if (!pos) return;
+      if (n.isSkinnedMesh) {
+        const step = Math.max(1, Math.floor(pos.count / 1500));
+        for (let i = 0; i < pos.count; i += step) box.expandByPoint(n.boneTransform(i, p.fromBufferAttribute(pos, i)).applyMatrix4(n.matrixWorld));
+      } else {
+        if (!n.geometry.boundingBox) n.geometry.computeBoundingBox();
+        box.union(part.copy(n.geometry.boundingBox).applyMatrix4(n.matrixWorld));
+      }
+    });
+    return box;
+  }
   function modelView(url, opt) {
     opt = opt || {};
     const r = renderer3();
     if (!r) return { el: h('div', { class: 'fallback' }, 'The 3D preview could not start in this browser. The file is ', h('code', { class: 'i' }, url.split('/').pop()), '.'), set() {}, destroy() {} };
-    const canvas = h('canvas', { class: 'three', 'aria-label': '3D model. Drag to turn it.' });
+    const canvas = h('canvas', { class: 'three', 'aria-label': '3D model. Drag to turn it; double-click to frame it again.' });
     const ctx = canvas.getContext('2d');
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(32, 1, 0.05, 200);
@@ -248,26 +265,74 @@
     if (!opt.zoom && coarse) { controls.enabled = false; canvas.style.touchAction = 'pan-y'; }
     scene.add(new THREE.HemisphereLight(0xffffff, 0x30303a, 0.95));
     const sun = new THREE.DirectionalLight(0xffffff, 0.9); sun.position.set(2.5, 4, 3); scene.add(sun);
-    scene.add(new THREE.GridHelper(10, 10, 0x777777, 0x3a3a3a));
+    const floor = (cells) => { const g = new THREE.GridHelper(cells, cells, 0x777777, 0x3a3a3a); g.cells = cells; scene.add(g); return g; };
+    let grid = floor(10);  // metre squares
     const ref = refFigure(); scene.add(ref);
-    const v = { el: canvas, dirty: true, mixer: null, clips: [], action: null, w: 0, hh: 0, size: null, playing: true, rotate: false };
+    const FIGURE = new THREE.Box3(new THREE.Vector3(-0.22, 0, -0.12), new THREE.Vector3(0.22, 1.8, 0.12));
+    const v = { el: canvas, dirty: true, mixer: null, clips: [], action: null, w: 0, hh: 0, playing: true, rotate: false, cam: camera, target: controls.target,
+      box: new THREE.Box3(new THREE.Vector3(-0.4, 0, -0.2), new THREE.Vector3(0.4, 1.8, 0.2)), fit: { c: new THREE.Vector3(0, 0.9, 0), d: 1 } };
+    const small = (box) => { const size = box.getSize(new THREE.Vector3()); return Math.max(size.x, size.y, size.z) < 0.9; };
+    // what the view frames: the piece as it stands, or everything it passes through in the motion it plays
+    function measure(clip) {
+      if (!clip) return bounds3(v.model);
+      const box = new THREE.Box3();
+      for (let i = 0; i <= 12; i++) { v.mixer.setTime(clip.duration * i / 12); box.union(bounds3(v.model)); }
+      v.mixer.setTime(0);
+      return box;
+    }
+    function frame(box) {
+      if (box.isEmpty()) return;
+      v.box = box;
+      const c = box.getCenter(new THREE.Vector3()), size = box.getSize(new THREE.Vector3());
+      v.deep = size.z > size.x * 2;  // long and thin, front to back, as a gun is: it is seen from its long side
+      // the figure stands on the floor at the piece's side as the camera sees it, never in front of it or behind
+      if (v.deep) { ref.position.set(c.x, 0, box.max.z + 0.42); ref.rotation.y = Math.PI / 2; }
+      else { ref.position.set(box.min.x - 0.42, 0, c.z); ref.rotation.y = 0; }
+      const cells = Math.min(400, Math.max(10, 2 * Math.ceil(1.25 * Math.max(-box.min.x, box.max.x, -box.min.z, box.max.z))));  // the floor runs out past a large piece
+      if (cells !== grid.cells) { scene.remove(grid); grid.geometry.dispose(); grid = floor(cells); }
+      if (!v.moved) place();
+      v.dirty = true;
+    }
+    // every piece fills the view whatever its size, and stays inside it through a whole turn
     function place() {
-      const sx = v.size ? v.size.x : 0.8, sy = v.size ? v.size.y : 1.8;
-      const shown = ref.visible;
-      ref.position.x = -(sx / 2 + 0.42);
-      const cx = shown ? (sx / 2 + ref.position.x - 0.22) / 2 : 0;
-      const frameH = Math.max(sy, 1.9) * 1.32, frameW = Math.max(shown ? sx + 0.9 : sx, 2.1) * 1.2;  // the same framing for every human-sized model, so heights compare
-      const dist = Math.max(frameH / 2 / Math.tan(Math.PI * 16 / 180), frameW / 2 / Math.tan(Math.PI * 16 / 180) / Math.max(0.5, camera.aspect));
-      controls.target.set(cx, Math.max(sy, 1.8) / 2, 0);
-      camera.position.set(cx + dist * Math.sin(0.52) * Math.cos(0.16), controls.target.y + dist * Math.sin(0.16), dist * Math.cos(0.52) * Math.cos(0.16));
+      const box = v.box, c = box.getCenter(v.fit.c), foot = (b) => [[b.min.x, b.min.z], [b.min.x, b.max.z], [b.max.x, b.min.z], [b.max.x, b.max.z]];
+      const pts = foot(box), from = c.clone(), to = c.clone();
+      let lo = box.min.y, hi = box.max.y;
+      // a piece near a person's size is framed with the figure beside it; a small one is framed alone, or the figure would shrink it to a speck
+      if (ref.visible && !small(box)) {
+        ref.updateMatrixWorld(true);
+        const fig = FIGURE.clone().applyMatrix4(ref.matrixWorld);
+        pts.push(...foot(fig)); fig.getCenter(to); lo = Math.min(lo, fig.min.y); hi = Math.max(hi, fig.max.y);
+      }
+      // the view turns about the upright line that holds them both in the narrowest circle
+      let r = Infinity;
+      for (let i = 0; i <= 10; i++) {
+        const x = from.x + (to.x - from.x) * i / 20, z = from.z + (to.z - from.z) * i / 20;
+        const far = Math.max(...pts.map(([px, pz]) => Math.hypot(px - x, pz - z)));
+        if (far < r) { r = far; c.set(x, (lo + hi) / 2, z); }
+      }
+      const half = (hi - lo) / 2, t = Math.tan(Math.PI * 16 / 180), ce = Math.cos(0.16), se = Math.sin(0.16);
+      const d = v.fit.d = 1.06 * Math.max(r / Math.sin(Math.atan(t * Math.max(0.5, camera.aspect))),
+        (r * se + half * ce) / t + Math.abs(r * ce - half * se), (half * ce - r * se) / t + r * ce + half * se);
+      const turn = v.deep ? Math.PI / 2 - 0.52 : 0.52;
+      controls.target.copy(c);
+      camera.position.set(c.x + d * Math.sin(turn) * ce, c.y + d * se, c.z + d * Math.cos(turn) * ce);
+      camera.near = d / 100; camera.far = d * 100; camera.updateProjectionMatrix();
+      controls.minDistance = d / 20; controls.maxDistance = d * 20;
       controls.update(); v.dirty = true;
     }
     controls.addEventListener('change', () => {
       v.dirty = true;
       const grp = opt.group;
-      if (grp && !grp.busy) { grp.busy = true; for (const o of grp.views) if (o !== v) o.copyCam(camera, controls.target); grp.busy = false; }
+      if (grp && !grp.busy) { grp.busy = true; for (const o of grp.views) if (o !== v) o.copyCam(v); grp.busy = false; }
     });
-    v.copyCam = (cam, target) => { camera.position.copy(cam.position); controls.target.copy(target); controls.update(); v.dirty = true; };
+    // a view that follows another takes its angle, zoom and slide, each measured against its own piece, so its own piece stays framed
+    v.copyCam = (o) => {
+      const k = v.fit.d / o.fit.d;
+      controls.target.copy(o.target).sub(o.fit.c).multiplyScalar(k).add(v.fit.c);
+      camera.position.copy(o.cam.position).sub(o.target).multiplyScalar(k).add(controls.target);
+      controls.update(); v.dirty = true;
+    };
     v.frame = (dt) => {
       if (!canvas.isConnected) return;
       const dpr = Math.min(2, (window.devicePixelRatio || 1) * cz(canvas));
@@ -297,16 +362,19 @@
         const clip = v.clips.find((c) => c.name === want);
         if (clip) { v.action = v.mixer.clipAction(clip); v.action.reset().play(); }
         else v.mixer.update(0);
+        frame(measure(clip));
       }
       v.dirty = true;
     };
     v.destroy = () => { GL.views.delete(v); controls.dispose(); scene.traverse((n) => { if (n.geometry) n.geometry.dispose(); }); };
     canvas.addEventListener('pointerdown', () => { v.moved = true; });
+    canvas.addEventListener('dblclick', () => { v.moved = false; place(); });
     API.bytes(url).then((buf) => new Promise((ok, bad) => new THREE.GLTFLoader().parse(buf, '', ok, bad))).then((g) => {
       v.model = g.scene; scene.add(g.scene);
-      v.size = new THREE.Box3().setFromObject(g.scene).getSize(new THREE.Vector3());
+      g.scene.traverse((n) => { if (n.isSkinnedMesh) n.frustumCulled = false; });  // a motion can carry it out of the box it is culled by
       v.clips = g.animations || []; v.mixer = new THREE.AnimationMixer(g.scene);
-      v.moved = false; place(); v.set(Object.assign({}, S.opts));
+      v.moved = false; v.clipName = undefined; v.set(Object.assign({}, S.opts));
+      if (v.clipName === undefined) frame(measure(null));
       if (opt.ready) opt.ready(v);
     }).catch(() => { canvas.replaceWith(h('div', { class: 'fallback' }, 'This model could not be read.')); v.destroy(); });
     GL.views.add(v);
