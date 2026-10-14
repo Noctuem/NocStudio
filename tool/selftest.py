@@ -155,7 +155,8 @@ def main() -> int:
         status, state = http("GET", base + "/api/state")
         check(status == 200 and len(state["batches"]) == 2, "the page's data loads over HTTP")
         with urllib.request.urlopen(base + "/") as res:
-            check(b"app.js" in res.read(), "the page itself is served")
+            page = res.read()
+            check(b"app.js" in page and b'="/' not in page, "the page itself is served, with addresses that also work under a path")
         with urllib.request.urlopen(base + f"/files/{batch['id']}/files/a/quiet_a.wav") as res:
             check(res.headers["Content-Type"] == "audio/wav", "a candidate file is served")
         status, _ = http("GET", base + f"/files/{batch['id']}/..%2F..%2Fstudio.toml")
@@ -491,6 +492,32 @@ def main() -> int:
         there = subprocess.run(["git", "--git-dir", str(far), "log", "--format=%s", "-n", "1"], capture_output=True, text=True).stdout.strip()
         check(waiting and saved["pushed"] and there == "A chore for the user" and studio.save()["commit"] == "",
               "the next save pushes, under the words it was given, and a save with nothing new commits nothing")
+
+        # a second copy for a phone: kept in step through the remote, its numbers never the same as the PC's
+        from studiolib import sync
+        check(sync.setup(studio) and not sync.setup(studio), "a clone is taught once how to merge the Studio's records")
+        studio.save("Merge rules")
+        phone = tmp / "phone"
+        subprocess.run(["git", "clone", "-q", str(far), str(phone)], check=True, capture_output=True)
+        (phone / "studio.local.toml").write_text('site = "p"\n', encoding="utf-8")
+        copy = Studio(phone)
+        sync.setup(copy)
+        mine, theirs = studio.add_note("typed on the PC"), copy.add_note("typed on the phone")
+        studio.answer_hand("try-save", "done", "saved")
+        ruled = copy.add_decision(title="Ruled on the phone")
+        first, second, third = sync.step(copy, "always"), sync.step(studio, "always"), sync.step(Studio(phone), "always")
+        both = [sorted(n["id"] for n in side.notes()) for side in (Studio(home), Studio(phone))]
+        check(theirs["id"] == mine["id"] + "p" and ruled["id"].endswith("p") and first["pushed"] and second["took"] and second["pushed"]
+              and third["took"] and both[0] == both[1] and theirs["id"] in both[0]
+              and Studio(phone).hands()[-1]["status"] == "done" and Studio(home).decisions()[-1]["id"] == ruled["id"],
+              "what the phone and the PC change at once reaches both, with no number given twice")
+        mine = studio.add_note("typed during a session")
+        copy.add_note("and from the phone again")
+        sync.step(copy, "always")
+        held, saved = sync.step(studio, "never"), studio.save("A session's work")
+        check(held["took"] and not held["pushed"] and saved["pushed"] and sync.step(Studio(phone), "always")["took"]
+              and mine["id"] in [n["id"] for n in Studio(phone).notes()],
+              "while sessions work the PC only takes the phone's commits, and a save joins both before it pushes")
 
         # the Studio app: a menu of every project's Studio, each started only when the user picks it
         import socket

@@ -5,6 +5,7 @@ needs a database, a network or a package outside the standard library.
 
     <home>/
       studio.toml                 settings the user may edit
+      studio.local.toml           settings for this copy alone, kept out of git (a server's copy, sync.py)
       batches/<id>/batch.json     what was asked, the candidates, how each was made
       batches/<id>/files/...      the candidate files
       batches/<id>/draft.json     the user's verdict while they are still judging
@@ -179,7 +180,7 @@ class Studio:
         ignore = home / ".gitignore"
         if not ignore.exists():
             ignore.write_text("# drafts are the user's unfinished thoughts; everything else is history\n"
-                              "draft.json\n*.tmp\n__pycache__/\n", encoding="utf-8", newline="\n")
+                              "draft.json\n*.tmp\n__pycache__/\n# settings for one copy alone\nstudio.local.toml\n", encoding="utf-8", newline="\n")
         attrs = home / ".gitattributes"
         if not attrs.exists():
             attrs.write_text("* text=auto eol=lf\n"
@@ -189,16 +190,25 @@ class Studio:
         return Studio(home)
 
     def _load_config(self) -> dict:
-        path = self.home / "studio.toml"
-        if not path.exists():
-            return merge(DEFAULT_CONFIG, {})
-        if tomllib is None:
-            raise StudioError("Python 3.11 or newer is needed to read studio.toml")
-        try:
-            with open(path, "rb") as fh:
-                return merge(DEFAULT_CONFIG, tomllib.load(fh))
-        except tomllib.TOMLDecodeError as err:
-            raise StudioError(f"{path}: {err}") from err
+        config = merge(DEFAULT_CONFIG, {})
+        for path in (self.home / "studio.toml", self.home / "studio.local.toml"):  # the second: this copy's own
+            if not path.exists():
+                continue
+            if tomllib is None:
+                raise StudioError("Python 3.11 or newer is needed to read studio.toml")
+            try:
+                with open(path, "rb") as fh:
+                    config = merge(config, tomllib.load(fh))
+            except tomllib.TOMLDecodeError as err:
+                raise StudioError(f"{path}: {err}") from err
+        if not re.fullmatch(r"[a-z]{0,3}", str(config.get("site") or "")):
+            raise StudioError("site is up to three lowercase letters, such as p")
+        return config
+
+    def _next_id(self, prefix: str, ids) -> str:
+        """The next number, with this copy's letter after it when it has one, so two copies never clash (sync.py)."""
+        numbers = [int(m.group(1)) for i in ids if (m := re.fullmatch(prefix + r"-(\d+)[a-z]*", i or ""))]
+        return f"{prefix}-{(max(numbers) if numbers else 0) + 1:04d}{self.config.get('site') or ''}"
 
     def game_root(self, override: str = "") -> Path | None:
         root = override or self.config.get("game_repo") or ""
@@ -621,9 +631,7 @@ class Studio:
                      legacy: str = "", date: str = "", status: str = "active") -> dict:
         if not title.strip():
             raise StudioError("a decision needs a title")
-        existing = self.decisions()
-        numbers = [int(m.group(1)) for d in existing if (m := re.fullmatch(r"D-(\d+)", d.get("id", "")))]
-        record = {"id": f"D-{(max(numbers) if numbers else 0) + 1:04d}", "date": date or today(),
+        record = {"id": self._next_id("D", [d.get("id", "") for d in self.decisions()]), "date": date or today(),
                   "title": title.strip(), "ruling": ruling.strip(), "his_words": his_words.strip(),
                   "source": {"type": source_type, "ref": ref}, "tags": tags or [],
                   "supersedes": supersedes or [], "status": status}
@@ -1187,8 +1195,7 @@ class Studio:
             raise StudioError("a note needs some words")
         if kind and kind not in NOTE_KINDS:
             raise StudioError(f"a note is one of: {', '.join(NOTE_KINDS)}")
-        numbers = [int(m.group(1)) for p in self.notes_dir.glob("N-*.json") if (m := re.fullmatch(r"N-(\d+)", p.stem))]
-        note = {"id": f"N-{(max(numbers) if numbers else 0) + 1:04d}", "text": text.strip(), "created": iso_now(),
+        note = {"id": self._next_id("N", [p.stem for p in self.notes_dir.glob("N-*.json")]), "text": text.strip(), "created": iso_now(),
                 "kind": kind, "kind_by": "you" if kind else "", "status": "later" if kind == "later" else "new",
                 "urgent": bool(urgent), "reading": "", "thread": []}
         if parent:
@@ -1454,6 +1461,15 @@ class Studio:
         tracked = self._git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}").returncode == 0
         branch = self._git("branch", "--show-current").stdout.strip()
         remote = "origin" if "origin" in remotes else remotes[0]
+        if tracked:  # another copy (a server's, for the phone) may have pushed since: take its commits first
+            self._git("fetch", "-q", timeout=120)
+            if self._git("rev-list", "--count", "HEAD..@{u}").stdout.strip() not in ("", "0"):
+                joined = self._git("rebase", "-q", "@{u}", timeout=120)
+                if joined.returncode:
+                    self._git("rebase", "--abort")
+                    out["note"] = ("the other copy changed the same thing, so nothing was pushed: "
+                                   + ((joined.stderr or joined.stdout).strip().splitlines() or ["no reason given"])[0])
+                    return out
         push = self._git("push", timeout=180) if tracked else self._git("push", "-u", remote, branch, timeout=180)
         out["pushed"] = push.returncode == 0
         if not out["pushed"]:
@@ -1508,7 +1524,7 @@ class Studio:
                 "slots": [dict(s, files=self.slot_files(s)) for s in self.slots()],
                 "decisions": self.decisions(), "playtests": self.playtests(), "overview": self.overview(),
                 "has_playtests": bool(self.playtest_dirs()), "motions": self.motions(),
-                "notes": self.notes_view(), "stamp": self.stamp()}
+                "notes": self.notes_view(), "sync": read_json(self.home / "live" / "sync.json", None), "stamp": self.stamp()}
 
     def stamp(self) -> str:
         """Changes whenever anything the user could see changes; the page polls it."""

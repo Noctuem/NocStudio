@@ -4,15 +4,20 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>NocStudio</title>
+<!-- every address here is relative, so the page also works under a path (apps.example.com/studio/); that needs the slash at the end -->
+<script>if (!/\/$/.test(location.pathname) && location.protocol !== 'file:') location.replace(location.pathname + '/' + location.search + location.hash);</script>
 <script>try { if (localStorage.getItem('studio.theme') === 'light') document.documentElement.dataset.theme = 'light'; } catch (e) {}</script>
-<link rel="icon" href="/web/studio.ico?v=2"><!-- raise v when the icon changes: a browser keeps the one it saw first for an address -->
-<link rel="stylesheet" href="/web/style.css">
+<meta name="theme-color" content="#09090b">
+<link rel="icon" href="web/studio.ico?v=2"><!-- raise v when the icon changes: a browser keeps the one it saw first for an address -->
+<link rel="apple-touch-icon" href="web/icon-256.png">
+<link rel="manifest" href="web/manifest.json">
+<link rel="stylesheet" href="web/style.css">
 </head>
 <body>
 <div id="app"></div>
-<script src="/web/vendor/three.min.js"></script>
-<script src="/web/vendor/GLTFLoader.js"></script>
-<script src="/web/vendor/OrbitControls.js"></script>
-<script src="/web/app.js"></script>
+<script src="web/vendor/three.min.js"></script>
+<script src="web/vendor/GLTFLoader.js"></script>
+<script src="web/vendor/OrbitControls.js"></script>
+<script src="web/app.js"></script>
 </body>
 </html>

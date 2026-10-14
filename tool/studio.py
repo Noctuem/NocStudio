@@ -26,7 +26,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from studiolib import bake, board, checks, notes as notebox, server, setup  # noqa: E402
+from studiolib import bake, board, checks, notes as notebox, server, setup, sync  # noqa: E402
 from studiolib.store import (HAND_KINDS, HAND_STATUS, KINDS, MILESTONE_STATUS, MODES, NOTE_KINDS, SLOT_STATUS,  # noqa: E402
                              TRIAGE_STATUS, Studio, StudioError)
 
@@ -98,7 +98,24 @@ def cmd_studios(a):
 
 
 def cmd_serve(a):
-    server.serve(find_home(a.home), a.port, a.host, a.open)
+    server.serve(find_home(a.home), a.port, a.host, a.open, hosts=a.allow)
+
+
+def cmd_sync(a):
+    s = Studio(find_home(a.home))
+    if a.setup:
+        done = sync.setup(s)
+        print("\n".join(done) if done else "Already set up.")
+        return
+    out = sync.step(s, a.commit)
+    bits = [f"committed {out['committed']}" if out["committed"] else "",
+            f"took {out['took']} commit{'s' if out['took'] != 1 else ''}" if out["took"] else "",
+            f"pushed {out['pushed']}" if out["pushed"] else ""]
+    print(("; ".join(b for b in bits if b) or "Already in step.") if not out["error"] else "NOT synced: " + out["error"])
+    if out["waiting"]:
+        print("Waiting: " + out["waiting"])
+    if out["error"]:
+        sys.exit(1)
 
 
 def cmd_new(a):
@@ -632,9 +649,17 @@ def main(argv=None) -> int:
     c = sub.add_parser("studios", help="every Studio on this machine"); c.set_defaults(fn=cmd_studios)
 
     c = sub.add_parser("serve", help="start the review page")
-    c.add_argument("--port", type=int, default=0); c.add_argument("--host", default="127.0.0.1")
+    c.add_argument("--port", type=int, default=0); c.add_argument("--host", default="", help="default 127.0.0.1, or [serve] host")
+    c.add_argument("--allow", action="append", default=[], metavar="NAME",
+                   help="another name the page is reached by, such as apps.example.com (again for more; also [serve] hosts)")
     c.add_argument("--open", action="store_true", help="open the browser")
     c.set_defaults(fn=cmd_serve)
+
+    c = sub.add_parser("sync", help="keep this copy in step with another through the git remote (a server's, for the phone)")
+    c.add_argument("--setup", action="store_true", help="once per clone: teach git to merge the Studio's records")
+    c.add_argument("--commit", choices=("always", "quiet", "never"), default="",
+                   help="commit and push what changed here: always, only while no session is live, or never (default: [sync] commit)")
+    c.set_defaults(fn=cmd_sync)
 
     c = sub.add_parser("new", help="start a batch; prints its id")
     c.add_argument("slug")

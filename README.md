@@ -130,6 +130,17 @@ starts and opens there; close the window and it stops. Nothing runs in between.
 
 ![The menu of projects](docs/screenshots/menu.png)
 
+### On your phone too
+
+A second copy of a Studio can run on a server you own, behind your own login, so you can leave a
+note, answer a question or judge a batch from your phone. The two copies stay in step through the
+Studio's git remote. The server's copy commits what you do on the phone and pushes it once a
+minute. The PC's copy takes those commits, and commits and pushes its own while no session is
+working. Notes and decisions made on the phone get their own numbers (`N-0012p`), so the two
+copies never hand out the same one. The Studio's records merge field by field, so the copies
+rarely clash. The page shows **Synced** when the copies match, and **Not synced** with the reason
+when they don't. `tool/deploy/` holds the container and the cron script.
+
 ### Samples to try it on
 
 Every Studio comes with made-up batches, one for each kind of work, so you can try the whole
@@ -202,7 +213,9 @@ instructions can use it too. It has only been used with Claude Code.
   vendored for the 3D viewer.
 - **Plain files.** A Studio home is folders of JSON, markdown and your media. You can read it,
   diff it and back it up like anything else.
-- **Local only.** The server listens on `127.0.0.1` and refuses requests from anywhere else.
+- **Local by default.** The server listens on `127.0.0.1` and refuses requests from anywhere
+  else. A server's copy for a phone answers only to the names it is given and relies on the
+  login in front of it.
 
 ```
 tool/             the program: studio.py (the command), hook.py (what Claude Code's hooks run),
@@ -222,8 +235,8 @@ edges, and expect it to change.
   is untested.
 - **Game-shaped.** The vocabulary (models, textures, motions, playtests, "in the game") comes
   from game development. Pictures, sounds, writing and questions work for any project.
-- **One person.** A Studio is for one person judging and one machine. There are no accounts and
-  no sharing.
+- **One person.** A Studio is for one person judging. There are no accounts and no sharing. A
+  second copy on a server (Linux, Docker, a sign-in proxy in front) is for that same person's phone.
 - **Notes need a session that is working.** A session that has finished its turn and sits at
   the prompt is not woken by a note; it gets it the next time it works. Handing notes over was
   tested with Claude Code 2.1.296.

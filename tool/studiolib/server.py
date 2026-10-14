@@ -1,4 +1,4 @@
-"""The local web server. Standard library only; listens on this machine alone."""
+"""The web server. Standard library only; listens on this machine alone unless told the names it may answer to."""
 from __future__ import annotations
 
 import json
@@ -238,18 +238,27 @@ def make_handler(home: Path, allowed_hosts: set[str], quiet: bool = False, hub: 
     return Handler
 
 
-def serve(home, port: int = 0, host: str = "127.0.0.1", open_browser: bool = False) -> None:
+def serve(home, port: int = 0, host: str = "", open_browser: bool = False, hosts=()) -> None:
+    """`hosts`: other names the page is reached by, as the browser and any proxy in front say them
+    (a server's copy behind a login, such as "apps.example.com" and "studio-app:8771"); also [serve] hosts."""
+    from . import sync
     studio = Studio(home)
-    port = port or int(studio.config.get("port") or 8770)
+    served = studio.config.get("serve") or {}
+    port = port or int(served.get("port") or studio.config.get("port") or 8770)
+    host = host or str(served.get("host") or "127.0.0.1")
     allowed = {f"127.0.0.1:{port}", f"localhost:{port}"}
-    if host not in ("127.0.0.1", "localhost"):
+    if host not in ("127.0.0.1", "localhost", "0.0.0.0"):
         allowed.add(f"{host}:{port}")
+    allowed |= {str(x).lower() for x in [*(served.get("hosts") or []), *hosts] if x}
     httpd = ThreadingHTTPServer((host, port), make_handler(studio.home, allowed))
     httpd.daemon_threads = True
     url = f"http://127.0.0.1:{port}/"
+    syncing = sync.start(studio.home)
     print(f"Studio for {studio.config.get('project')}")
     print(f"  home  {studio.home}")
     print(f"  open  {url}   (Ctrl+C stops it)")
+    if syncing:
+        print(f"  sync  every {sync.settings(studio)['every']} s with the git remote (live/sync.json)")
     if open_browser:
         import webbrowser
         threading.Timer(0.4, lambda: webbrowser.open(url)).start()

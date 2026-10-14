@@ -1,0 +1,32 @@
+# A copy of a Studio on a server, so a phone can reach it: the page in a container, behind your own login
+# (a reverse proxy with sign-in, such as Authelia; the Studio has none of its own). The Studio home is a git
+# clone of the PC's, and tool/deploy/sync.sh keeps the two in step. From the home:
+#
+#   STUDIO_CONTAINER=studio-app STUDIO_NETWORK=web docker compose -p studio -f tool/deploy/docker-compose.yml up -d
+#
+# The proxy reaches the container by name on that network, at port 8771, with its own path taken off
+# (apps.example.com/studio/... arrives as /...). Name the proxy in the home's studio.local.toml:
+#
+#   site = "p"
+#   [serve]
+#   hosts = ["studio-app:8771", "apps.example.com"]
+
+services:
+  studio:
+    image: python:3.11-slim
+    container_name: ${STUDIO_CONTAINER:-studio-app}
+    restart: unless-stopped
+    user: "1000:1000"            # the owner of the clone, so what the page writes the sync can commit
+    working_dir: /studio
+    command: ["python", "tool/studio.py", "--home", "/studio", "serve", "--host", "0.0.0.0", "--port", "8771"]
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes:
+      - ../..:/studio
+    networks:
+      - web
+
+networks:
+  web:
+    name: ${STUDIO_NETWORK:-web}
+    external: true

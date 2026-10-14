@@ -5,6 +5,8 @@
 
   // ---------------------------------------------------------------- helpers
   const $ = (sel, root) => (root || document).querySelector(sel);
+  // the Studio's own addresses, made relative to the page, so it also works under a path such as apps.example.com/studio/
+  const rel = (u) => (typeof u === 'string' && /^\/(?!\/)/.test(u) ? u.slice(1) : u);
   function h(tag, attrs, ...kids) {
     const el = document.createElement(tag);
     for (const [k, v] of Object.entries(attrs || {})) {
@@ -13,6 +15,7 @@
       else if (k === 'html') el.innerHTML = v;
       else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
       else if (k === 'value') el.value = v;
+      else if (k === 'src' || k === 'href') el.setAttribute(k, rel(v));
       else el.setAttribute(k, v === true ? '' : v);
     }
     for (const kid of kids.flat(Infinity)) if (kid !== null && kid !== undefined && kid !== false) el.append(kid);
@@ -82,7 +85,7 @@
     return out.buffer;
   }
   async function call(method, url, body) {
-    const res = await fetch(url, { method, headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
+    const res = await fetch(rel(url), { method, headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || ('The studio answered ' + res.status));
     return data;
@@ -131,7 +134,7 @@
     addNote: (text, kind, urgent) => call('POST', '/api/note', { text, kind, urgent }),
     note: (id, action, extra) => call('POST', '/api/note/' + encodeURIComponent(id), Object.assign({ action }, extra || {})),
     src: (url) => url,
-    bytes: async (url) => { const r = await fetch(url); if (!r.ok) throw new Error('missing'); return r.arrayBuffer(); },
+    bytes: async (url) => { const r = await fetch(rel(url)); if (!r.ok) throw new Error('missing'); return r.arrayBuffer(); },
   };
   function sync(b) { // static mode: keep the inbox summary in step with the batch
     const row = STATIC.state.batches.find((x) => x.id === b.id);
@@ -462,7 +465,7 @@
   const ICON_PLAY = '<svg viewBox="0 0 14 14" aria-hidden="true"><path d="M3 1.5v11l9-5.5z"/></svg>';
   const ICON_STOP = '<svg viewBox="0 0 14 14" aria-hidden="true"><rect x="2.5" y="2.5" width="9" height="9"/></svg>';
   function audioPlayer(url, label) {
-    const a = new Audio(); a.preload = 'auto'; a.src = API.src(url);
+    const a = new Audio(); a.preload = 'auto'; a.src = rel(API.src(url));
     const btn = h('button', { class: 'play', type: 'button', 'aria-label': 'Play ' + (label || 'sound'), html: ICON_PLAY });
     const wave = h('canvas', { class: 'wave' }); const time = h('span', { class: 't' }, '');
     const el = h('div', { class: 'player' }, btn, wave, time);
@@ -515,9 +518,18 @@
       link('overview', { class: 'brand' }, h('b', {}, 'Noc'), 'Studio', h('small', {}, st.project || '')),
       h('nav', { class: 'nav', 'aria-label': 'Sections' }, tab('overview', 'Overview'), tab('inbox', 'Inbox', mine, true), tab('notes', 'Notes', noteQ, true), tab('library', 'Library'), tab('decisions', 'Decisions', st.decisions.length), tab('build', 'Build'), st.has_playtests === false ? null : tab('playtests', 'Playtests', confirmQ, true)),
       h('span', { class: 'spacer' }),
+      syncChip(st.sync),
       st.static ? null : h('button', { class: 'btn small', type: 'button', title: 'Leave a note for the project (N)', onclick: openNotePop }, 'Note'),
       st.hub ? h('a', { class: 'btn small', href: st.hub, title: 'Back to the list of your projects' }, 'All projects') : null, scaleControl(), themeControl(),
       st.static ? h('span', { class: 'sample' }, 'Sample data. Candidates are placeholders drawn by script.') : null);
+  }
+  // a Studio kept in step with another copy (sync.py): quiet while it goes through, plain when it does not
+  function syncChip(sy) {
+    if (!sy) return null;
+    const stale = !sy.ok || Date.now() - new Date(sy.ok) > 10 * 60000;
+    const tip = [sy.error || sy.waiting, sy.ok ? 'Last in step with the other copy ' + when(sy.ok) : ''].filter(Boolean).join('. ');
+    if (sy.error || stale) return h('span', { class: 'chip bad', title: tip }, 'Not synced');
+    return h('span', { class: 'chip ok', title: tip }, sy.waiting ? 'Sync waiting' : 'Synced');
   }
   async function render(r, keep) { // keep: the same page drawn again with new facts, so the user stays where they were
     cleanup(); closeOver();

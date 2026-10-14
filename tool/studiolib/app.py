@@ -20,7 +20,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
-from . import setup
+from . import setup, sync
 from .server import MAX_BODY, TYPES, WEB, make_handler
 from .store import Studio, StudioError
 
@@ -98,6 +98,7 @@ class Hub:
                 raise StudioError(f"port {port} is taken by something that is not this Studio") from None
             threading.Thread(target=httpd.serve_forever, daemon=True).start()
             self.running[port] = httpd
+            sync.start(row["home"])  # when its studio.local.toml asks to be kept in step with another copy
         return url
 
     def close(self) -> None:
