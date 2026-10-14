@@ -81,14 +81,21 @@ p { margin: 0; }
 .num { font-variant-numeric: tabular-nums; }
 
 /* ------------------------------------------------------------------ shell */
-.top { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 30; border-bottom: 1px solid var(--line);
+.top { position: sticky; top: 0; z-index: 30; border-bottom: 1px solid var(--line);
   background: linear-gradient(100deg, var(--haze), transparent 34%), var(--bg);
-  display: flex; align-items: center; gap: 8px 20px; flex-wrap: wrap; padding: 10px var(--gutter); }
+  display: flex; align-items: center; gap: 8px 20px; flex-wrap: wrap;
+  padding: calc(10px + env(safe-area-inset-top, 0px)) var(--gutter) 10px; }  /* on a phone the bar runs up behind the clock */
+/* in a launcher's frame the launcher keeps the notch clear: the page starts at the top of the frame */
+.framed .top { padding-top: 10px; }
+.framed .over { padding-top: 0; }
 .top::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 1px; pointer-events: none;
   background: linear-gradient(90deg, var(--accent), transparent 38%); }  /* the red hairline runs out from the name */
 .brand b { color: var(--accent-fg); font-weight: 700; }
 .brand { font-family: var(--font-display); font-weight: 700; font-size: 17px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--fg); }
-.brand small { display: block; font: 11px/1.2 var(--font-ui); letter-spacing: 0.02em; text-transform: none; color: var(--muted); font-weight: 400; }
+.brand .name { color: inherit; }
+.brand .name:hover, .brand .proj:hover { text-decoration: none; }
+.brand small, .brand .proj { display: block; font: 11px/1.2 var(--font-ui); letter-spacing: 0.02em; text-transform: none; color: var(--muted); font-weight: 400; }
+.brand .proj:hover { color: var(--fg); }
 .nav { display: flex; gap: 2px; flex-wrap: wrap; }
 .nav a { padding: 6px 12px; border-radius: var(--radius); color: var(--muted); font-weight: 600; display: flex; gap: 7px; align-items: center; }
 .nav a:hover { color: var(--fg); text-decoration: none; background: var(--surface); }
@@ -471,5 +478,13 @@ details.setup > :not(summary) { margin: 0 14px 12px; }
   .row.lack .gname, .row.lack .gcount { flex: 1 1 100%; text-align: left; }
   .msbody { padding-left: 14px; }
   .handact { flex: 1 1 100%; }
+  /* a phone: the sections on one line that scrolls sideways, and its own pinch for the page size */
+  .top .nav { flex: 1 1 100%; order: 1; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin: 0 calc(-1 * var(--gutter)); padding: 0 var(--gutter); }
+  .top .nav::-webkit-scrollbar { display: none; }
+  .top .nav a { flex: none; }
+  .top .scale, .top .allp { display: none; }  /* the project's name under the brand leads to the others */
+  .top .chip.sync { width: 14px; height: 14px; padding: 0; border-radius: 50%; background: currentColor; }  /* a dot: tap it for the words */
+  .top .chip.sync span { display: none; }
 }
+.chip.sync { background: none; cursor: pointer; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }

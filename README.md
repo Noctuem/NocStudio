@@ -132,8 +132,10 @@ starts and opens there; close the window and it stops. Nothing runs in between.
 
 ### On your phone too
 
-A second copy of a Studio can run on a server you own, behind your own login, so you can leave a
-note, answer a question or judge a batch from your phone. The two copies stay in step through the
+Copies of your Studios can run on a server you own, behind your own login, so you can leave a
+note, answer a question or judge a batch from your phone. One address shows a menu of your projects,
+with what waits in each, and every Studio below it. Inside a launcher that frames its apps on the
+same site, the page takes the launcher's light or dark and leaves the phone's notch to it. The two copies stay in step through the
 Studio's git remote. The server's copy commits what you do on the phone and pushes it once a
 minute. The PC's copy takes those commits, and commits and pushes its own while no session is
 working. Notes and decisions made on the phone get their own numbers (`N-0012p`), so the two

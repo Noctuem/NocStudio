@@ -10,7 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
-from .store import Studio, StudioError
+from .store import Studio, StudioError, slugify
 
 WEB = Path(__file__).resolve().parent.parent / "web"
 TYPES = {".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
@@ -262,6 +262,104 @@ def serve(home, port: int = 0, host: str = "", open_browser: bool = False, hosts
     if open_browser:
         import webbrowser
         threading.Timer(0.4, lambda: webbrowser.open(url)).start()
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        print("\nstopped")
+    finally:
+        httpd.server_close()
+
+
+def glance(home) -> dict:
+    """What waits in one Studio, for a menu of them all."""
+    studio = Studio(home)
+    status = [studio.load_batch(b)["status"] for b in studio.batch_ids()]
+    return {"judge": sum(s in ("open", "draft") for s in status), "sent": status.count("submitted"),
+            "hands": sum(1 for x in studio.hands() if x.get("status") == "open"),
+            "notes": sum(1 for n in studio.notes_view() if n.get("waits") == "you")}
+
+
+def studios_by_name(homes) -> dict:
+    """Each Studio home under the name it is served at, from its project's name."""
+    studios = {}
+    for home in homes:
+        studio = Studio(home)
+        slug = slugify(str(studio.config.get("project") or studio.home.name))
+        if slug in studios or slug in ("web", "api"):
+            raise StudioError(f"two Studios would both be at /{slug}/: give one another project name")
+        studios[slug] = studio.home
+    return studios
+
+
+def menu_handler(studios: dict, allowed: set[str]):
+    """The handler for several Studios behind one address: the menu at /, each Studio at /<its name>/."""
+    handlers = {slug: make_handler(home, allowed, quiet=True, hub="../") for slug, home in studios.items()}
+
+    class Menu(handlers[next(iter(handlers))]):
+        def pass_on(self, verb: str) -> bool:
+            """A request for one Studio goes to it, with its name taken off the path. The handler is that
+            Studio's for this one request only: the next one on the same connection may be for another."""
+            split = urlsplit(self.path)
+            parts = split.path.split("/")
+            if len(parts) < 2 or unquote(parts[1]) not in handlers:
+                return False
+            self.__class__ = handlers[unquote(parts[1])]
+            self.path = "/" + "/".join(parts[2:]) + ("?" + split.query if split.query else "")
+            try:
+                getattr(self, verb)()
+            finally:
+                self.__class__ = Menu
+            return True
+
+        def do_GET(self):
+            if self.pass_on("do_GET"):
+                return
+            if not self.guard():
+                return
+            parts = [unquote(p) for p in urlsplit(self.path).path.split("/") if p]
+            if not parts:
+                return self.send_file(WEB / "hub.html")
+            if parts == ["api", "hub"]:
+                rows = []
+                for slug, home in studios.items():
+                    try:
+                        rows.append(dict(glance(home), name=Studio(home).config.get("project") or slug, url=slug + "/", home=str(home)))
+                    except StudioError as err:
+                        rows.append({"name": slug, "url": slug + "/", "missing": True, "why": str(err)})
+                return self.send_json({"studio_hub": True, "served": True, "studios": rows, "ui": Studio.ui()})
+            if parts[0] == "web" and len(parts) > 1:
+                path = self.under(WEB, "/".join(parts[1:]))
+                return self.send_file(path) if path else self.fail(404, "no such file")
+            return self.fail(404, "no such page")
+
+        def write(self):
+            if self.pass_on("write"):
+                return
+            return self.fail(404, "no such route") if self.guard() else None
+
+    return Menu
+
+
+def serve_all(homes, port: int = 0, host: str = "", hosts=()) -> None:
+    """Several Studios behind one address, for a server. The first home's [serve] settings are used for all
+    (host, port, the names it answers to)."""
+    from . import sync
+    studios = studios_by_name(homes)
+    first = Studio(next(iter(studios.values())))
+    served = first.config.get("serve") or {}
+    port = port or int(served.get("port") or 8771)
+    host = host or str(served.get("host") or "127.0.0.1")
+    allowed = {f"127.0.0.1:{port}", f"localhost:{port}"}
+    if host not in ("127.0.0.1", "localhost", "0.0.0.0"):
+        allowed.add(f"{host}:{port}")
+    allowed |= {str(x).lower() for x in [*(served.get("hosts") or []), *hosts] if x}
+    httpd = ThreadingHTTPServer((host, port), menu_handler(studios, allowed))
+    httpd.daemon_threads = True
+    for home in studios.values():
+        sync.start(home)
+    print(f"{len(studios)} Studio{'s' if len(studios) != 1 else ''} at http://127.0.0.1:{port}/   (Ctrl+C stops them)")
+    for slug, home in studios.items():
+        print(f"  /{slug}/  {home}")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

@@ -21,7 +21,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 from . import setup, sync
-from .server import MAX_BODY, TYPES, WEB, make_handler
+from .server import MAX_BODY, TYPES, WEB, glance, make_handler
 from .store import Studio, StudioError
 
 HUB_PORT = 8760
@@ -67,10 +67,7 @@ class Hub:
             row = {"name": r.get("name") or Path(r["home"]).name, "home": r["home"], "repo": r.get("repo", ""),
                    "running": r.get("port") in self.running, "missing": False}
             try:
-                studio = Studio(r["home"])
-                status = [studio.load_batch(b)["status"] for b in studio.batch_ids()]
-                row.update(judge=sum(s in ("open", "draft") for s in status), sent=status.count("submitted"),
-                           hands=sum(1 for x in studio.hands() if x.get("status") == "open"))
+                row.update(glance(r["home"]))
             except StudioError as err:
                 row.update(missing=True, why=str(err))
             out.append(row)

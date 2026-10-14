@@ -177,7 +177,17 @@
     if (save) API.ui({ theme: UI.theme }).catch(() => {});
   }
   try { setTheme(localStorage.getItem('studio.theme')); } catch (e) { /* private window */ }
+  // framed by a launcher on the same site (an app library): it keeps the phone's notch clear and owns light and dark,
+  // so the page starts at the top of its frame and wears the launcher's theme, whatever it was left at here
+  const SHELL = (() => { try { return window.self !== window.top ? window.parent.document.documentElement : null; } catch (e) { return null; } })();
+  if (SHELL) {
+    document.documentElement.classList.add('framed');
+    const follow = () => { if (SHELL.dataset.theme) { setTheme(SHELL.dataset.theme); for (const v of GL.views) v.dirty = true; } };
+    setTimeout(follow, 0);
+    try { new window.parent.MutationObserver(follow).observe(SHELL, { attributes: true, attributeFilter: ['data-theme'] }); } catch (e) { /* a launcher that changes nothing */ }
+  }
   function themeControl() {
+    if (SHELL) return null;
     const btn = h('button', { class: 'btn small', type: 'button', onclick: () => { setTheme(UI.theme === 'light' ? 'dark' : 'light', true); show(); for (const v of GL.views) v.dirty = true; } });
     const show = () => { btn.textContent = UI.theme === 'light' ? 'Dark' : 'Light'; btn.title = 'Switch to the ' + (UI.theme === 'light' ? 'dark' : 'light') + ' theme'; };
     show(); return btn;
@@ -515,12 +525,14 @@
     const tab = (id, label, count, hot) => link(id, { class: (r === id || (id === 'inbox' && (r.startsWith('b.') || r === 'samples')) || (id === 'library' && r.startsWith('s.'))) ? 'on' : '' }, label,
       count ? h('span', { class: 'count' + (hot ? ' hot' : '') }, String(count)) : null);
     return h('header', { class: 'top' },
-      link('overview', { class: 'brand' }, h('b', {}, 'Noc'), 'Studio', h('small', {}, st.project || '')),
+      h('div', { class: 'brand' }, link('overview', { class: 'name' }, h('b', {}, 'Noc'), 'Studio'),
+        st.hub ? h('a', { class: 'proj', href: st.hub, title: 'Your other projects' }, st.project || '', h('span', { 'aria-hidden': 'true' }, ' ▾'))
+          : h('small', {}, st.project || '')),
       h('nav', { class: 'nav', 'aria-label': 'Sections' }, tab('overview', 'Overview'), tab('inbox', 'Inbox', mine, true), tab('notes', 'Notes', noteQ, true), tab('library', 'Library'), tab('decisions', 'Decisions', st.decisions.length), tab('build', 'Build'), st.has_playtests === false ? null : tab('playtests', 'Playtests', confirmQ, true)),
       h('span', { class: 'spacer' }),
       syncChip(st.sync),
       st.static ? null : h('button', { class: 'btn small', type: 'button', title: 'Leave a note for the project (N)', onclick: openNotePop }, 'Note'),
-      st.hub ? h('a', { class: 'btn small', href: st.hub, title: 'Back to the list of your projects' }, 'All projects') : null, scaleControl(), themeControl(),
+      st.hub ? h('a', { class: 'btn small allp', href: st.hub, title: 'Back to the list of your projects' }, 'All projects') : null, scaleControl(), themeControl(),
       st.static ? h('span', { class: 'sample' }, 'Sample data. Candidates are placeholders drawn by script.') : null);
   }
   // a Studio kept in step with another copy (sync.py): quiet while it goes through, plain when it does not
@@ -528,8 +540,9 @@
     if (!sy) return null;
     const stale = !sy.ok || Date.now() - new Date(sy.ok) > 10 * 60000;
     const tip = [sy.error || sy.waiting, sy.ok ? 'Last in step with the other copy ' + when(sy.ok) : ''].filter(Boolean).join('. ');
-    if (sy.error || stale) return h('span', { class: 'chip bad', title: tip }, 'Not synced');
-    return h('span', { class: 'chip ok', title: tip }, sy.waiting ? 'Sync waiting' : 'Synced');
+    const bad = sy.error || stale, said = bad ? 'Not synced' : sy.waiting ? 'Sync waiting' : 'Synced';
+    return h('button', { class: 'chip sync ' + (bad ? 'bad' : 'ok'), type: 'button', title: tip, 'aria-label': said,
+      onclick: () => toast(said + (tip ? '. ' + tip : '')) }, h('span', {}, said));
   }
   async function render(r, keep) { // keep: the same page drawn again with new facts, so the user stays where they were
     cleanup(); closeOver();
@@ -537,7 +550,7 @@
     const app = $('#app'), rail = keep && $('.rail'), railAt = rail ? rail.scrollTop : 0;
     try {
       if (!S.state) S.state = await API.state();
-      if (!UI.synced) { UI.synced = true; const ui = S.state.ui || {}; if (ui.scale) setScale(ui.scale); if (ui.theme) setTheme(ui.theme); }
+      if (!UI.synced) { UI.synced = true; const ui = S.state.ui || {}; if (ui.scale) setScale(ui.scale); if (ui.theme && !SHELL) setTheme(ui.theme); }
       let page;
       if (r.startsWith('b.')) page = await batchPage(r.slice(2));
       else if (r.startsWith('s.')) page = slotPage(r.slice(2));

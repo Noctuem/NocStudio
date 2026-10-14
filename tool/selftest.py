@@ -534,6 +534,33 @@ def main() -> int:
               and (lone.home / "live" / "sync.started").stat().st_mtime == started,
               "a session's prompt starts a sync on its own, at most once a minute, without waiting for it")
 
+        # every Studio behind one address, for a server: a menu, and each Studio under its own name
+        from http.client import HTTPConnection
+        both = server.studios_by_name([home, lone.home])
+        menu = ThreadingHTTPServer(("127.0.0.1", 0), None)
+        mport = menu.server_address[1]
+        menu.RequestHandlerClass = server.menu_handler(both, {f"127.0.0.1:{mport}"})
+        threading.Thread(target=menu.serve_forever, daemon=True).start()
+        conn = HTTPConnection("127.0.0.1", mport, timeout=20)
+
+        def ask(method: str, path: str, body=None):
+            conn.request(method, path, body=json.dumps(body) if body is not None else None,
+                         headers={"Content-Type": "application/json"} if body is not None else {})
+            res = conn.getresponse()
+            raw = res.read()
+            return res.status, (json.loads(raw) if res.headers.get("Content-Type", "").startswith("application/json") else raw)
+
+        status, rows = ask("GET", "/api/hub")
+        first, second = ask("GET", "/self-test/api/state")[1], ask("GET", "/lone/api/state")[1]
+        page, missing = ask("GET", "/lone/")[1], ask("GET", "/nowhere/")[0]
+        status_note, made = ask("POST", "/lone/api/note", {"text": "typed on the phone"})
+        check(sorted(r["url"] for r in rows["studios"]) == ["lone/", "self-test/"] and rows["served"]
+              and first["project"] == "Self-test" and second["project"] == "Lone" and second["hub"] == "../"
+              and b"app.js" in page and missing == 404 and status_note == 200 and lone.note(made["note"]["id"])["text"] == "typed on the phone",
+              "one address serves a menu and each Studio under its name, one after another on the same connection")
+        conn.close()
+        menu.shutdown()
+
         # the Studio app: a menu of every project's Studio, each started only when the user picks it
         import socket
         from studiolib import app

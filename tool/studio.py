@@ -101,6 +101,10 @@ def cmd_serve(a):
     server.serve(find_home(a.home), a.port, a.host, a.open, hosts=a.allow)
 
 
+def cmd_serve_all(a):
+    server.serve_all(a.homes, a.port, a.host, hosts=a.allow)
+
+
 def cmd_sync(a):
     s = Studio(find_home(a.home))
     if a.setup:
@@ -654,6 +658,12 @@ def main(argv=None) -> int:
                    help="another name the page is reached by, such as apps.example.com (again for more; also [serve] hosts)")
     c.add_argument("--open", action="store_true", help="open the browser")
     c.set_defaults(fn=cmd_serve)
+
+    c = sub.add_parser("serve-all", help="several Studios behind one address (a server's copy for a phone): a menu, and each at /<name>/")
+    c.add_argument("homes", nargs="+", help="the Studio homes; the first one's [serve] settings are used")
+    c.add_argument("--port", type=int, default=0); c.add_argument("--host", default="", help="default 127.0.0.1, or [serve] host")
+    c.add_argument("--allow", action="append", default=[], metavar="NAME", help="another name the menu is reached by")
+    c.set_defaults(fn=cmd_serve_all)
 
     c = sub.add_parser("sync", help="keep this copy in step with another through the git remote (a server's, for the phone)")
     c.add_argument("--setup", action="store_true", help="once per clone: teach git to merge the Studio's records")

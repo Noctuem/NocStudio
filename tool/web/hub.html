@@ -5,8 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>NocStudio</title>
 <script>try { if (localStorage.getItem('studio.theme') === 'light') document.documentElement.dataset.theme = 'light'; } catch (e) {}</script>
-<link rel="icon" href="/web/studio.ico?v=2"><!-- raise v when the icon changes: a browser keeps the one it saw first for an address -->
-<link rel="stylesheet" href="/web/style.css">
+<link rel="icon" href="web/studio.ico?v=2"><!-- raise v when the icon changes: a browser keeps the one it saw first for an address -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><!-- on a phone the page runs up behind the clock -->
+<link rel="apple-touch-icon" href="web/icon-256.png">
+<link rel="manifest" href="web/manifest.json">
+<link rel="stylesheet" href="web/style.css">
 <style>
   .projects { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr)); gap: 14px; }
   .proj { display: flex; flex-direction: column; gap: 10px; text-align: left; cursor: pointer; background: var(--surface);
@@ -23,7 +27,7 @@
 <main>
   <section>
     <h1 id="head">Your projects</h1>
-    <p class="lede">Pick one to open its Studio. It runs while this window is open and stops when you close it.</p>
+    <p class="lede" id="lede">Pick one to open its Studio. It runs while this window is open and stops when you close it.</p>
     <div class="projects" id="list"></div>
     <div class="empty" id="none" hidden>No project has a Studio yet. In a project, say to Claude Code: <code class="i">create a studio page for this</code></div>
   </section>
@@ -34,11 +38,21 @@
   const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text !== undefined) n.textContent = text; return n; };
   const list = document.getElementById('list'), none = document.getElementById('none');
   let busy = false;
+  // framed by a launcher on the same site (an app library): it keeps the notch clear and owns light and dark
+  const shell = (() => { try { return window.self !== window.top ? window.parent.document.documentElement : null; } catch (e) { return null; } })();
+  const theme = (t) => { if (t === 'light') document.documentElement.dataset.theme = 'light'; else delete document.documentElement.dataset.theme; };
+  if (shell) {
+    document.documentElement.classList.add('framed');
+    const follow = () => { if (shell.dataset.theme) theme(shell.dataset.theme); };
+    follow();
+    try { new window.parent.MutationObserver(follow).observe(shell, { attributes: true, attributeFilter: ['data-theme'] }); } catch (e) { /* a launcher that changes nothing */ }
+  }
   async function open(row, card) {
+    if (row.url) { location.href = row.url; return; }  // a server's menu: every Studio is already up
     if (busy) return; busy = true;
     card.querySelector('.chips').replaceChildren(el('span', 'chip accent', 'Starting'));
     try {
-      const res = await fetch('/api/open', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ home: row.home }) });
+      const res = await fetch('api/open', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ home: row.home }) });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'It did not start');
       location.href = data.url;
@@ -46,7 +60,7 @@
   }
   function look(ui) {
     if (ui.scale) document.documentElement.style.zoom = String(ui.scale);
-    if (ui.theme === 'light') document.documentElement.dataset.theme = 'light'; else delete document.documentElement.dataset.theme;
+    if (!shell) theme(ui.theme);
     try { localStorage.setItem('studio.theme', ui.theme === 'light' ? 'light' : 'dark'); } catch (e) { /* private window */ }
   }
   function draw(rows) {
@@ -57,18 +71,22 @@
       if (row.missing) { card.disabled = true; chips.append(el('span', 'chip bad', 'Its folder is gone')); }
       else {
         chips.append(el('span', 'chip' + (row.judge ? ' accent' : ''), row.judge ? row.judge + ' to judge' : 'Nothing to judge'));
+        if (row.notes) chips.append(el('span', 'chip accent', row.notes + (row.notes === 1 ? ' note waits' : ' notes wait') + ' on you'));
         if (row.hands) chips.append(el('span', 'chip', row.hands + ' only you can do'));
         if (row.sent) chips.append(el('span', 'chip', row.sent + ' waiting on Claude'));
         if (row.running) chips.append(el('span', 'chip keep', 'Open'));
         card.addEventListener('click', () => open(row, card));
       }
-      card.append(el('div', 'name', row.name), el('div', 'where', row.repo || row.home), chips);
+      card.append(...[el('div', 'name', row.name), row.url ? null : el('div', 'where', row.repo || row.home), chips].filter(Boolean));
       return card;
     }));
   }
   async function load() {
     if (busy) return;
-    try { const data = await (await fetch('/api/hub')).json(); look(data.ui || {}); draw(data.studios || []); } catch (e) { /* the app is closing */ }
+    try {
+      const data = await (await fetch('api/hub')).json(); look(data.ui || {}); draw(data.studios || []);
+      if (data.served) document.getElementById('lede').textContent = 'Pick one to open its Studio.';
+    } catch (e) { /* the app is closing */ }
   }
   load(); setInterval(load, 5000);
   window.addEventListener('pageshow', () => { busy = false; load(); });
