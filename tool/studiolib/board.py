@@ -402,7 +402,7 @@ def sessions(studio: Studio) -> list:
         tasks = list((rec.get("tasks") or {}).values())
         out.append({"id": rec.get("id") or path.stem, "state": state, "since": rec.get("since") or rec.get("updated"),
                     "started": rec.get("started"), "quiet": int(quiet), "title": rec.get("title") or "",
-                    "where": os.path.basename(str(rec.get("cwd") or "").rstrip("\/")), "prompt": rec.get("prompt") or "",
+                    "where": os.path.basename(str(rec.get("cwd") or "").rstrip("\\/")), "prompt": rec.get("prompt") or "",
                     "doing": rec.get("doing") or "", "said": rec.get("said") or "",
                     "agents": [{"type": a.get("type") or "agent", "doing": a.get("doing") or ""}
                                for a in (rec.get("agents") or {}).values()],

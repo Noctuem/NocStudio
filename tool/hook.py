@@ -8,11 +8,15 @@ finds the Studio of the project the session is working in, and updates that sess
 It watches, and it does one thing more: when the user has left notes in the Studio's notes box that
 wait on this session, it hands them over. That happens when the session finishes a turn (it carries on
 and deals with them), and between tool calls once a note has waited a while or is marked urgent. With
-no note waiting it prints nothing. It never fails a session and always exits 0. What it keeps is on this
+no note waiting it prints nothing. When the Studio has a second copy (a server's, for the phone; see
+studiolib/sync.py), it also starts a sync in the background as a session starts, is given a prompt or
+finishes a turn, at most once a minute, so what was left on the phone reaches the session without the
+page being open. It never fails a session and always exits 0. What it keeps is on this
 machine and is not history: the live folder is left out of the Studio's git record.
 """
 import json
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -269,6 +273,32 @@ def hand_over(home: str, e: dict) -> None:
     sys.stdout.write(json.dumps(out))
 
 
+def fetch(home: str, e: dict) -> None:
+    """Start `studio.py sync` on its own, without waiting for it, when this copy syncs and has not for a minute."""
+    if e.get("agent_id") or e.get("hook_event_name") not in ("SessionStart", "UserPromptSubmit", "Stop"):
+        return
+    try:
+        if "[sync]" not in Path(home, "studio.local.toml").read_text(encoding="utf-8"):
+            return
+    except OSError:
+        return
+    live = Path(home) / "live"
+    last = 0.0
+    for name in ("sync.json", "sync.started"):
+        try:
+            last = max(last, (live / name).stat().st_mtime)
+        except OSError:
+            pass
+    if time.time() - last < 60:
+        return
+    live.mkdir(exist_ok=True)
+    (live / "sync.started").write_text(now() + "\n", encoding="utf-8")
+    flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    subprocess.Popen([sys.executable, str(Path(__file__).resolve().parent / "studio.py"), "--home", home, "sync"],
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     creationflags=flags, start_new_session=not flags, close_fds=True)
+
+
 def main() -> int:
     try:
         e = json.loads(sys.stdin.buffer.read().decode("utf-8", errors="replace") or "{}")
@@ -287,6 +317,7 @@ def main() -> int:
         record(home, e)
         if e.get("hook_event_name") == "Stop":
             hand_over(home, e)
+        fetch(home, e)
     except Exception:  # a watcher must never get in a session's way
         pass
     return 0

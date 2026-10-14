@@ -519,6 +519,21 @@ def main() -> int:
               and mine["id"] in [n["id"] for n in Studio(phone).notes()],
               "while sessions work the PC only takes the phone's commits, and a save joins both before it pushes")
 
+        import hook
+        import time
+        lone = Studio.init(tmp / "lone", "Lone")
+        (lone.home / "studio.local.toml").write_text("[sync]\nevery_seconds = 0\n", encoding="utf-8")
+        hook.fetch(str(lone.home), {"hook_event_name": "UserPromptSubmit"})
+        started = (lone.home / "live" / "sync.started").stat().st_mtime
+        for _ in range(100):
+            if (lone.home / "live" / "sync.json").exists():
+                break
+            time.sleep(0.1)
+        hook.fetch(str(lone.home), {"hook_event_name": "Stop"})
+        check("no git remote" in json.loads((lone.home / "live" / "sync.json").read_text(encoding="utf-8"))["error"]
+              and (lone.home / "live" / "sync.started").stat().st_mtime == started,
+              "a session's prompt starts a sync on its own, at most once a minute, without waiting for it")
+
         # the Studio app: a menu of every project's Studio, each started only when the user picks it
         import socket
         from studiolib import app
