@@ -155,10 +155,17 @@
     if (!set || !set.clips.some((c) => c.name === clip)) return null;
     return { url: '/motions/' + encodeURIComponent(id) + '.glb', clip, seconds: (set.clips.find((c) => c.name === clip) || {}).seconds };
   }
+  // a view option can show in two places at once (the page and a closer look): every copy shows the same state
+  function showOpts() {
+    for (const x of document.querySelectorAll('[data-opt]')) { const on = !!S.opts[x.dataset.opt]; x.classList.toggle('on', on); x.setAttribute('aria-pressed', String(on)); }
+    for (const x of document.querySelectorAll('[data-rate]')) x.classList.toggle('on', +x.dataset.rate === S.opts.rate);
+    for (const x of document.querySelectorAll('[data-stage]')) x.classList.toggle('on', x.dataset.stage === S.opts.stage);
+    for (const x of document.querySelectorAll('select.clipsel')) x.value = S.opts.clip;
+    for (const x of document.querySelectorAll('input.texsize')) x.value = S.opts.texScale;
+  }
   function rateButtons(apply) {
-    const btns = [[1, 'Full speed'], [0.5, 'Half'], [0.25, 'Quarter']].map(([r, label]) => {
-      const btn = h('button', { class: 'btn small' + (S.opts.rate === r ? ' on' : ''), type: 'button', onclick: () => { S.opts.rate = r; btns.forEach((x) => x.classList.toggle('on', x === btn)); apply(); } }, label); return btn; });
-    return btns;
+    return [[1, 'Full speed'], [0.5, 'Half'], [0.25, 'Quarter']].map(([r, label]) =>
+      h('button', { class: 'btn small' + (S.opts.rate === r ? ' on' : ''), type: 'button', 'data-rate': r, onclick: () => { S.opts.rate = r; showOpts(); apply(); } }, label));
   }
   // the page's size: the user's choice, kept by the Studio so every window opens the way they left it
   const UI = { scale: 1, synced: false, steps: [0.8, 0.9, 1, 1.1, 1.25, 1.4, 1.5, 1.75, 2] };
@@ -1145,29 +1152,36 @@
     // tools
     const tools = h('div', { class: 'tools' });
     const apply = () => Object.values(medias).forEach((m) => m.set()), overApply = () => { if (S.over && S.over.apply) S.over.apply(); };
-    const toggle = (label, key) => { const btn = h('button', { class: 'btn small' + (S.opts[key] ? ' on' : ''), type: 'button', 'aria-pressed': String(!!S.opts[key]), onclick: () => { S.opts[key] = !S.opts[key]; btn.classList.toggle('on', S.opts[key]); btn.setAttribute('aria-pressed', S.opts[key]); apply(); overApply(); } }, label); return btn; };
+    const toggle = (label, key) => h('button', { class: 'btn small' + (S.opts[key] ? ' on' : ''), type: 'button', 'data-opt': key, 'aria-pressed': String(!!S.opts[key]),
+      onclick: () => { S.opts[key] = !S.opts[key]; showOpts(); apply(); overApply(); } }, label);
     const hasMedia = ['image', 'texture', 'model', 'video', 'mixed'].includes(b.kind) || moving;
-    if (hasMedia) {
-      const sw = [['dark', '#0b0b0c'], ['grey', '#777'], ['white', '#f4f4f4'], ['checker', 'conic-gradient(#555 25%, #222 0 50%, #555 0 75%, #222 0)']].map(([name, css]) => {
-        const btn = h('button', { class: 'swatch' + (S.opts.stage === name ? ' on' : ''), type: 'button', title: 'Background: ' + name, 'aria-label': 'Background ' + name, style: 'background:' + css,
-          onclick: () => { S.opts.stage = name; sw.forEach((x) => x.classList.toggle('on', x === btn)); apply(); overApply(); } });
-        return btn;
-      });
-      tools.append(h('div', { class: 'grp' }, h('label', {}, 'Behind it'), sw));
-    }
-    if (b.kind === 'texture') {
-      const size = h('input', { type: 'range', min: 48, max: 320, step: 8, value: S.opts.texScale, id: 'tex-scale', 'aria-label': 'Tile size', oninput: () => { S.opts.texScale = +size.value; if (S.opts.tile) { apply(); overApply(); } } });
-      tools.append(h('div', { class: 'grp' }, toggle('Tile', 'tile'), h('label', { for: 'tex-scale' }, 'Tile size'), size));
-    }
-    if (b.kind === 'model') {
-      const names = [...new Set(b.candidates.flatMap((c) => ((c.facts || {}).clips || []).map((x) => x.name)))];
-      const sel = h('select', { id: 'clip', 'aria-label': 'Motion', onchange: () => { S.opts.clip = sel.value; apply(); overApply(); } },
-        h('option', { value: '' }, 'Still'), names.map((n) => h('option', { value: n, selected: n === S.opts.clip }, n)));
-      tools.append(h('div', { class: 'grp' }, h('label', { for: 'clip' }, 'Motion'), sel, toggle('Play', 'playing')),
-        h('div', { class: 'grp' }, toggle('Turntable', 'rotate'), toggle('Wireframe', 'wire'), toggle('1.8 m figure', 'ref')));
-    }
-    if (moving) tools.append(h('div', { class: 'grp' }, toggle('Play', 'playing'), rateButtons(() => { apply(); overApply(); })),
-      h('div', { class: 'grp' }, toggle('Turntable', 'rotate'), toggle('1.8 m figure', 'ref')));
+    // how the candidates are shown: on the page, and again at the top of a closer look (`at` keeps the ids apart)
+    const viewTools = (at) => {
+      const out = [];
+      if (hasMedia) {
+        const sw = [['dark', '#0b0b0c'], ['grey', '#777'], ['white', '#f4f4f4'], ['checker', 'conic-gradient(#555 25%, #222 0 50%, #555 0 75%, #222 0)']].map(([name, css]) =>
+          h('button', { class: 'swatch' + (S.opts.stage === name ? ' on' : ''), type: 'button', 'data-stage': name, title: 'Background: ' + name, 'aria-label': 'Background ' + name, style: 'background:' + css,
+            onclick: () => { S.opts.stage = name; showOpts(); apply(); overApply(); } }));
+        out.push(h('div', { class: 'grp' }, h('label', {}, 'Behind it'), sw));
+      }
+      if (b.kind === 'texture') {
+        const size = h('input', { type: 'range', class: 'texsize', min: 48, max: 320, step: 8, value: S.opts.texScale, id: 'tex-scale' + at, 'aria-label': 'Tile size',
+          oninput: () => { S.opts.texScale = +size.value; showOpts(); if (S.opts.tile) { apply(); overApply(); } } });
+        out.push(h('div', { class: 'grp' }, toggle('Tile', 'tile'), h('label', { for: 'tex-scale' + at }, 'Tile size'), size));
+      }
+      if (b.kind === 'model') {
+        const names = [...new Set(b.candidates.flatMap((c) => ((c.facts || {}).clips || []).map((x) => x.name)))];
+        const sel = h('select', { class: 'clipsel', id: 'clip' + at, 'aria-label': 'Motion', onchange: () => { S.opts.clip = sel.value; showOpts(); apply(); overApply(); } },
+          h('option', { value: '' }, 'Still'), names.map((n) => h('option', { value: n, selected: n === S.opts.clip }, n)));
+        out.push(h('div', { class: 'grp' }, h('label', { for: 'clip' + at }, 'Motion'), sel, toggle('Play', 'playing'), names.length ? rateButtons(() => { apply(); overApply(); }) : null),
+          h('div', { class: 'grp' }, toggle('Turntable', 'rotate'), toggle('Wireframe', 'wire'), toggle('1.8 m figure', 'ref')));
+      }
+      if (moving) out.push(h('div', { class: 'grp' }, toggle('Play', 'playing'), rateButtons(() => { apply(); overApply(); })),
+        h('div', { class: 'grp' }, toggle('Turntable', 'rotate'), toggle('1.8 m figure', 'ref')));
+      return out;
+    };
+    tools.append(...viewTools(''));
+    S.viewTools = (b.kind === 'model' || moving) ? () => viewTools('-over') : null;
     if (b.kind === 'audio') {
       const turn = h('button', { class: 'btn small', type: 'button', onclick: async () => {
         const my = ++seq.token;
@@ -1320,7 +1334,9 @@
       h('span', { class: 'hint' }, one ? [h('kbd', {}, '←'), ' ', h('kbd', {}, '→'), ' next · scroll or pinch to zoom · double-click for full size']
         : ['Zoom and turn one, the others follow · point at one, then score or mark it with the keys']),
       h('button', { class: 'btn small', type: 'button', onclick: closeOver }, 'Close (Esc)'));
-    const el = h('div', { class: 'over', role: 'dialog', 'aria-modal': 'true', 'aria-label': one ? cands[0].title : 'Compare' }, bar, panes);
+    const opts = S.viewTools ? S.viewTools() : [];  // play, speed and the rest, kept in sight while looking closer at a model or a motion
+    const el = h('div', { class: 'over', role: 'dialog', 'aria-modal': 'true', 'aria-label': one ? cands[0].title : 'Compare' }, bar,
+      opts.length ? h('div', { class: 'tools overtools' }, opts) : null, panes);
     let noteField = null;
     if (one) {
       const ctl = controls(cands[0], true);

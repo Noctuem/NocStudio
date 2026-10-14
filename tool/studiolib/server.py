@@ -6,6 +6,7 @@ import mimetypes
 import re
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
@@ -181,6 +182,17 @@ def make_handler(home: Path, allowed_hosts: set[str], quiet: bool = False, hub: 
             self.write()
 
         def write(self):
+            started = time.time_ns()
+            try:
+                self._write()
+            finally:  # what this click changed, so a sync can send it while a session works on other files
+                from . import sync
+                try:
+                    sync.page_wrote(home, started, urlsplit(self.path).path)
+                except Exception:  # noqa: BLE001 - the click itself went through
+                    pass
+
+        def _write(self):
             if not self.guard():
                 return
             parts = [unquote(p) for p in urlsplit(self.path).path.split("/") if p]

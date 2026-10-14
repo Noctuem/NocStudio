@@ -394,7 +394,7 @@ def sessions(studio: Studio) -> list:
             with open(path, "r", encoding="utf-8") as fh:
                 rec = json.load(fh)
             quiet = (now - datetime.datetime.fromisoformat(rec["updated"].replace("Z", "+00:00"))).total_seconds()
-        except (OSError, ValueError, KeyError, AttributeError):
+        except (OSError, ValueError, KeyError, AttributeError, TypeError):  # the live folder also holds the sync's own records
             continue  # half written, or not a session
         state = rec.get("state") or "waiting"
         if quiet > (600 if state == "ended" else 6 * 3600):

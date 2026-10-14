@@ -137,8 +137,9 @@ note, answer a question or judge a batch from your phone. One address shows a me
 with what waits in each, and every Studio below it. Inside a launcher that frames its apps on the
 same site, the page takes the launcher's light or dark and leaves the phone's notch to it. The two copies stay in step through the
 Studio's git remote. The server's copy commits what you do on the phone and pushes it once a
-minute. The PC's copy takes those commits, and commits and pushes its own while no session is
-working. Notes and decisions made on the phone get their own numbers (`N-0012p`), so the two
+minute. The PC's copy takes those commits and sends its own. While a session is working there,
+what you change on the PC's page goes the moment you change it, and the session's own changes
+wait for its save. Notes and decisions made on the phone get their own numbers (`N-0012p`), so the two
 copies never hand out the same one. The Studio's records merge field by field, so the copies
 rarely clash. The page shows **Synced** when the copies match, and **Not synced** with the reason
 when they don't. `tool/deploy/` holds the container and the cron script.

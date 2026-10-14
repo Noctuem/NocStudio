@@ -7,7 +7,8 @@ Settings, in the home's studio.local.toml (kept out of git, since each copy has 
     [sync]
     every_seconds = 60            # how often the page's server syncs; 0 or absent: never by itself
     commit = "quiet"              # "always": commit and push what changed here (the server's copy);
-                                  # "quiet": only while no Claude Code session is live here, else pull only (the PC's);
+                                  # "quiet": everything while no Claude Code session is live here; while one is,
+                                  #   only what the user changed on the page, the moment they change it (the PC's);
                                   # "never": pull only
 
 A sync commits (when it may), fetches, takes the remote's commits, and pushes. It never stashes and never forces:
@@ -27,6 +28,8 @@ from .store import Studio, StudioError, iso_now, read_json, write_json
 TOOL = Path(__file__).resolve().parent.parent
 ATTRS = ("*.json merge=studio-json", "*.jsonl merge=union", "INDEX.md merge=studio-ours", "decisions/DECISIONS.md merge=studio-ours")
 STARTED: set[str] = set()
+KICKS: dict[str, threading.Lock] = {}
+CLICKED = "page-wrote.json"  # live/: the files the page changed that no sync has sent yet
 
 
 def settings(studio: Studio) -> dict:
@@ -70,6 +73,66 @@ def _sessions_live(studio: Studio) -> bool:
     return bool(notebox.alive(studio.home))
 
 
+def page_wrote(home, since_ns: int, path: str) -> None:
+    """Remember which files a click on the page changed, and send them now. A Studio that does not sync is left alone."""
+    studio = Studio(home)
+    if "sync" not in studio.config:
+        return
+    found = set()
+    parts = [p for p in path.split("/") if p]
+    if len(parts) >= 3 and parts[:2] == ["api", "batch"]:
+        found.add(f"{studio.batch_dir(parts[2]).relative_to(studio.home).as_posix()}")  # a verdict made or taken back
+    for sub in ("notes", "overview", "playtests", "decisions"):
+        for f in (studio.home / sub).glob("*"):
+            try:
+                if f.is_file() and f.stat().st_mtime_ns >= since_ns:
+                    found.add(f.relative_to(studio.home).as_posix())
+            except OSError:
+                continue
+    if not found:
+        return
+    listed = studio.home / "live" / CLICKED
+    write_json(listed, sorted(set(read_json(listed, []) or []) | found))
+    kick(studio.home)
+
+
+def kick(home) -> None:
+    """A sync now, in the background; one at a time per home, and one more if asked while it ran."""
+    key = str(Path(home).resolve())
+    lock = KICKS.setdefault(key, threading.Lock())
+
+    def run():
+        for _ in range(2):  # a click made while this ran gets one more; a failing sync waits for the next minute
+            if not lock.acquire(blocking=False):
+                return
+            try:
+                step(Studio(key))
+            except Exception as err:  # noqa: BLE001 - a sync must never take the page down
+                write_json(Path(key) / "live" / "sync.json", {"at": iso_now(), "error": f"the sync broke: {err}"})
+            finally:
+                lock.release()
+            if not read_json(Path(key) / "live" / CLICKED, []):
+                return
+
+    threading.Thread(target=run, daemon=True, name="studio-sync-now").start()
+
+
+def _commit_clicked(studio: Studio, out: dict) -> None:
+    """While a session works here: commit only the files the user changed on the page, nothing of the session's."""
+    listed = studio.home / "live" / CLICKED
+    paths = read_json(listed, []) or []
+    if not paths:
+        return
+    studio._git("add", "-A", "--", *paths)
+    if studio._git("diff", "--cached", "--quiet", "--", *paths).returncode:
+        done = studio._git("commit", "-q", "-m", "From the page: " + ", ".join(paths[:4]) + (f" and {len(paths) - 4} more" if len(paths) > 4 else ""),
+                           "--", *paths)
+        if done.returncode:
+            raise StudioError("the commit failed: " + (done.stderr or done.stdout).strip())
+        out["committed"] = studio._git("rev-parse", "--short", "HEAD").stdout.strip()
+    write_json(listed, [])
+
+
 def step(studio: Studio, commit: str = "") -> dict:
     """One sync. Returns, and keeps in live/sync.json, what happened."""
     commit = commit or settings(studio)["commit"]
@@ -94,6 +157,9 @@ def step(studio: Studio, commit: str = "") -> dict:
             if done.returncode:
                 raise StudioError("the commit failed: " + (done.stderr or done.stdout).strip())
             out["committed"] = studio._git("rev-parse", "--short", "HEAD").stdout.strip()
+            write_json(studio.home / "live" / CLICKED, [])
+        elif commit == "quiet":
+            _commit_clicked(studio, out)
         fetched = studio._git("fetch", "-q", timeout=120)
         if fetched.returncode:
             raise StudioError("the fetch failed: " + ((fetched.stderr or fetched.stdout).strip().splitlines() or ["no reason given"])[-1])
@@ -115,7 +181,7 @@ def step(studio: Studio, commit: str = "") -> dict:
             else:
                 out["took"] = behind
         ahead, behind = _count(studio)
-        if ahead and may:
+        if ahead and not behind and commit != "never":
             pushed = studio._git("push", "-q", timeout=180)
             if pushed.returncode:
                 raise StudioError("the push failed: " + ((pushed.stderr or pushed.stdout).strip().splitlines() or ["no reason given"])[-1])

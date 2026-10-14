@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import urllib.error
 import urllib.request
 import wave
@@ -518,9 +519,28 @@ def main() -> int:
         check(held["took"] and not held["pushed"] and saved["pushed"] and sync.step(Studio(phone), "always")["took"]
               and mine["id"] in [n["id"] for n in Studio(phone).notes()],
               "while sessions work the PC only takes the phone's commits, and a save joins both before it pushes")
+        (home / "studio.local.toml").write_text('[sync]\ncommit = "quiet"\n', encoding="utf-8")
+        from studiolib.store import write_json as put
+        put(home / "live" / "s-busy.json", {"id": "s-busy", "state": "working", "updated": store.iso_now()})
+        studio.set_hand("half-done", title="A session's unfinished row", status="open")  # the session's: not to be sent
+        pc = ThreadingHTTPServer(("127.0.0.1", 0), None)
+        pc.RequestHandlerClass = server.make_handler(home, {f"127.0.0.1:{pc.server_address[1]}"}, quiet=True)
+        threading.Thread(target=pc.serve_forever, daemon=True).start()
+        status, made = http("POST", f"http://127.0.0.1:{pc.server_address[1]}/api/note", {"text": "typed on the PC while a session works"})
+        time.sleep(0.2)
+        for _ in range(150):  # the sync the click started, done
+            if not sync.KICKS[str(home.resolve())].locked():
+                break
+            time.sleep(0.1)
+        sync.step(Studio(phone), "always")
+        sent = [n["id"] for n in Studio(phone).notes()]
+        check(status == 200 and made["note"]["id"] in sent and not any(x.get("id") == "half-done" for x in Studio(phone).hands())
+              and "overview/hands.json" in subprocess.run(["git", "-C", str(home), "status", "--porcelain"], capture_output=True, text=True).stdout,
+              "a note typed on the PC page reaches the phone at once while a session works, and the session's own changes wait for its save")
+        (home / "live" / "s-busy.json").unlink()
+        pc.shutdown(); pc.server_close()
 
         import hook
-        import time
         lone = Studio.init(tmp / "lone", "Lone")
         (lone.home / "studio.local.toml").write_text("[sync]\nevery_seconds = 0\n", encoding="utf-8")
         hook.fetch(str(lone.home), {"hook_event_name": "UserPromptSubmit"})
