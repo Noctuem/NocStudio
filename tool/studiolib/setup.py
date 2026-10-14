@@ -53,6 +53,11 @@ max_mb = 256
 [playtests]
 dirs = []
 
+# The notes box: how long a note you typed waits before it is handed to a session in the middle
+# of its work. A session that finishes a turn is handed it at once; an urgent note never waits.
+[notes]
+after_minutes = 10
+
 # What "ship the winner" means for each kind of asset, as steps for Claude Code.
 [recipes.audio]
 steps = []
@@ -180,9 +185,11 @@ def create(repo, project: str = "", home: str = "", port: int = 0, registry: Pat
 
 # ------------------------------------------------- Claude Code's hooks, in the user's own settings
 HOOK = KIT / "tool" / "hook.py"
-HOOK_EVENTS = ("SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PermissionRequest", "Notification",
+HOOK_EVENTS = ("SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PermissionRequest", "Notification",
                "Stop", "StopFailure", "SubagentStart", "SubagentStop", "TaskCreated", "TaskCompleted", "CwdChanged")
-WAITED_FOR = ("SessionStart", "CwdChanged")  # these tell the session its own id, so they finish before it goes on
+# these finish before the session goes on: two tell it its own id, two hand it the notes the user left for it
+WAITED_FOR = ("SessionStart", "CwdChanged", "Stop", "PostToolUse")
+HOOK_TIMEOUT = 20  # seconds: a hook the session waits for must never hold it up for long
 
 
 def claude_settings() -> Path:
@@ -213,6 +220,17 @@ def hooks_installed(path: Path | None = None) -> list[str]:
                    for g in groups if isinstance(g, dict) for h in g.get("hooks") or [])]
 
 
+def hooks_hand_over(path: Path | None = None) -> bool:
+    """Whether the hooks as installed can hand a session the user's notes: an install from before the notes box cannot."""
+    try:
+        data = read_json(path or claude_settings(), {}) or {}
+    except StudioError:
+        return False
+    hooks = data.get("hooks") or {}
+    return all(any(_ours(h) and not h.get("async") for g in hooks.get(event) or [] if isinstance(g, dict) for h in g.get("hooks") or [])
+               for event in ("Stop", "PostToolUse"))
+
+
 def install_hooks(path: Path | None = None, remove: bool = False) -> dict:
     """Add this kit's hook to Claude Code's settings, or take it out. Every other setting is left as it is."""
     path = path or claude_settings()
@@ -241,7 +259,7 @@ def install_hooks(path: Path | None = None, remove: bool = False) -> dict:
             del hooks[event]
     if not remove:
         for event in HOOK_EVENTS:
-            hooks.setdefault(event, []).append({"hooks": [dict(_hook_command(), **({} if event in WAITED_FOR else {"async": True}))]})
+            hooks.setdefault(event, []).append({"hooks": [dict(_hook_command(), **({"timeout": HOOK_TIMEOUT} if event in WAITED_FOR else {"async": True}))]})
     if not hooks:
         del data["hooks"]
     write_json(path, data)

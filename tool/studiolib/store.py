@@ -17,6 +17,7 @@ needs a database, a network or a package outside the standard library.
       overview/roadmap.json       the milestones, each with its steps
       overview/now.json           the goal, the current build, what is next
       overview/hands.json         what waits on the user: things to do and questions to answer
+      notes/N-<n>.json            what the user typed into the notes box, and what became of each (notes.py)
       overview/lanes.json, events.jsonl, days.json    work in progress, the log, a snapshot a day (board.py)
       live/<session>.json         what each Claude Code session is doing now (tool/hook.py); not history
       motions/<id>.glb            a character with its motions baked in as clips, by the game itself
@@ -30,6 +31,8 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
+
+from . import notes as notebox
 
 try:  # Python 3.11+
     import tomllib
@@ -56,6 +59,7 @@ HAND_STATUS = ("open", "later", "done", "parked")  # later: the user's, but noth
 HAND_KINDS = ("action", "decision", "play", "info")  # something to do, a question to answer, a build to try, a thing to know
 # how the user likes the page: one answer for every Studio here (STUDIO_PREFS names another file, for a test)
 PREFS = Path(os.environ.get("STUDIO_PREFS") or Path(__file__).resolve().parents[2] / "ui.json")
+NOTE_KINDS, NOTE_CONFIRMED = notebox.KINDS, notebox.CONFIRMED
 SAMPLE = "sample-"  # a batch id that starts so is made-up: kept under samples/, never counted or acted on
 
 EXT_KIND = {
@@ -80,6 +84,7 @@ DEFAULT_CONFIG = {
     },
     "recipes": {},
     "playtests": {"dirs": []},
+    "notes": {"after_minutes": 10},
 }
 
 
@@ -155,6 +160,7 @@ class Studio:
         self.decisions_file = self.home / "decisions" / "decisions.jsonl"
         self.triage_file = self.home / "playtests" / "triage.json"
         self.overview_dir = self.home / "overview"
+        self.notes_dir = self.home / "notes"
         self.motions_dir = self.home / "motions"
         self.samples_dir = self.home / "samples"
         self.config = self._load_config()
@@ -1156,6 +1162,171 @@ class Studio:
     def unseen_hands(self) -> list[dict]:
         return [r for r in self.hands() if r.get("answered") and not r.get("seen")]
 
+    # ------------------------------------------------------------ the notes box
+    def notes(self) -> list[dict]:
+        return notebox.load(self.home)
+
+    def note(self, nid: str) -> dict:
+        note = read_json(self.notes_dir / f"{safe_id(nid, 'note')}.json")
+        if not isinstance(note, dict):
+            raise StudioError(f"no note {nid!r}; see: studio.py note list")
+        return note
+
+    def _save_note(self, note: dict) -> dict:
+        note["updated"] = iso_now()
+        write_json(self.notes_dir / f"{note['id']}.json", note)
+        return note
+
+    @staticmethod
+    def _say(note: dict, who: str, text: str) -> None:
+        note.setdefault("thread", []).append({"who": who, "at": iso_now(), "text": text.strip()})
+
+    def add_note(self, text: str, *, kind: str = "", urgent: bool = False, parent: str = "") -> dict:
+        """What the user typed, as they typed it. A kind they chose themselves stands; otherwise a session sorts it."""
+        if not text.strip():
+            raise StudioError("a note needs some words")
+        if kind and kind not in NOTE_KINDS:
+            raise StudioError(f"a note is one of: {', '.join(NOTE_KINDS)}")
+        numbers = [int(m.group(1)) for p in self.notes_dir.glob("N-*.json") if (m := re.fullmatch(r"N-(\d+)", p.stem))]
+        note = {"id": f"N-{(max(numbers) if numbers else 0) + 1:04d}", "text": text.strip(), "created": iso_now(),
+                "kind": kind, "kind_by": "you" if kind else "", "status": "later" if kind == "later" else "new",
+                "urgent": bool(urgent), "reading": "", "thread": []}
+        if parent:
+            note["from"] = parent
+        return self._save_note(note)
+
+    def sort_note(self, nid: str, kind: str, *, reading: str = "", lane: str = "", session: str = "") -> dict:
+        """A session says what kind of note this is and what it takes it to mean."""
+        note = self.note(nid)
+        if note["status"] != "new":
+            raise StudioError(f"{nid} is already sorted ({note['kind']}, {note['status']})")
+        if kind not in NOTE_KINDS:
+            raise StudioError(f"a note is one of: {', '.join(NOTE_KINDS)}")
+        if note.get("kind_by") == "you" and kind != note["kind"]:
+            raise StudioError(f"the user marked {nid} as {note['kind']} themselves; sort it as that")
+        if kind == "discussion":
+            raise StudioError("a discussion is sorted by answering it: studio.py note reply <id> \"<your answer>\"")
+        if kind != "later" and not reading.strip():
+            raise StudioError("say what you take it to mean: --reading \"...\"")
+        if lane:
+            from . import board
+            if not any(r["id"] == lane for r in board.lanes(self)):
+                raise StudioError(f"no lane {lane!r} on the board; see: studio.py lane list")
+        note.update(kind=kind, reading=reading.strip(), lane=lane, session="" if lane else session, anyone=False,
+                    status="later" if kind == "later" else "confirm" if kind in NOTE_CONFIRMED else "go")
+        return self._save_note(note)
+
+    def split_note(self, nid: str, text: str) -> dict:
+        """One note that holds two things: the part named becomes a note of its own, in the user's words."""
+        note = self.note(nid)
+        squash = lambda t: " ".join(t.split()).lower()  # noqa: E731
+        if squash(text) not in squash(note["text"]):
+            raise StudioError(f"the part must be the user's own words, as they stand in {nid}")
+        return self.add_note(text, urgent=bool(note.get("urgent")), parent=nid)
+
+    def reply_note(self, nid: str, text: str, *, session: str = "") -> dict:
+        """A session's answer in a discussion. Answering a note nobody has sorted makes it a discussion."""
+        note = self.note(nid)
+        if not text.strip():
+            raise StudioError("a reply needs some words")
+        if note["status"] == "new" and note.get("kind_by") == "you" and note["kind"] != "discussion":
+            raise StudioError(f"the user marked {nid} as {note['kind']} themselves; sort it as that")
+        if note["status"] not in ("new", "talk"):
+            raise StudioError(f"{nid} is not a discussion ({note['kind']}, {note['status']})")
+        self._say(note, "claude", text)
+        note.update(kind="discussion", status="talk", session=session or note.get("session") or "")
+        return self._save_note(note)
+
+    def close_note(self, nid: str, *, result: str, ref: str = "", parked: bool = False) -> dict:
+        """A session did what the note asked, or says why it will not be done. A directive or a rule goes on the record."""
+        note = self.note(nid)
+        if note["status"] in ("done", "parked"):
+            raise StudioError(f"{nid} is already closed")
+        if note["status"] == "confirm":
+            raise StudioError(f"{nid} waits on the user to confirm what it means; nothing is done on it before that")
+        if not result.strip():
+            raise StudioError("say what was done: --result \"...\"")
+        note.update(status="parked" if parked else "done", result=result.strip(), ref=ref, closed=iso_now(), closed_by="claude")
+        if not parked and note.get("kind") in NOTE_CONFIRMED and not note.get("decision"):
+            words = "\n".join([note["text"]] + [m["text"] for m in note.get("thread") or [] if m.get("who") == "you"])
+            note["decision"] = self.add_decision(title=note.get("reading") or note["text"], his_words=words, ruling=result,
+                                                 source_type="note", ref=nid, tags=["rule"] if note["kind"] == "rule" else [])["id"]
+        return self._save_note(note)
+
+    def answer_note(self, nid: str, action: str, *, text: str = "", kind: str = "", session: str = "") -> dict:
+        """The user's own word on a note, from the page."""
+        note, text = self.note(nid), text.strip()
+        status = note["status"]
+        if action == "confirm":
+            if status != "confirm":
+                raise StudioError("there is nothing to confirm on that note")
+            if text:
+                self._say(note, "you", text)
+            note["status"] = "go"
+        elif action == "back":  # not what they meant: a session reads it again, with what they added
+            if status != "confirm":
+                raise StudioError("there is nothing to send back on that note")
+            if not text:
+                raise StudioError("say what you meant instead")
+            self._say(note, "you", text)
+            note["status"] = "new"
+        elif action == "reply":
+            if status not in ("talk", "go", "new"):
+                raise StudioError("that note is not open for a reply")
+            if not text:
+                raise StudioError("write your reply first")
+            self._say(note, "you", text)
+        elif action == "kind":  # the user sorts it themselves, or says a session sorted it wrong
+            if kind not in NOTE_KINDS:
+                raise StudioError(f"a note is one of: {', '.join(NOTE_KINDS)}")
+            if status in ("done", "parked"):
+                raise StudioError("that note is closed; open it again first")
+            note.update(kind=kind, kind_by="you", reading="", lane="", session="", anyone=False,
+                        status="later" if kind == "later" else "new")
+        elif action == "send":  # to a session by hand, or to whichever comes first
+            if status != "go":
+                raise StudioError("only a note that is to be worked in can be sent to a session")
+            note.update(lane="", session=session, anyone=not session)
+        elif action == "urgent":
+            note["urgent"] = not note.get("urgent")
+        elif action in ("park", "done"):
+            if status in ("done", "parked"):
+                raise StudioError("that note is already closed")
+            note.update(status="parked" if action == "park" else "done", closed=iso_now(), closed_by="you")
+        elif action == "reopen":
+            if status not in ("done", "parked", "later"):
+                raise StudioError("that note is open already")
+            if text:
+                self._say(note, "you", text)
+            talk = note.get("kind") == "discussion" and bool(note.get("thread")) and note["thread"][-1]["who"] == "you"
+            if note.get("kind") == "later":
+                note.update(kind="", kind_by="")
+            note["status"] = "talk" if talk else "new"
+        else:
+            raise StudioError("say confirm, back, reply, kind, send, urgent, park, done or reopen")
+        return self._save_note(note)
+
+    def notes_view(self) -> list[dict]:
+        """Every note, with who it waits on and the session it is with, as the page shows it."""
+        lane_rows, sessions, told = notebox.lanes(self.home), notebox.alive(self.home), notebox.told(self.home)
+
+        def name(sid: str) -> str:
+            rec = sessions.get(sid) or {}
+            return rec.get("title") or rec.get("prompt") or "a session"
+
+        def stamp(at: float) -> str:
+            when = datetime.datetime.fromtimestamp(at, datetime.timezone.utc).replace(microsecond=0)
+            return when.isoformat().replace("+00:00", "Z")
+
+        out = []
+        for note in self.notes():
+            to, was = notebox.route(note, lane_rows, sessions), told.get(note["id"]) or {}
+            handed = was if was.get("key") == notebox.key(note) and was.get("session") in sessions else None
+            out.append(dict(note, waits=notebox.waits(note), to=to,
+                            to_name=(lane_rows.get(note.get("lane")) or {}).get("name") or (name(to) if to not in ("", "*") else ""),
+                            handed={"session": handed["session"], "name": name(handed["session"]), "at": stamp(handed["at"])} if handed else None))
+        return out
+
     _GIT_CACHE: dict = {}
 
     def game_git(self) -> dict:
@@ -1198,7 +1369,7 @@ class Studio:
         from . import board, setup
         hooks = bool(setup.hooks_installed())
         return {"now": self.now(), "game": self.game_git(), "milestones": self.roadmap(), "hands": self.hands(),
-                "board": board.view(self), "live": board.live(self), "hooks": hooks,
+                "board": board.view(self), "live": board.live(self), "hooks": hooks, "hooks_notes": setup.hooks_hand_over(),
                 "setup": board.checklist(self, hooks)}
 
     # ------------------------------------------------- the files behind a slot
@@ -1337,7 +1508,7 @@ class Studio:
                 "slots": [dict(s, files=self.slot_files(s)) for s in self.slots()],
                 "decisions": self.decisions(), "playtests": self.playtests(), "overview": self.overview(),
                 "has_playtests": bool(self.playtest_dirs()), "motions": self.motions(),
-                "stamp": self.stamp()}
+                "notes": self.notes_view(), "stamp": self.stamp()}
 
     def stamp(self) -> str:
         """Changes whenever anything the user could see changes; the page polls it."""
@@ -1345,7 +1516,7 @@ class Studio:
         for folder in ([self.batches_dir] + [self.batches_dir / b for b in self.batch_ids()] +
                        [self.samples_dir] + [self.samples_dir / b for b in self.sample_ids()] +
                        [self.slots_dir, self.decisions_file.parent, self.triage_file.parent, self.overview_dir,
-                        self.motions_dir]):
+                        self.motions_dir, self.notes_dir]):
             try:
                 for p in folder.iterdir():
                     if p.is_file() and p.suffix in (".json", ".jsonl"):
@@ -1358,6 +1529,11 @@ class Studio:
                 parts.append(f"{root}:{root.stat().st_mtime_ns}:{sum(1 for _ in root.iterdir())}")
             except OSError:
                 continue
+        try:  # a note handed to a session shows as handed over
+            st = (self.home / "live" / "notes.json").stat()
+            parts.append(f"told:{st.st_mtime_ns}:{st.st_size}")
+        except OSError:
+            pass
         root = self.game_root()
         if root is not None:  # a commit in the game repo moves the overview
             try:
@@ -1438,6 +1614,11 @@ max_mb = 64
 # Folders the game writes playtest sessions into (each holds f8-<n>/ reports).
 [playtests]
 dirs = []
+
+# The notes box: how long a note you typed waits before it is handed to a session in the middle
+# of its work. A session that finishes a turn is handed it at once; an urgent note never waits.
+[notes]
+after_minutes = 10
 
 # What "ship the winner" means for each kind of asset, as steps for Claude Code.
 # studio.py todo prints them after the copy step.

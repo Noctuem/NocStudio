@@ -262,7 +262,8 @@ def main() -> int:
         data = json.loads(settings.read_text(encoding="utf-8"))
         check(set(setup.hooks_installed()) == set(setup.HOOK_EVENTS) and data["model"] == "opus" and len(data["hooks"]["Stop"]) == 2
               and data["hooks"]["Stop"][0] == theirs["hooks"]["Stop"][0] and "async" not in data["hooks"]["SessionStart"][0]["hooks"][0]
-              and data["hooks"]["PreToolUse"][0]["hooks"][0]["async"] is True
+              and data["hooks"]["PreToolUse"][0]["hooks"][0]["async"] is True and setup.hooks_hand_over()
+              and all("async" not in data["hooks"][e][-1]["hooks"][0] and data["hooks"][e][-1]["hooks"][0]["timeout"] for e in ("Stop", "PostToolUse"))
               and json.loads(Path(str(settings) + ".before-nocstudio").read_text(encoding="utf-8")) == theirs,
               "installing twice leaves one hook per event, the user's own settings as they were, and a copy from before")
         setup.install_hooks(remove=True)
@@ -273,6 +274,67 @@ def main() -> int:
         except StudioError:
             check(settings.read_text(encoding="utf-8") == "{ not json", "a settings file that does not parse is refused, not rewritten")
         settings.unlink()
+
+        # the notes box: typed on the page, handed to a session by the hooks, sorted, confirmed, worked in
+        def handed(**event) -> str:
+            run = subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "hook.py")], input=json.dumps(event).encode(),
+                                 capture_output=True, env=hook_env)
+            assert run.returncode == 0 and not run.stderr, run
+            return json.loads(run.stdout)["hookSpecificOutput"]["additionalContext"] if run.stdout else ""
+
+        def note_cli(*args, session: str = "") -> str:
+            run = subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "studio.py"), "--home", str(home), "note", *args],
+                                 capture_output=True, text=True, encoding="utf-8", env=dict(hook_env, STUDIO_SESSION=session))
+            return run.stdout + run.stderr
+
+        for sid in ("s-3", "s-4"):
+            hook(session_id=sid, cwd=str(deep), hook_event_name="SessionStart")
+        board.set_lane(studio, "walls", name="Walls", session="s-4")
+        said = "door width to 0.9, same as the hall.  Could the roof be flat instead, how much work?"
+        status, made = http("POST", base + "/api/note", {"text": said})
+        nid = (made.get("note") or {}).get("id", "")
+        check(status == 200 and made["note"]["status"] == "new" and made["note"]["text"] == said
+              and handed(session_id="s-3", cwd=str(deep), hook_event_name="PostToolUse", tool_name="Read") == "",
+              "a note typed on the page is kept as typed, and does not break into work the moment it is typed")
+        text = handed(session_id="s-3", cwd=str(deep), hook_event_name="Stop")
+        check(nid in text and "> door width to 0.9" in text and "TO SORT (1)" in text and "walls (Walls)" in text
+              and handed(session_id="s-4", cwd=str(deep), hook_event_name="Stop") == ""
+              and handed(session_id="s-3", cwd=str(deep), hook_event_name="Stop") == "",
+              "a session that finishes a turn is handed the note in the user's words, once, and no other session is handed it too")
+        part = note_cli("split", nid, "Could the roof be flat instead, how much work?", session="s-3")
+        qid = part.split(":")[0]
+        refused = note_cli("split", nid, "Could the roof be made of glass?", session="s-3")
+        note_cli("sort", nid, "--kind", "directive", "--reading", "Set the door's width to 0.9 m, the width of the hall.", "--lane", "walls", session="s-3")
+        note_cli("reply", qid, "A day: the rafters go, the walls rise 30 cm.", session="s-3")
+        early = note_cli("done", nid, "--result", "Done.", session="s-4")
+        notes = {n["id"]: n for n in http("GET", base + "/api/state")[1]["notes"]}
+        check(qid.startswith("N-") and "own words" in refused and notes[nid]["status"] == "confirm" and notes[nid]["waits"] == "you"
+              and notes[qid]["kind"] == "discussion" and notes[qid]["waits"] == "you" and notes[qid]["from"] == nid and "waits on the user" in early
+              and handed(session_id="s-4", cwd=str(deep), hook_event_name="Stop") == "",
+              "a session sorts a note and splits one that holds two things; a change waits on the user, and nothing is done before they confirm")
+        http("POST", base + f"/api/note/{nid}", {"action": "confirm"})
+        http("POST", base + f"/api/note/{qid}", {"action": "reply", "text": "And if it leaks?"})
+        mine, theirs = handed(session_id="s-3", cwd=str(deep), hook_event_name="Stop"), handed(session_id="s-4", cwd=str(deep), hook_event_name="Stop")
+        check("TO ANSWER (1)" in mine and "And if it leaks?" in mine and nid not in mine and "TO DO (1)" in theirs and nid in theirs and qid not in theirs,
+              "a confirmed change goes to the session on that work, and a reply goes to the session in the conversation")
+        closed = note_cli("done", nid, "--result", "The door is 0.9 m wide.", "--ref", "abc1234", session="s-4")
+        ruling = studio.decisions()[-1]
+        check("on the record as " + ruling["id"] in closed and ruling["his_words"] == said and ruling["source"] == {"type": "note", "ref": nid}
+              and studio.note(nid)["status"] == "done", "closing a change the user ordered records it as a decision in their words")
+        status, made = http("POST", base + "/api/note", {"text": "The latch sticks", "kind": "bug", "urgent": True})
+        bug = made["note"]["id"]
+        wrong = note_cli("sort", bug, "--kind", "later", session="s-3")
+        check(handed(session_id="s-3", cwd=str(deep), hook_event_name="PostToolUse", tool_name="Read", agent_id="a7") == ""
+              and bug in handed(session_id="s-3", cwd=str(deep), hook_event_name="PostToolUse", tool_name="Read") and "themselves" in wrong,
+              "an urgent note reaches a session between tool calls, never a subagent; the kind the user chose stands")
+        note_cli("sort", bug, "--kind", "bug", "--reading", "The front door's latch does not release.", session="s-3")
+        status, made = http("POST", base + "/api/note", {"text": "A weathervane someday?", "kind": "later"})
+        notes = {n["id"]: n for n in http("GET", base + "/api/state")[1]["notes"]}
+        check(notes[bug]["status"] == "go" and notes[bug]["to"] == "" and notes[made["note"]["id"]]["waits"] == ""
+              and handed(session_id="s-3", cwd=str(deep), hook_event_name="Stop") == ""
+              and http("POST", base + f"/api/note/{bug}", {"action": "send", "session": "s-3"})[0] == 200
+              and "TO DO (1)" in handed(session_id="s-3", cwd=str(deep), hook_event_name="Stop"),
+              "a note no session is on waits until the user sends it; an idea for later waits on nobody")
 
         # an asset the user can open: what the game holds, by file, folder or glob
         (game / "content/audio/core").mkdir(parents=True); (game / "content/audio/tape").mkdir(parents=True)

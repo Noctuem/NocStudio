@@ -296,6 +296,32 @@ details.brief summary { cursor: pointer; font-weight: 600; }
 .note { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
 .note img.shot { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; cursor: zoom-in; background: var(--stage); display: block; }
 .note .nb { padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 10px; }
+/* the notes box */
+.notebox { display: flex; flex-direction: column; gap: 8px; max-width: 980px; }
+.notebox textarea { min-height: 62px; font-size: 15px; }
+.notebox .picks, .jot .jf, .jot .jh, .notepop .jh { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+main > section > .say { max-width: 980px; flex-wrap: wrap; }
+.notebox .grow, .jot .jf .grow, .notepop .jh .grow { flex: 1 1 auto; }
+.notepop { position: fixed; right: var(--gutter); top: 64px; z-index: 80; width: min(560px, calc(100vw - 2 * var(--gutter))); display: flex; flex-direction: column; gap: 10px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; box-shadow: 0 14px 44px rgba(0, 0, 0, 0.45); }
+.jots { display: flex; flex-direction: column; gap: 10px; max-width: 980px; }
+.jot { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.jot.mine { border-color: color-mix(in srgb, var(--accent) 60%, transparent); }
+.jot .jh { gap: 6px 10px; }
+.jot .jh .id { font: 600 12px/1.4 var(--font-mono); color: var(--accent-fg); white-space: nowrap; }
+.jot .jh .where { flex: 1 1 220px; min-width: 0; color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+.jot.mine .jh .where { color: var(--fg); font-weight: 600; }
+.jot .jh .d { font: 12px/1.4 var(--font-mono); color: var(--muted); white-space: nowrap; }
+.jot blockquote { overflow-wrap: anywhere; }
+.jot.done blockquote, .jot.parked blockquote, .jot.later blockquote { border-left-color: var(--line); }
+.jot .sub { color: var(--muted); font-size: 12px; }
+.jot .answer .label { color: var(--muted); font-size: 12px; }
+.jot .msg { display: grid; grid-template-columns: 78px minmax(0, 1fr); gap: 12px; font-size: 14px; }
+.jot .msg > span { color: var(--muted); font-size: 12px; line-height: 1.5; }
+.jot .msg .said { white-space: pre-wrap; overflow-wrap: anywhere; }
+.jot .msg.claude > .md { padding-left: 12px; border-left: 2px solid var(--line); overflow-wrap: anywhere; display: flex; flex-direction: column; gap: 6px; }
+.jot select { background: var(--surface); color: inherit; border: 1px solid var(--line); border-radius: var(--radius); padding: 4px 8px; font-size: 12px; max-width: 260px; }
+.jot textarea { min-height: 34px; padding: 6px 9px; font-size: 14px; }
 .answer { background: var(--bg); border: 1px solid var(--line-soft); border-radius: var(--radius); padding: 9px 11px; display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
 
 .endnote { display: flex; flex-direction: column; gap: 8px; max-width: 96ch; }

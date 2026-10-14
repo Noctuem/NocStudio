@@ -129,11 +129,15 @@ must not commit or edit the project.
 ## 5. Live reporting
 
 `S hooks status` says whether Claude Code already reports what each session
-is doing to NocStudio. If not, tell the user in two lines what installing
-does (it adds one entry per event to their own Claude Code settings,
-`~/.claude/settings.json`, keeps a copy of the file from before, and applies
-to every project that has a Studio and to none that has not) and, when they
-agree, run:
+is doing to NocStudio, and whether sessions are handed the notes the user
+types in the Studio (an install from before the notes box does the first and
+not the second; installing again brings it up to date). If either is missing,
+tell the user in two lines what installing does (it adds one entry per event
+to their own Claude Code settings, `~/.claude/settings.json`, keeps a copy of
+the file from before, and applies to every project that has a Studio and to
+none that has not; two of the entries make a session wait a moment for the
+hook, when it finishes a turn and after each tool call, so their notes can
+reach it) and, when they agree, run:
 
 ```
 S hooks install

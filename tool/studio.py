@@ -26,9 +26,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from studiolib import bake, board, checks, server, setup  # noqa: E402
-from studiolib.store import (HAND_KINDS, HAND_STATUS, KINDS, MILESTONE_STATUS, MODES, SLOT_STATUS, TRIAGE_STATUS,  # noqa: E402
-                             Studio, StudioError)
+from studiolib import bake, board, checks, notes as notebox, server, setup  # noqa: E402
+from studiolib.store import (HAND_KINDS, HAND_STATUS, KINDS, MILESTONE_STATUS, MODES, NOTE_KINDS, SLOT_STATUS,  # noqa: E402
+                             TRIAGE_STATUS, Studio, StudioError)
 
 
 def find_home(arg: str) -> Path:
@@ -200,7 +200,18 @@ def cmd_status(a):
     if state["playtests"]:
         print(f"Playtest notes not yet answered: {open_notes}")
     print(f"Closed batches: {len(groups['processed'])}   Decisions on record: {len(state['decisions'])}")
+    note_line(s)
     reminders(s)
+
+
+def note_line(s: Studio) -> None:
+    """The user's notes that no session has dealt with: the hooks hand them over, and this says so when asked."""
+    rows = s.notes_view()
+    mine, theirs = [n for n in rows if n["waits"] == "claude"], [n for n in rows if n["waits"] == "you"]
+    if mine:
+        print(f"\nNotes from the user that wait on a session: {len(mine)}   (studio.py note waiting)")
+    if theirs:
+        print(f"Notes that wait on the user, on the page: {len(theirs)}")
 
 
 def reminders(s: Studio) -> None:
@@ -263,6 +274,7 @@ def cmd_todo(a):
         print()
     if not items:
         print("Nothing to do: the user has no submitted verdict waiting.")
+        note_line(s)
         reminders(s)
         return
     print(f"{len(items)} verdict{'s' if len(items) != 1 else ''} to act on, oldest first. Their words are quoted exactly.\n")
@@ -502,12 +514,15 @@ def cmd_hooks(a):
         events = setup.hooks_installed()
         print(f"Claude Code reports {len(events)} kinds of event to {setup.HOOK}" if events
               else f"Not installed: studio.py hooks install   (it edits {setup.claude_settings()})")
+        if events and not setup.hooks_hand_over():
+            print("They were installed before the notes box, so sessions are not handed the user's notes: studio.py hooks install")
         return
     out = setup.install_hooks(remove=a.action == "remove")
     print(f"{'Removed from' if a.action == 'remove' else 'Installed in'} {out['settings']}"
           + (f"\n  as it was before: {out['backup']}" if out["backup"] else ""))
     if a.action == "install":
-        print("Every Claude Code session in a project that has a Studio now shows on its Overview while it works.\n"
+        print("Every Claude Code session in a project that has a Studio now shows on its Overview while it works,\n"
+              "and is handed the notes the user leaves for it in the notes box.\n"
               "Sessions already open pick it up within a few seconds, or when they next start.")
 
 
@@ -544,6 +559,49 @@ def cmd_hand(a):
                    run=a.run, status=a.status, group=a.group, kind=a.kind, default=a.default,
                    urgent=True if a.urgent else (False if a.no_urgent else None))
     print(f"{x['id']}: {x['status']}")
+
+
+def cmd_note(a):
+    s = Studio(find_home(a.home))
+    me = a.session or os.environ.get("STUDIO_SESSION", "") or board._caller(s)
+    rest = list(a.rest)
+    if a.action == "list":
+        rows = s.notes_view()
+        for n in rows if a.all else [n for n in rows if n["status"] in notebox.OPEN]:
+            on = {"you": "waits on the user", "claude": "waits on " + (n["to_name"] or ("any session" if n["to"] == "*" else "no session: nobody is on it"))}.get(n["waits"], "")
+            print(f"{n['status']:8} {n['kind'] or '-':11} {n['id']}  {' '.join(n['text'].split())[:70]}" + (f"   ({on})" if on else ""))
+        return
+    if a.action == "waiting":
+        rows = [n for n in s.notes() if notebox.waits(n) == "claude"]
+        print(notebox.wording(rows, s.home, notebox.lanes(s.home)) if rows else "No note waits on a session.")
+        return
+    if a.action == "add":  # something the user said in chat that belongs in the box
+        note = s.add_note(" ".join(rest), kind=a.kind)
+        print(f"{note['id']}: in the notes box" + (f", as {note['kind']}" if note["kind"] else ""))
+        return
+    if not rest:
+        raise StudioError(f"note {a.action} needs an id")
+    nid, text = rest[0], " ".join(rest[1:])
+    if a.action == "show":
+        print(json.dumps(s.note(nid), indent=2, ensure_ascii=False))
+    elif a.action == "sort":
+        if a.mine and not me:
+            raise StudioError("could not tell which session this is: pass --session <id>, or name the work with --lane <id>")
+        note = s.sort_note(nid, a.kind, reading=a.reading, lane=a.lane, session=me if a.mine else "")
+        after = {"confirm": "the user confirms it on the page before anything is done; do not make the change yet",
+                 "later": "kept for later; nothing more to do",
+                 "go": "yours to do now; close it with: note done" if a.mine else
+                       ("sent to the session on " + a.lane if a.lane else "no session is on that part, and the page says so")}[note["status"]]
+        print(f"{nid}: {note['kind']}. {after[0].upper()}{after[1:]}.")
+    elif a.action == "split":
+        note = s.split_note(nid, text)
+        print(f"{note['id']}: a note of its own, from {nid}. Sort both.")
+    elif a.action == "reply":
+        s.reply_note(nid, text, session=me)
+        print(f"{nid}: answered. They read it on the page, and their reply comes back to you.")
+    elif a.action == "done":
+        note = s.close_note(nid, result=a.result, ref=a.ref, parked=a.parked)
+        print(f"{nid}: {'left with the user' if a.parked else 'done'}" + (f", on the record as {note['decision']}" if note.get("decision") else ""))
 
 
 def cmd_index(a):
@@ -772,6 +830,20 @@ def main(argv=None) -> int:
     c.add_argument("--group", default="", help="Playtest, Machines, Steam, ...")
     c.add_argument("--status", default="", choices=("",) + HAND_STATUS)
     c.set_defaults(fn=cmd_hand)
+
+    c = sub.add_parser("note", help="the user's notes box: sort what they typed, answer a discussion, close what was done")
+    c.add_argument("action", choices=("waiting", "list", "show", "sort", "reply", "split", "done", "add"))
+    c.add_argument("rest", nargs="*", help="the note's id, then the words for reply, split and add")
+    c.add_argument("--kind", default="", choices=("",) + NOTE_KINDS)
+    c.add_argument("--reading", default="", help="sort: what you take the note to mean, plainly; the user confirms a directive or a rule against it")
+    c.add_argument("--mine", action="store_true", help="sort: it is in the part of the project this session works on, and this session will do it")
+    c.add_argument("--lane", default="", help="sort: the piece of work on the board it belongs to")
+    c.add_argument("--result", default="", help="done: what was done, in a sentence the user can read")
+    c.add_argument("--ref", default="", help="done: a commit, or the batch filed for options")
+    c.add_argument("--parked", action="store_true", help="done: it cannot or should not be done; --result says why")
+    c.add_argument("--session", default="", help="this session's id, when the tool cannot tell")
+    c.add_argument("--all", action="store_true", help="list: closed notes too")
+    c.set_defaults(fn=cmd_note)
 
     c = sub.add_parser("index", help="rewrite INDEX.md and decisions/DECISIONS.md"); c.set_defaults(fn=cmd_index)
 

@@ -111,6 +111,8 @@
     hand: async (id, action, note) => {
       for (const x of ((STATIC.state.overview || {}).hands || [])) if (x.id === id) Object.assign(x, { status: { done: 'done', park: 'parked', reopen: 'open' }[action], his_note: note });
     },
+    addNote: async () => { throw new Error('This is a sample page: notes are not kept here'); },
+    note: async () => { throw new Error('This is a sample page: notes are not kept here'); },
     src: (url) => STATIC.files[url] || '',
     bytes: async (url) => { if (!STATIC.files[url]) throw new Error('missing'); return b64bytes(STATIC.files[url]); },
   } : {
@@ -126,6 +128,8 @@
     addDecision: (d) => call('POST', '/api/decisions', d),
     confirm: (key, confirmed, note) => call('PUT', '/api/triage', { key, confirmed, confirm_note: note }),
     hand: (id, action, note) => call('POST', '/api/hand', { id, action, note }),
+    addNote: (text, kind, urgent) => call('POST', '/api/note', { text, kind, urgent }),
+    note: (id, action, extra) => call('POST', '/api/note/' + encodeURIComponent(id), Object.assign({ action }, extra || {})),
     src: (url) => url,
     bytes: async (url) => { const r = await fetch(url); if (!r.ok) throw new Error('missing'); return r.arrayBuffer(); },
   };
@@ -504,12 +508,14 @@
   function top(r) {
     const st = S.state, mine = st.batches.filter((b) => b.status === 'open' || b.status === 'draft').length;
     const confirmQ = st.playtests.reduce((n, p) => n + p.reports.filter((x) => x.triage.status === 'fixed' && x.triage.confirmed == null).length, 0);
+    const noteQ = notesOf().filter((n) => n.waits === 'you').length;
     const tab = (id, label, count, hot) => link(id, { class: (r === id || (id === 'inbox' && (r.startsWith('b.') || r === 'samples')) || (id === 'library' && r.startsWith('s.'))) ? 'on' : '' }, label,
       count ? h('span', { class: 'count' + (hot ? ' hot' : '') }, String(count)) : null);
     return h('header', { class: 'top' },
       link('overview', { class: 'brand' }, h('b', {}, 'Noc'), 'Studio', h('small', {}, st.project || '')),
-      h('nav', { class: 'nav', 'aria-label': 'Sections' }, tab('overview', 'Overview'), tab('inbox', 'Inbox', mine, true), tab('library', 'Library'), tab('decisions', 'Decisions', st.decisions.length), tab('build', 'Build'), st.has_playtests === false ? null : tab('playtests', 'Playtests', confirmQ, true)),
+      h('nav', { class: 'nav', 'aria-label': 'Sections' }, tab('overview', 'Overview'), tab('inbox', 'Inbox', mine, true), tab('notes', 'Notes', noteQ, true), tab('library', 'Library'), tab('decisions', 'Decisions', st.decisions.length), tab('build', 'Build'), st.has_playtests === false ? null : tab('playtests', 'Playtests', confirmQ, true)),
       h('span', { class: 'spacer' }),
+      st.static ? null : h('button', { class: 'btn small', type: 'button', title: 'Leave a note for the project (N)', onclick: openNotePop }, 'Note'),
       st.hub ? h('a', { class: 'btn small', href: st.hub, title: 'Back to the list of your projects' }, 'All projects') : null, scaleControl(), themeControl(),
       st.static ? h('span', { class: 'sample' }, 'Sample data. Candidates are placeholders drawn by script.') : null);
   }
@@ -528,6 +534,7 @@
       else if (r === 'library') page = libraryPage();
       else if (r === 'decisions') page = decisionsPage();
       else if (r === 'playtests') page = playtestsPage();
+      else if (r === 'notes') page = notesPage();
       else if (r === 'build') page = buildPage();
       else page = overviewPage();
       app.replaceChildren(top(r), page);
@@ -665,7 +672,8 @@
     const confirms = st.playtests.reduce((n, p) => n + p.reports.filter((x) => x.triage.status === 'fixed' && x.triage.confirmed == null).length, 0);
     const openHands = hands.filter((x) => x.status === 'open').sort((a, b) => (b.urgent ? 1 : 0) - (a.urgent ? 1 : 0));
     const laterHands = hands.filter((x) => x.status === 'later'), oldHands = hands.filter((x) => x.status === 'done' || x.status === 'parked');
-    const owed = mine.length + (confirms ? 1 : 0) + openHands.length;
+    const myNotes = notesOf().filter((n) => n.waits === 'you');
+    const owed = mine.length + (confirms ? 1 : 0) + openHands.length + myNotes.length;
     const col = h('div', { class: 'hudmain' });
 
     // a project that has not been planned yet says so, and says how
@@ -746,6 +754,8 @@
     for (const b of mine) asks.append(link('b.' + b.id, { class: 'need go' },
       h('span', { class: 'chip accent' }, b.status === 'draft' ? 'Started' : (b.mode === 'question' ? 'Answer' : 'Judge ' + b.count)), h('span', { class: 'grow' }, b.title), h('span', { class: 'chip' }, KIND[b.kind] || b.kind)));
     if (confirms) asks.append(link('playtests', { class: 'need go' }, h('span', { class: 'chip accent' }, 'Confirm'), h('span', { class: 'grow' }, confirms === 1 ? 'One fix to confirm in the build' : confirms + ' fixes to confirm in the build')));
+    for (const n of myNotes) asks.append(link('notes', { class: 'need go' },
+      h('span', { class: 'chip accent' }, n.status === 'confirm' ? 'Confirm' : 'Reply'), h('span', { class: 'grow', html: inline(clip(n.status === 'confirm' ? n.reading || n.text : n.text, 110)) }), h('span', { class: 'chip' }, 'Note')));
     for (const x of openHands) asks.append(askRow(x));
     const setAll = (open) => { asks.querySelectorAll('details').forEach((d) => { d.open = open; OPEN.set(d.dataset.fold, open); }); };
     const next = (now.next || []).map(split);
@@ -1384,6 +1394,125 @@
         search, h('div', { class: 'filters' }, tagBtns)),
       h('section', {}, list, more),
       h('section', {}, h('div', { class: 'sec-head' }, h('h2', {}, 'Rule on something now'), h('p', {}, 'For a decision that did not come from a batch.')), h('div', { class: 'form' }, title, words, h('div', {}, add))));
+  }
+
+  // ------------------------------------------------------------ the notes box
+  const NOTE = { directive: 'Change', bug: 'Bug', discussion: 'Discussion', options: 'Options', rule: 'Rule', later: 'Later' };
+  const NOTE_PICK = [['', 'Claude sorts it'], ['directive', 'Change this'], ['discussion', 'Discuss'], ['bug', 'Bug'], ['options', 'Show me options'], ['rule', 'Standing rule'], ['later', 'For later']];
+  const notesOf = () => (S.state || {}).notes || [];
+  const clip = (text, n) => { const t = String(text || '').replace(/\s+/g, ' ').trim(); return t.length > n ? t.slice(0, n - 1).trimEnd() + '…' : t; };
+  const afterNote = async (said) => { S.state = await API.state(); if (said) toast(said); const r = route(); if (r === 'notes' || r === 'overview') render(r, true); else { const bar = $('.top'); if (bar) bar.replaceWith(top(r)); } };
+
+  // where the user types: one box, the same on the Notes page and behind the Note button on every page
+  function noteBox(done) {
+    const D = S.jot || (S.jot = { text: '', kind: '', urgent: false });
+    const text = h('textarea', { class: 'field', rows: 2, placeholder: 'An order, a bug, a question, a half-formed idea. Enter sends it; Shift+Enter starts a new line.', 'aria-label': 'A note for the project',
+      value: D.text, oninput: (e) => { D.text = e.target.value; } });
+    const picks = NOTE_PICK.map(([k, label]) => { const b = h('button', { class: 'btn small' + (D.kind === k ? ' on' : ''), type: 'button', 'aria-pressed': String(D.kind === k),
+      onclick: () => { D.kind = k; picks.forEach((x) => { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', String(x === b)); }); text.focus(); } }, label); return b; });
+    const urgent = h('button', { class: 'btn small' + (D.urgent ? ' on' : ''), type: 'button', 'aria-pressed': String(D.urgent), title: 'Handed to a session at its next step, not its next break',
+      onclick: () => { D.urgent = !D.urgent; urgent.classList.toggle('on', D.urgent); urgent.setAttribute('aria-pressed', String(D.urgent)); } }, 'Urgent');
+    const send = async () => {
+      if (!text.value.trim()) { toast('Write the note first'); return; }
+      try { await API.addNote(text.value, D.kind, D.urgent); S.jot = null; text.value = ''; await afterNote(D.kind === 'later' ? 'Kept for later' : 'Noted'); if (done) done(); }
+      catch (e) { toast(e.message); }
+    };
+    text.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); } });
+    return { el: h('div', { class: 'notebox' }, text, h('div', { class: 'picks' }, picks, h('span', { class: 'grow' }), urgent, h('button', { class: 'btn small primary', type: 'button', onclick: send }, 'Send'))), text };
+  }
+  function closeNotePop() { const el = $('.notepop'); if (el) el.remove(); document.removeEventListener('keydown', notePopKey); }
+  function notePopKey(e) { if (e.key === 'Escape') { closeNotePop(); e.stopPropagation(); } }
+  function openNotePop() {
+    if ($('.notepop')) { closeNotePop(); return; }
+    const box = noteBox(closeNotePop);
+    document.body.append(h('div', { class: 'notepop', role: 'dialog', 'aria-label': 'Leave a note' },
+      h('div', { class: 'jh' }, h('h2', { class: 'grow' }, 'Leave a note'), link('notes', { class: 'btn small', onclick: () => { closeNotePop(); go('notes'); } }, 'All notes'),
+        h('button', { class: 'btn small', type: 'button', onclick: closeNotePop }, 'Close (Esc)')), box.el));
+    document.addEventListener('keydown', notePopKey);
+    box.text.focus();
+  }
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'n' || e.ctrlKey || e.metaKey || e.altKey || S.over || !S.state || route().startsWith('b.')) return;
+    if (/^(TEXTAREA|INPUT|SELECT)$/.test((e.target || {}).tagName || '')) return;
+    e.preventDefault(); openNotePop();
+  });
+
+  function noteWhere(n) {
+    const who = (x) => clip(x, 46);
+    if (n.status === 'new') return n.handed ? 'Handed to ' + who(n.handed.name) + ' ' + when(n.handed.at) + '; not read yet' : 'Waiting for a session to read it';
+    if (n.status === 'confirm') return 'Confirm what Claude took it to mean';
+    if (n.status === 'go') {
+      if (n.handed) return 'Handed to ' + who(n.handed.name) + ' ' + when(n.handed.at);
+      if (n.to === '') return 'No session is on this part of the project';
+      return 'Waiting for ' + (n.to === '*' ? 'the first session to reach a break' : who(n.to_name)) + ' to reach a break';
+    }
+    if (n.status === 'talk') return n.waits === 'you' ? 'Claude answered' : (n.handed ? 'Handed to ' + who(n.handed.name) + ' ' + when(n.handed.at) : 'Waiting for a session to answer');
+    if (n.status === 'later') return 'Kept for later';
+    return n.status === 'done' ? (n.closed_by === 'you' ? 'Closed by you' : 'Done') : (n.closed_by === 'you' ? 'Set aside by you' : 'Left with you');
+  }
+  function noteCard(n) {
+    S.notes = S.notes || {};
+    const key = 'n:' + n.id, open = ['new', 'confirm', 'go', 'talk'].includes(n.status);
+    const act = async (action, extra, said) => { try { await API.note(n.id, action, extra); delete S.notes[key]; await afterNote(said); } catch (e) { toast(e.message); } };
+    const words = (hint) => h('textarea', { class: 'field', rows: 1, placeholder: hint, 'aria-label': hint + ' (' + n.id + ')', value: S.notes[key] || '', oninput: (e) => { S.notes[key] = e.target.value; } });
+    const btn = (label, fn, cls) => h('button', { class: 'btn small' + (cls ? ' ' + cls : ''), type: 'button', onclick: fn }, label);
+    const kind = open || n.status === 'later' ? h('select', { 'aria-label': 'What kind of note ' + n.id + ' is', title: 'Say what kind of note this is yourself',
+      onchange: (e) => { if (e.target.value) act('kind', { kind: e.target.value }, 'Sorted as ' + NOTE[e.target.value].toLowerCase()); } },
+      h('option', { value: '' }, n.kind ? 'Change the kind' : 'Sort it yourself'), Object.keys(NOTE).filter((k) => k !== n.kind).map((k) => h('option', { value: k }, NOTE[k]))) : null;
+    const urgent = open ? btn(n.urgent ? 'Not urgent' : 'Urgent', () => act('urgent', {}, n.urgent ? 'No longer urgent' : 'Marked urgent')) : null;
+    let controls = null;
+    if (n.status === 'confirm') {
+      const t = words('Anything to add, or what you meant instead');
+      controls = [t, h('div', { class: 'jf' }, btn(n.kind === 'rule' ? 'Confirm the rule' : 'Confirm, work it in', () => act('confirm', { text: t.value }, 'Confirmed'), 'primary'),
+        btn('Not what I meant', () => (t.value.trim() ? act('back', { text: t.value }, 'Sent back') : toast('Say what you meant instead'))), btn('Drop it', () => act('park', {}, 'Set aside')), h('span', { class: 'grow' }), kind, urgent)];
+    } else if (n.status === 'talk') {
+      const t = words('Your reply');
+      controls = [t, h('div', { class: 'jf' }, btn('Reply', () => (t.value.trim() ? act('reply', { text: t.value }, 'Sent') : toast('Write your reply first')), 'primary'),
+        btn('Make it a change', () => act('kind', { kind: 'directive' }, 'Now a change: Claude will say what it takes it to mean')), btn('Settled', () => act('done', {}, 'Closed')), btn('Park it', () => act('park', {}, 'Set aside')),
+        h('span', { class: 'grow' }), kind, urgent)];
+    } else if (n.status === 'go' || n.status === 'new') {
+      const t = words('Add to it'), sessions = ((S.state.overview || {}).live || {}).sessions || [];
+      const sendTo = n.status === 'go' ? h('select', { 'aria-label': 'Send ' + n.id + ' to a session', onchange: (e) => { if (e.target.value) act('send', { session: e.target.value === '*' ? '' : e.target.value }, 'Sent'); } },
+        h('option', { value: '' }, 'Send it to…'), h('option', { value: '*' }, 'Whichever session is free first'),
+        sessions.filter((s) => s.state !== 'ended').map((s) => h('option', { value: s.id }, clip(s.title || s.prompt || 'A session', 50)))) : null;
+      controls = [t, h('div', { class: 'jf' }, btn('Add', () => (t.value.trim() ? act('reply', { text: t.value }, 'Added') : toast('Write what to add first'))), sendTo, btn('Drop it', () => act('park', {}, 'Set aside')), h('span', { class: 'grow' }), kind, urgent)];
+    } else if (n.status === 'later') {
+      controls = h('div', { class: 'jf' }, btn('Bring it back', () => act('reopen', {}, 'Back in the box')), btn('Drop it', () => act('park', {}, 'Set aside')), h('span', { class: 'grow' }), kind);
+    } else controls = h('div', { class: 'jf' }, btn('Open again', () => act('reopen', {}, 'Open again')));
+    return h('article', { class: 'jot ' + n.status + (n.waits === 'you' ? ' mine' : ''), id: 'note-' + n.id },
+      h('div', { class: 'jh' }, h('span', { class: 'id' }, n.id), h('span', { class: 'chip' + (n.kind ? ' accent' : '') }, n.kind ? NOTE[n.kind] || n.kind : 'Unsorted'),
+        n.urgent && open ? h('span', { class: 'chip bad' }, 'Urgent') : null, h('span', { class: 'where' }, noteWhere(n)), h('span', { class: 'd' }, when(n.created))),
+      h('blockquote', {}, n.text),
+      n.from ? h('span', { class: 'sub' }, 'Part of ' + n.from + ', split off so each part gets its own answer.') : null,
+      n.reading ? h('div', { class: 'answer' }, h('span', { class: 'label' }, n.status === 'confirm' ? 'Claude takes this to mean' : 'Taken to mean'), h('span', { html: inline(n.reading) })) : null,
+      (n.thread || []).map((m) => h('div', { class: 'msg ' + m.who }, h('span', {}, m.who === 'you' ? 'You' : 'Claude', h('br'), when(m.at)), m.who === 'you' ? h('div', { class: 'said' }, m.text) : md(m.text))),
+      n.result ? h('div', { class: 'answer' }, h('span', { class: 'label' }, n.status === 'parked' ? 'Why it was left' : 'What was done'), h('span', { html: inline(n.result) }),
+        n.ref || n.decision ? h('span', { class: 'mono muted' }, [n.ref, n.decision ? 'on the record as ' + n.decision : ''].filter(Boolean).join(' · ')) : null) : null,
+      controls);
+  }
+  function notesPage() {
+    const all = notesOf().slice().reverse(), ov = S.state.overview || {};
+    const open = (n) => ['new', 'confirm', 'go', 'talk'].includes(n.status);
+    const views = [['open', 'Open', open], ['you', 'Needs you', (n) => n.waits === 'you'], ['new', 'Unsorted', (n) => n.status === 'new' && !n.kind]]
+      .concat(Object.keys(NOTE).map((k) => [k, NOTE[k], (n) => n.kind === k && (k === 'later' ? n.status === 'later' : open(n))]), [['closed', 'Closed', (n) => n.status === 'done' || n.status === 'parked']]);
+    S.noteView = views.some((v) => v[0] === S.noteView) ? S.noteView : 'open';
+    const list = h('div', { class: 'jots' });
+    const tabs = views.map(([id, label, test]) => { const count = all.filter(test).length;
+      const b = h('button', { class: 'btn small' + (S.noteView === id ? ' on' : ''), type: 'button', onclick: () => { S.noteView = id; tabs.forEach((x) => x.classList.toggle('on', x === b)); draw(); } },
+        label, count ? h('span', { class: 'count' + (id === 'you' ? ' hot' : '') }, String(count)) : null); return b; });
+    function draw() {
+      const test = views.find((v) => v[0] === S.noteView)[2];
+      const rows = all.filter(test).sort((a, b) => (b.waits === 'you') - (a.waits === 'you') || (!!b.urgent) - (!!a.urgent));
+      list.replaceChildren(...(rows.length ? rows.map(noteCard) : [h('div', { class: 'empty' }, all.length ? 'Nothing here.' : (S.state.static ? 'No notes in this sample.' : 'No notes yet. Type one above.'))]));
+    }
+    draw();
+    return h('main', {},
+      h('section', {}, h('h1', {}, 'Notes'),
+        h('p', { class: 'muted', style: 'max-width:76ch' }, 'Type whatever comes to mind and carry on. A session is handed your notes when it finishes a turn, or between steps once a note has waited a while, so nothing is spent checking for them. ',
+          'A change or a rule comes back to you to confirm before anything is done; a question becomes a thread you answer here.'),
+        S.state.static ? null : noteBox().el,
+        ov.hooks_notes === false && !S.state.static ? h('div', { class: 'say' }, h('span', {}, 'Sessions are not being handed your notes yet. In the project, say to Claude Code:'), h('code', {}, 'turn on the Studio\'s live reporting'), copyButton('turn on the Studio\'s live reporting')) : null),
+      h('section', {}, h('div', { class: 'filters' }, tabs), list));
   }
 
   // --------------------------------------------------------------- playtests

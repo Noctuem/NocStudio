@@ -219,6 +219,14 @@ def make_handler(home: Path, allowed_hosts: set[str], quiet: bool = False, hub: 
                         return self.send_json({"ok": True, "triage": entry})
                     if parts == ["api", "ui"]:
                         return self.send_json({"ok": True, "ui": studio.set_ui(scale=data.get("scale"), theme=data.get("theme"))})
+                    if parts == ["api", "note"]:
+                        note = studio.add_note(str(data.get("text") or ""), kind=str(data.get("kind") or ""),
+                                               urgent=bool(data.get("urgent")))
+                        return self.send_json({"ok": True, "note": note})
+                    if len(parts) == 3 and parts[:2] == ["api", "note"]:
+                        note = studio.answer_note(parts[2], str(data.get("action") or ""), text=str(data.get("text") or ""),
+                                                  kind=str(data.get("kind") or ""), session=str(data.get("session") or ""))
+                        return self.send_json({"ok": True, "note": note})
                     if parts == ["api", "hand"]:
                         row = studio.answer_hand(str(data.get("id") or ""), str(data.get("action") or ""),
                                                  str(data.get("note") or ""))

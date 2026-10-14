@@ -5,8 +5,11 @@ Overview can show what every session in a project is doing right now.
 finds the Studio of the project the session is working in, and updates that session's file under
 `<studio home>/live/`. A project without a Studio costs one cache lookup and nothing is written.
 
-It only watches. It prints nothing, never blocks a session, and always exits 0. What it keeps is on
-this machine and is not history: the live folder is left out of the Studio's git record.
+It watches, and it does one thing more: when the user has left notes in the Studio's notes box that
+wait on this session, it hands them over. That happens when the session finishes a turn (it carries on
+and deals with them), and between tool calls once a note has waited a while or is marked urgent. With
+no note waiting it prints nothing. It never fails a session and always exits 0. What it keeps is on this
+machine and is not history: the live folder is left out of the Studio's git record.
 """
 import json
 import os
@@ -18,7 +21,7 @@ KIT = Path(__file__).resolve().parents[1]
 REGISTRY = Path(os.environ.get("STUDIO_REGISTRY") or KIT / "studios.json")
 CACHE = Path(os.environ.get("LOCALAPPDATA") or Path.home() / ".cache") / "NocStudio" / "hook-cache.json"
 KEEP_ENDED = 24 * 3600   # a session that ended stays on file this long
-EVENTS = ("SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PermissionRequest", "Notification",
+EVENTS = ("SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PermissionRequest", "Notification",
           "Stop", "StopFailure", "SubagentStart", "SubagentStop", "TaskCreated", "TaskCompleted", "CwdChanged")
 
 
@@ -241,13 +244,29 @@ def record(home: str, e: dict) -> None:
                                             f"note={e['notification_type']}" if e.get("notification_type") else ""])) + "\n")
         if e.get("hook_event_name") == "SessionStart":
             for old in live.glob("*.json"):  # forget sessions that ended a day ago
-                if old != path and time.time() - old.stat().st_mtime > KEEP_ENDED:
+                if old != path and not old.name.startswith("notes") and time.time() - old.stat().st_mtime > KEEP_ENDED:
                     old.unlink(missing_ok=True)
     finally:
         try:
             os.rmdir(lock)
         except OSError:
             pass
+
+
+def hand_over(home: str, e: dict) -> None:
+    """Print the user's notes that wait on this session, in the shape Claude Code reads back from a hook."""
+    kind, session = e.get("hook_event_name"), str(e.get("session_id") or "")
+    if e.get("agent_id") or not session or not Path(home, "notes").is_dir():
+        return  # a subagent is never handed the user's notes: they go to the session itself
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from studiolib import notes
+    midwork = kind == "PostToolUse"
+    waiting = notes.due(home, session, midwork=midwork)
+    if not waiting:
+        return
+    text = notes.wording(waiting, home, notes.lanes(home), midwork=midwork)
+    out = {"hookSpecificOutput": {"hookEventName": kind, "additionalContext": text}}
+    sys.stdout.write(json.dumps(out))
 
 
 def main() -> int:
@@ -258,11 +277,16 @@ def main() -> int:
         home = home_for(e.get("cwd") or os.getcwd())
         if not home:
             return 0
+        if e.get("hook_event_name") == "PostToolUse":  # between tool calls: nothing is recorded, so it costs a session next to nothing
+            hand_over(home, e)
+            return 0
         env = os.environ.get("CLAUDE_ENV_FILE")
         if env and e.get("session_id") and e.get("hook_event_name") in ("SessionStart", "CwdChanged") and not e.get("agent_id"):
             with open(env, "a", encoding="utf-8", newline="\n") as fh:  # so `studio.py lane` knows which session it is
                 fh.write(f"export STUDIO_SESSION={e['session_id']}\n")
         record(home, e)
+        if e.get("hook_event_name") == "Stop":
+            hand_over(home, e)
     except Exception:  # a watcher must never get in a session's way
         pass
     return 0

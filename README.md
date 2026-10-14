@@ -47,6 +47,29 @@ The first page is a live board:
   only you can do, and questions only you can answer. Each ask says what it blocks and **what
   the agent will do if you say nothing**, so work does not stop while you are away.
 
+### A notes box that reaches your sessions
+
+Type whatever comes to mind on the Notes page, or behind the Note button on any page (press N),
+and carry on. Nothing polls for it. Claude Code's hooks hand your notes to a session when it
+finishes a turn, and between steps once a note has waited ten minutes or is marked urgent, so an
+empty box costs no tokens at all. The session that gets a note says what kind it is, and you can
+overrule it:
+
+| Kind | What you typed | What happens |
+|---|---|---|
+| Change | "jump height to 1.4, same as the ledge" | The session says exactly what it will change. Nothing is done until you confirm. Then it is worked in and recorded as a decision in your words. |
+| Discussion | "could saves be plain text? how much work?" | A thread on the page. Your replies reach the session the same way the note did. |
+| Bug | "the pause menu opens twice" | Fixed and reported, no confirmation. |
+| Options | "the menu feels sluggish" | Two or three variants, filed as a batch for you to judge. |
+| Rule | "never autosave during a cutscene" | Confirmed by you, then recorded and written into the project's instructions. |
+| Later | "a photo mode someday?" | Kept at no cost, and read when the next milestone is planned. |
+
+A note about work another session is doing goes to that session. If no session is on that part
+of the project, the page says so and you send it yourself. What waits on you (a reading to
+confirm, an answer to read) shows in Needs you.
+
+![The Notes page: a discussion, a change waiting to be confirmed, and a note not yet read](docs/screenshots/notes.png)
+
 ### Organised from the start
 
 Say **"start a new project"** or **"plan this project in its Studio"** to Claude Code. It reads
@@ -156,11 +179,15 @@ Code the rules:
    publish, a setback.
 7. Every question for you goes in Needs you with the default the agent will use. It does not
    stop and wait unless nothing can go on without your answer.
+8. Your notes are handed to it; it never polls for them. It makes no change for an order or a
+   rule until you confirm what it took the note to mean.
 
 The agent works through one command (`studio.py new`, `add`, `file`, `todo`, `done`, `decide`,
-`step`, `lane`, `log`, `ask`, `save`, and a few more). Claude Code's hooks report session
-activity on their own: `studio.py hooks install` adds them to your own Claude Code settings
-(keeping a copy from before), they only watch, and a project without a Studio is left alone. You work in the page. Between you is a folder of JSON and media files
+`step`, `lane`, `log`, `ask`, `note`, `save`, and a few more). Claude Code's hooks report session
+activity on their own and hand a session the notes you left for it: `studio.py hooks install`
+adds them to your own Claude Code settings (keeping a copy from before), they say nothing to a
+session unless a note of yours waits on it, and a project without a Studio is left alone. You
+work in the page. Between you is a folder of JSON and media files
 that either side can read, and that lives in its own git repository so the history of what you
 judged is kept.
 
@@ -197,6 +224,9 @@ edges, and expect it to change.
   from game development. Pictures, sounds, writing and questions work for any project.
 - **One person.** A Studio is for one person judging and one machine. There are no accounts and
   no sharing.
+- **Notes need a session that is working.** A session that has finished its turn and sits at
+  the prompt is not woken by a note; it gets it the next time it works. Handing notes over was
+  tested with Claude Code 2.1.296.
 
 `py -3.11 tool\selftest.py` exercises the whole thing in a temp folder and prints one line per
 step. Run it after any change.

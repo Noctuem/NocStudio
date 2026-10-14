@@ -1,13 +1,13 @@
 ---
 name: studio
-description: The Studio is where the user sees where {{PROJECT}} stands, judges everything its makers produce, and where their rulings are kept. Use this skill whenever work produces something the user must judge (concept art, textures, models, animations, sounds, tuning or feel options, design questions with options), whenever they say anything like "process my verdicts", "process my studio verdicts", "act on my reviews", "what did I pick", "what is waiting on me" or "plan this project in its Studio", whenever they rule on something in chat or in a playtest note, before asking them to look at any file, folder or in-app option or to do something only they can do, whenever you have a question for them, and whenever work starts, lands, merges, is published or hits a setback, a build is delivered, a milestone moves or the plan changes (the Overview must stay true).
+description: The Studio is where the user sees where {{PROJECT}} stands, judges everything its makers produce, and where their rulings are kept. Use this skill whenever work produces something the user must judge (concept art, textures, models, animations, sounds, tuning or feel options, design questions with options), whenever they say anything like "process my verdicts", "process my studio verdicts", "act on my reviews", "what did I pick", "what is waiting on me" or "plan this project in its Studio", whenever they rule on something in chat or in a playtest note, whenever a hook hands you notes they left in the Studio or they say "process my notes", before asking them to look at any file, folder or in-app option or to do something only they can do, whenever you have a question for them, and whenever work starts, lands, merges, is published or hits a setback, a build is delivered, a milestone moves or the plan changes (the Overview must stay true).
 ---
 
 # The Studio for {{PROJECT}}
 
 One folder outside this repo: `{{HOME}}`. The user reads and judges in a local
-web page (Overview, Inbox, Library, Decisions, Build, and Playtests when a
-playtest folder is set); you work through one command. Below, `S` is
+web page (Overview, Inbox, Notes, Library, Decisions, Build, and Playtests when
+a playtest folder is set); you work through one command. Below, `S` is
 
     {{S}}
 
@@ -135,6 +135,63 @@ A reading of their words that they did not state goes in `--ruling` and is
 marked as a reading there. Where only a paraphrase exists, leave `--words`
 empty and say so in `--ruling`.
 
+## The notes box
+
+The user types notes on the Studio's Notes page whenever a thought comes: an
+order, a bug, a question, a half-formed idea. **Never poll for them.** Claude
+Code's hooks hand them to you when you finish a turn, and between tool calls
+once a note has waited a while or is marked urgent. What you are handed lists
+each note in their words and repeats the commands below. `S note waiting`
+prints the same when they ask ("process my notes").
+
+A note nobody has read is yours to sort, whichever session you are. Say what
+kind it is and what you take it to mean:
+
+```
+S note sort <id> --kind directive|rule|bug|options|later \
+       --reading "<what you take it to mean, plainly>" [--mine | --lane <lane id>]
+S note reply <id> "<your answer>"                  a discussion is sorted by answering it
+S note split <id> "<part of their words, exact>"   one note holding two things; prints the new id
+```
+
+- **directive**: an order to change something ("jump height to 1.4"). The
+  reading says exactly what you will change, with the names and numbers it
+  touches. **They confirm it on the page before anything is done.** Do not
+  make the change when you sort it.
+- **rule**: a standing rule for every future session. The reading is the rule
+  as it will be recorded. They confirm it too.
+- **bug**: something is broken. No confirmation; it is to be fixed.
+- **options**: a complaint about feel or look with no exact answer in it
+  ("the menu feels sluggish"). Two or three variants get built and filed as
+  a batch for them to judge.
+- **later**: an idea that asks for nothing now. It is kept, and costs nothing.
+  Read these (`S note list`) when you plan the next milestone.
+- **discussion**: a question, or a point they want to talk through. Answer
+  what was asked, with what you looked up to answer it. Their reply comes back
+  to you the same way. A discussion changes nothing in the project; when it
+  turns into something to do, they say so on the page.
+
+`--mine` means the work is in the part of the project you are on and you will
+do it; `--lane <id>` names another piece of work on the board, and the note
+goes to that session; with neither, the page tells them no session is on that
+part and they send it themselves. A kind they chose themselves stands: sort
+it as that. One note that holds two things (a complaint and a question) is
+split first, then each part sorted.
+
+A note that is yours to do (a confirmed directive or rule, a bug, options)
+arrives under TO DO. Do it as you would any work, then close it:
+
+```
+S note done <id> --result "<what was done, in a sentence they can read>" [--ref <commit, or the batch id>]
+S note done <id> --parked --result "<why it cannot or should not be done>"
+```
+
+Closing a directive or a rule records it as a decision in their words, so do
+not also run `S decide` for it. A rule is also written where this project's
+sessions read their instructions. Never answer a note in chat; they read your
+reading, your reply and your result on the page. If they say something in
+chat that belongs in the box, put it there in their words: `S note add "..."`.
+
 ## Slots
 
 A slot is one thing the project holds or needs, named by a dotted id
@@ -222,7 +279,8 @@ lane on the board that nobody is working.
 
 Claude Code's hooks also report, by themselves, what each session is doing
 (working, waiting, which agents are running); that needs nothing from you.
-`S hooks status` says whether they are installed on this machine.
+The same hooks hand you the user's notes (the notes box, above). `S hooks
+status` says whether they are installed on this machine.
 
 ### The log
 
@@ -326,6 +384,7 @@ say so to the user in one line; do not leave it silent.
 
 - `S check <batch>` runs the checks without filing.
 - `S status` shows how far along the project is, what is running, what waits
-  on the user and what waits on you, and says when the board is not true.
+  on the user and what waits on you (their notes included), and says when the
+  board is not true.
   `S step list`, `S lane list`, `S ask list` and `S log` print the rest.
 - Before you say a batch is filed, confirm `S file` printed "Filed."
