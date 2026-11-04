@@ -155,7 +155,11 @@ def make_handler(home: Path, allowed_hosts: set[str], quiet: bool = False, hub: 
                     return self.send_json({"talks": talk.listing(studio.home), "past": past, "repo": str(repo)})
                 if len(rest) == 1:
                     after = int((query.get("after") or ["0"])[0] or 0)
-                    return self.send_json(talk.get(rest[0]).view(after))
+                    t = talk.get(rest[0])
+                    view = t.view(after)
+                    if (query.get("seen") or [""])[0] == "1":  # the page is in front of the user: what it shows is read
+                        t.mark_seen()
+                    return self.send_json(view)
                 if len(rest) == 2 and rest[1] == "history":  # an older session, read from its transcript before carrying on
                     return self.send_json({"events": talk.history(self.talk_repo(studio), rest[0])})
                 return self.fail(404, "no such route")

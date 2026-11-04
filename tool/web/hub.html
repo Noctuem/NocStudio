@@ -20,6 +20,12 @@
   .proj .name { font: 700 22px/1.15 var(--font-display); font-stretch: 87%; color: var(--fg); }
   .proj .where { font: 12px/1.4 var(--font-mono); color: var(--faint); overflow-wrap: anywhere; }
   .proj .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: auto; }
+  .proj .when { font-size: 12px; color: var(--muted); }
+  .proj.waits { border-color: var(--accent); background: linear-gradient(var(--accent-soft), var(--accent-soft)), var(--surface);
+    box-shadow: 0 0 0 1px var(--accent), 0 0 18px color-mix(in srgb, var(--accent) 35%, transparent); }
+  .proj.waits .name::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin: 0 10px 2px 0;
+    background: var(--accent); vertical-align: middle; animation: beat 1.6s ease-out infinite; }
+  @media (prefers-reduced-motion: reduce) { .proj.waits .name::before { animation: none; } }
   #vault { margin-top: 28px; }
   .ideabox { margin-top: 14px; max-width: 980px; }
   .ideabox form { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
@@ -89,20 +95,30 @@
     try { new window.parent.MutationObserver(follow).observe(shell, { attributes: true, attributeFilter: ['data-theme'] }); } catch (e) { /* a launcher that changes nothing */ }
   }
   async function open(row, card) {
-    if (row.url) { location.href = row.url; return; }  // a server's menu: every Studio is already up
+    const to = row.waitsTalk ? '#talk' : '';  // a session waits on you: straight to its Talk page
+    if (row.url) { location.href = row.url + to; return; }  // a server's menu: every Studio is already up
     if (busy) return; busy = true;
     card.querySelector('.chips').replaceChildren(el('span', 'chip accent', 'Starting'));
     try {
       const res = await fetch('api/open', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ home: row.home }) });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'It did not start');
-      location.href = data.url;
+      location.href = data.url + to;
     } catch (e) { busy = false; card.querySelector('.chips').replaceChildren(el('span', 'chip bad', String(e.message || e))); }
   }
   function look(ui) {
     if (ui.scale) document.documentElement.style.zoom = String(ui.scale);
     if (!shell) theme(ui.theme);
     try { localStorage.setItem('studio.theme', ui.theme === 'light' ? 'light' : 'dark'); } catch (e) { /* private window */ }
+  }
+  function ago(t) {
+    if (!t) return '';
+    const s = Date.now() / 1000 - t;
+    if (s < 90) return 'Worked on just now';
+    if (s < 5400) return 'Worked on ' + Math.round(s / 60) + ' min ago';
+    if (s < 129600) return 'Worked on ' + Math.round(s / 3600) + ' h ago';
+    if (s < 86400 * 45) return 'Worked on ' + Math.round(s / 86400) + ' days ago';
+    return 'Worked on ' + new Date(t * 1000).toLocaleDateString(undefined, { month: 'short', year: 'numeric' });
   }
   function draw(rows) {
     none.hidden = rows.length > 0;
@@ -111,6 +127,14 @@
       const chips = el('div', 'chips');
       if (row.missing) { card.disabled = true; chips.append(el('span', 'chip bad', 'Its folder is gone')); }
       else {
+        const talk = row.talk || {};
+        row.waitsTalk = !!(talk.asks || talk.replies);
+        if (row.waitsTalk) {
+          card.classList.add('waits');
+          card.title = 'A Talk session waits on you; this opens its Talk page';
+          if (talk.asks) chips.append(el('span', 'chip accent', talk.asks === 1 ? 'Talk asks you' : talk.asks + ' talks ask you'));
+          if (talk.replies) chips.append(el('span', 'chip accent', talk.replies === 1 ? 'Claude replied' : talk.replies + ' replies to read'));
+        }
         chips.append(el('span', 'chip' + (row.judge ? ' accent' : ''), row.judge ? row.judge + ' to judge' : 'Nothing to judge'));
         if (row.notes) chips.append(el('span', 'chip accent', row.notes + (row.notes === 1 ? ' note waits' : ' notes wait') + ' on you'));
         if (row.hands) chips.append(el('span', 'chip', row.hands + ' only you can do'));
@@ -118,7 +142,8 @@
         if (row.running) chips.append(el('span', 'chip keep', 'Open'));
         card.addEventListener('click', () => open(row, card));
       }
-      card.append(...[el('div', 'name', row.name), row.url ? null : el('div', 'where', row.repo || row.home), chips].filter(Boolean));
+      card.append(...[el('div', 'name', row.name), row.url ? null : el('div', 'where', row.repo || row.home),
+        row.touched ? el('div', 'when', ago(row.touched)) : null, chips].filter(Boolean));
       return card;
     }));
   }

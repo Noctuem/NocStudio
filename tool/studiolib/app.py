@@ -45,6 +45,41 @@ def _get(url: str):
         return None
 
 
+_TOUCHED: dict[str, tuple] = {}
+
+
+def touched(repo: str, home: str) -> float:
+    """When a project was last worked on: the newest of its git activity, its Claude Code sessions (its
+    worktrees' too) and its Studio's own commits. Kept for half a minute; the menu asks every few seconds."""
+    hit = _TOUCHED.get(repo + "|" + home)
+    if hit and time.monotonic() - hit[0] < 30:
+        return hit[1]
+    from .talk import projects_dir, slug
+    times = []
+
+    def mtime(path: Path) -> None:
+        try:
+            times.append(path.stat().st_mtime)
+        except OSError:
+            pass
+    for folder in filter(None, (repo, home)):
+        for name in (".git/logs/HEAD", ".git/index"):
+            mtime(Path(folder) / name)
+    if repo:
+        mtime(Path(repo))
+        base = slug(Path(repo))
+        try:
+            dirs = [d for d in projects_dir().iterdir() if d.name == base or d.name.startswith(base + "--claude-worktrees-")]
+        except OSError:
+            dirs = []
+        for d in dirs:
+            for f in d.glob("*.jsonl"):
+                mtime(f)
+    when = max(times, default=0.0)
+    _TOUCHED[repo + "|" + home] = (time.monotonic(), when)
+    return when
+
+
 class Hub:
     """The menu's own small server, and the Studios it has started."""
 
@@ -62,16 +97,19 @@ class Hub:
         self.seen = time.monotonic()
 
     def rows(self) -> list[dict]:
+        from . import talk
         out = []
         for r in setup.studios(self.registry):
             row = {"name": r.get("name") or Path(r["home"]).name, "home": r["home"], "repo": r.get("repo", ""),
-                   "running": r.get("port") in self.running, "missing": False}
+                   "running": r.get("port") in self.running, "missing": False,
+                   "touched": touched(r.get("repo") or "", r["home"])}
             try:
                 row.update(glance(r["home"]))
+                row["talk"] = talk.waiting(r["home"])
             except StudioError as err:
                 row.update(missing=True, why=str(err))
             out.append(row)
-        return out
+        return sorted(out, key=lambda row: (row["missing"], -row["touched"]))
 
     def open(self, home: str) -> str:
         """Start the Studio at `home` if it is not up, and say where it is."""

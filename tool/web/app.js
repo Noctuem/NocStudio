@@ -1687,7 +1687,7 @@
       if (!T.key || busy) return;
       busy = true;
       try {
-        const v = await call('GET', '/api/talk/' + encodeURIComponent(T.key) + '?after=' + T.after);
+        const v = await call('GET', '/api/talk/' + encodeURIComponent(T.key) + '?after=' + T.after + (document.visibilityState === 'visible' ? '&seen=1' : ''));
         if (v.key && v.key !== T.key) T.key = v.key;
         add(v.events); T.after = v.seq; ended = v.state === 'ended';
         drawAsks(v.asks || []); drawHead(v.state);
@@ -1738,7 +1738,7 @@
       if (d.talks.length) {
         rows.push(h('h3', {}, 'Going here'));
         for (const t of d.talks) rows.push(h('button', { class: 'trow' + (t.key === T.key ? ' on' : ''), type: 'button', onclick: () => show(t) },
-          h('span', { class: 'chip' + (t.asks ? ' accent' : '') }, t.asks ? 'Asks you' : TALK_STATE[t.state] || t.state), h('span', { class: 'tt' }, clip(t.last, 90) || 'Starting')));
+          h('span', { class: 'chip' + (t.waits ? ' accent' : '') }, t.waits === 'ask' ? 'Asks you' : t.waits === 'reply' ? 'Replied' : TALK_STATE[t.state] || t.state), h('span', { class: 'tt' }, clip(t.last, 90) || 'Starting')));
       }
       const mine = new Set(d.talks.map((t) => t.id));
       const past = d.past.filter((p) => !mine.has(p.id));

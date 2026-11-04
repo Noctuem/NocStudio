@@ -411,6 +411,10 @@ def main() -> int:
         said = [e["text"] for e in seen["events"] if e["kind"] == "claude"]
         check(status == 200 and said == ["made it: make the thing"] and seen["id"] and seen["key"] == seen["id"],
               "allowed on the page, the session goes on and its answer shows, under the session's own id")
+        waits = lambda: [t["waits"] for t in http("GET", base + "/api/talk")[1]["talks"]]
+        before = waits()
+        http("GET", base + f"/api/talk/{key}?after=0&seen=1")
+        check(before == ["reply"] and waits() == [""], "a reply waits on the user until the page shows it in front of them")
         status, _ = http("POST", base + f"/api/talk/{key}", {"action": "say", "text": "and again"})
         seen = talk_until(key, lambda v: v["asks"])
         http("POST", base + f"/api/talk/{seen['id']}", {"action": "deny", "ask": seen["asks"][0]["id"], "text": "not now"})
@@ -740,6 +744,9 @@ def main() -> int:
             while time.time() < end and not (app._get(kurl + f"api/talk/{ikey}") or {}).get("asks"):
                 time.sleep(0.1)
             loop = app._get(kurl + f"api/talk/{ikey}")
+            order = app._get(hub.url + "api/hub")["studios"]
+            check([r["name"] for r in order] == ["Kite Lab", "Self-test", "Gone"] and order[0]["talk"]["asks"] == 1 and order[0]["touched"] > 0,
+                  "the menu puts the project worked on last at the top, and says when its Talk page asks something")
             check(app._get(kurl + "api/idea")["stage"] == "loop" and any(e["text"] == "The idea, as I put it: a kite that films the yard" for e in loop["events"]),
                   "starting the loop hands the session the idea in the user's words")
             req = urllib.request.Request(kurl + f"api/talk/{loop['key']}", data=json.dumps({"action": "allow", "ask": loop["asks"][0]["id"]}).encode(),

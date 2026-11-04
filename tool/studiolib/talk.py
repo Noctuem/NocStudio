@@ -185,6 +185,8 @@ class Talk:
         self.state = "starting"
         self.error = ""
         self.touched = time.time()
+        self.replied = 0   # the seq of the last finished turn
+        self.seen = 0      # the seq the page last showed while it was in front of the user
         self.lock = threading.Lock()
         if resume:
             for e in history(self.repo, resume):
@@ -297,6 +299,17 @@ class Talk:
             if msg.get("is_error") or msg.get("subtype") not in (None, "success"):
                 self._add({"kind": "note", "text": "The turn ended with an error: " + str(msg.get("result") or msg.get("subtype"))[:400]})
             self._add({"kind": "turn", "text": "", "cost": msg.get("total_cost_usd")})
+            self.replied = self.seq
+
+    def mark_seen(self) -> None:
+        self.seen = self.seq
+
+    def waits(self) -> str:
+        """What this conversation waits on the user for: "ask" (a question to answer), "reply" (a turn they
+        have not read yet) or ""."""
+        if self.asks:
+            return "ask"
+        return "reply" if self.replied > self.seen else ""
 
     # what the user says
     def _send(self, obj: dict) -> None:
@@ -373,12 +386,28 @@ def listing(home) -> list[dict]:
         if id(talk) in seen or Path(talk.home) != Path(home):
             continue
         seen.add(id(talk))
-        if talk.state == "ended":
+        if talk.state == "ended" and not talk.waits():
             continue  # stopped: it is among the earlier sessions, to carry on with
         last = next((e for e in reversed(talk.events) if e["kind"] in ("you", "claude")), None)
-        rows.append({"key": talk.key, "id": talk.sid, "state": talk.state, "asks": len(talk.asks),
+        rows.append({"key": talk.key, "id": talk.sid, "state": talk.state, "asks": len(talk.asks), "waits": talk.waits(),
                      "last": (last or {}).get("text", "")[:200], "touched": talk.touched})
     return sorted(rows, key=lambda r: -r["touched"])
+
+
+def waiting(home) -> dict:
+    """For the menu: how many of a Studio's conversations ask something, and how many replied unread.
+    A reply stays unread after the session is stopped for being idle: it still waits on the user."""
+    out, seen = {"asks": 0, "replies": 0}, set()
+    for talk in list(TALKS.values()):
+        if id(talk) in seen or Path(talk.home) != Path(home):
+            continue
+        seen.add(id(talk))
+        w = talk.waits()
+        if w == "ask":
+            out["asks"] += 1
+        elif w == "reply":
+            out["replies"] += 1
+    return out
 
 
 _SWEEPING = False
