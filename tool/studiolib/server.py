@@ -173,6 +173,9 @@ def make_handler(home: Path, allowed_hosts: set[str], quiet: bool = False, hub: 
                     t = talk.start(studio.home, self.talk_repo(studio), text=str(data.get("text") or ""),
                                    resume=str(data.get("resume") or ""), fork=bool(data.get("fork")))
                     return self.send_json({"ok": True, "key": t.key})
+                if rest == ["desktop"]:  # carry a session on in the Claude desktop app instead of here
+                    talk.to_desktop(self.talk_repo(studio), str(data.get("id") or ""))
+                    return self.send_json({"ok": True})
                 t, action = talk.get(rest[0]), str(data.get("action") or "")
                 if action == "say":  # while it works it reads this at its next step; with stop, the turn stops first
                     t.say(str(data.get("text") or ""), stop=bool(data.get("stop")))

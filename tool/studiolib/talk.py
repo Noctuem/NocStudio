@@ -430,6 +430,38 @@ def waiting(home) -> dict:
     return out
 
 
+def to_desktop(repo, sid: str) -> None:
+    """Carry a session on in the Claude desktop app: `claude --desktop --resume <id>`, which saves it, opens it
+    there (the same session, not a copy) and exits. It needs a console of its own: with its output redirected
+    it refuses to run, so on Windows it gets one, minimized."""
+    repo = Path(repo)
+    if not re.fullmatch(r"[0-9a-f-]{8,}", sid or ""):
+        raise TalkError("that is not a session id")
+    with LOCK:
+        running = [t for t in TALKS.values() if t.sid == sid and t.proc.poll() is None]
+    for t in running:
+        if t.busy():
+            raise TalkError("it is in the middle of a turn here: stop it or let it finish, then move it")
+        t.stop()
+    cmd = [*claude_exe(), "--desktop", "--resume", sid]
+    try:
+        if os.name == "nt":
+            info = subprocess.STARTUPINFO()
+            info.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            info.wShowWindow = 7  # minimized, and it does not take the focus
+            proc = subprocess.Popen(cmd, cwd=repo, creationflags=subprocess.CREATE_NEW_CONSOLE, startupinfo=info)
+        else:
+            proc = subprocess.Popen(cmd, cwd=repo, start_new_session=True)
+        code = proc.wait(timeout=60)
+    except subprocess.TimeoutExpired:
+        return  # still opening: the app has it
+    except OSError as err:
+        raise TalkError(f"Claude Code did not start: {err}") from err
+    if code:
+        raise TalkError(f"Claude Code could not open it in the app (exit {code}). The app needs a Claude "
+                        "subscription sign-in, and the session must not be open in a terminal.")
+
+
 def busy() -> list["Talk"]:
     """The conversations of this process in the middle of a turn: closing the app would cut them off."""
     out, seen = [], set()

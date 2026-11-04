@@ -187,8 +187,8 @@ def create(repo, project: str = "", home: str = "", port: int = 0, registry: Pat
 HOOK = KIT / "tool" / "hook.py"
 HOOK_EVENTS = ("SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PermissionRequest", "Notification",
                "Stop", "StopFailure", "SubagentStart", "SubagentStop", "TaskCreated", "TaskCompleted", "CwdChanged")
-# these finish before the session goes on: two tell it its own id, two hand it the notes the user left for it
-WAITED_FOR = ("SessionStart", "CwdChanged", "Stop", "PostToolUse")
+# these finish before the session goes on: two tell it its own id, three hand it what the user left for it
+WAITED_FOR = ("SessionStart", "CwdChanged", "Stop", "PostToolUse", "UserPromptSubmit")
 HOOK_TIMEOUT = 20  # seconds: a hook the session waits for must never hold it up for long
 
 
@@ -228,7 +228,7 @@ def hooks_hand_over(path: Path | None = None) -> bool:
         return False
     hooks = data.get("hooks") or {}
     return all(any(_ours(h) and not h.get("async") for g in hooks.get(event) or [] if isinstance(g, dict) for h in g.get("hooks") or [])
-               for event in ("Stop", "PostToolUse"))
+               for event in ("Stop", "PostToolUse", "UserPromptSubmit"))
 
 
 def install_hooks(path: Path | None = None, remove: bool = False) -> dict:

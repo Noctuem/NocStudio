@@ -238,7 +238,15 @@ def main() -> int:
         deep = game / "content"
         deep.mkdir(exist_ok=True)
         hook(session_id="s-1", cwd=str(deep), hook_event_name="SessionStart", source="startup")
-        hook(session_id="s-1", cwd=str(deep), hook_event_name="UserPromptSubmit", prompt="Light the room\nand test it")
+        run = subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "hook.py")], capture_output=True, env=hook_env,
+                             input=json.dumps(dict(session_id="s-1", cwd=str(deep), hook_event_name="UserPromptSubmit", prompt="Light the room\nand test it")).encode())
+        given = json.loads(run.stdout or b"{}").get("hookSpecificOutput", {}).get("additionalContext", "")
+        check(batch["id"] in given and "shipped" in given and "S todo" in given and "Answer what the user just asked first" in given,
+              "a verdict reaches the session with the user's next message, after what they asked, and says to run S todo")
+        check(all(not json.loads(subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "hook.py")], capture_output=True, env=hook_env,
+                                                input=json.dumps(dict(session_id=sid, cwd=str(deep), hook_event_name=ev)).encode()).stdout or b"{}")
+                  for sid, ev in (("s-1", "Stop"), ("s-1", "PostToolUse"))),
+              "a verdict is handed over once, and never between tool calls")
         hook(session_id="s-1", cwd=str(deep), hook_event_name="PreToolUse", tool_name="Edit", tool_input={"file_path": str(deep / "room.scene")})
         hook(session_id="s-1", cwd=str(deep), hook_event_name="SubagentStart", agent_id="a1", agent_type="Explore")
         hook(session_id="s-2", cwd=str(tmp), hook_event_name="SessionStart")  # a folder with no Studio
@@ -452,6 +460,14 @@ def main() -> int:
               "the page reads the plan's usage from /usage, each limit with its share and when it resets")
         http("POST", base + f"/api/talk/{key}", {"action": "stop"})
         check(talk_until(key, lambda v: v["state"] == "ended")["state"] == "ended", "a conversation can be stopped, and says it stopped")
+        moved = talk_until(key, lambda v: True)["id"]
+        status, _ = http("POST", base + "/api/talk/desktop", {"id": moved})
+        repo_dir = Path(studio.game_root())
+        check(status == 200 and (repo_dir / ".desktop-opened").read_text(encoding="utf-8") == moved,
+              "a session moves to the Claude desktop app: claude --desktop --resume <its id>, in the project's folder")
+        (repo_dir / ".desktop-opened").unlink()
+        status, said = http("POST", base + "/api/talk/desktop", {"id": "../not-an-id"})
+        check(status == 400, "only a session id is passed on to Claude Code")
         del os.environ["STUDIO_CLAUDE"]
 
         # an asset the user can open: what the game holds, by file, folder or glob

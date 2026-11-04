@@ -1741,7 +1741,19 @@
       const label = state ? TALK_STATE[state] || state : (T.resume ? 'Not started here yet' : 'New session');
       head.replaceChildren(...[h('h2', { class: 'grow' }, T.title || (T.key || T.resume ? 'A session' : 'A new session')),
         h('span', { class: 'chip' + (state === 'asking' ? ' accent' : state === 'ended' ? ' bad' : '') }, label),
-        state === 'working' || state === 'asking' ? h('button', { class: 'btn small', type: 'button', title: 'Stop what it is doing now (Esc); the session stays', onclick: stopIt }, 'Stop') : null].filter(Boolean));
+        state === 'working' || state === 'asking' ? h('button', { class: 'btn small', type: 'button', title: 'Stop what it is doing now (Esc); the session stays', onclick: stopIt }, 'Stop') : null,
+        sid() && state !== 'working' && state !== 'asking' ? h('button', { class: 'btn small primary', type: 'button', title: 'Carry this session on in the Claude desktop app: the same session, with all of it',
+          onclick: toDesktop }, 'Open in Claude app') : null].filter(Boolean));
+    }
+    function sid() { return T.key && !T.key.startsWith('new-') ? T.key : T.resume; }
+    async function toDesktop() {
+      const id = sid();
+      try {
+        toast('Opening it in the Claude app…');
+        await call('POST', '/api/talk/desktop', { id });
+        toast('It is in the Claude app now. Carry on there.');
+        Object.assign(T, { key: '', resume: '', title: '' }); log.replaceChildren(); asks.replaceChildren(); drawHead(''); list();
+      } catch (e) { toast(e.message); }
     }
     async function poll() {
       if (!T.key || busy) return;

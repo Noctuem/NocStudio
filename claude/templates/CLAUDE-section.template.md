@@ -6,8 +6,9 @@ Use the `studio` skill; `S` is `{{S}}`.
 - Anything the user must judge (art, models, sounds, textures, feel options, a question with
   options) is filed as a batch: `S new`, `add`, `file`. Never ask them to open a folder or for a
   pick in chat. After filing, say one line: "<title> is in the Studio (<n> to judge)."
-- When they say "process my studio verdicts" (or anything like it), run `S todo` and do what it
-  lists; close each with `S done`.
+- Their verdicts, and what they answer on the page, are handed to you by Claude Code's hooks when you
+  finish a turn or they send you a message (or they say "process my studio verdicts"): run `S todo`
+  and do what it lists; close each with `S done`.
 - A ruling they make in chat goes on the log in their words: `S decide`.
 - Anything else that waits on them (a chore only they can do, a question with a plain answer) is
   `S ask set`, with the default you will use; never a line in chat or in a document.

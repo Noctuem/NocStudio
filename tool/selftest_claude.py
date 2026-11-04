@@ -4,6 +4,11 @@ import json
 import sys
 import uuid
 
+if "--desktop" in sys.argv:  # what it would hand the desktop app, written where the test can see it
+    with open(".desktop-opened", "w", encoding="utf-8") as fh:
+        fh.write(sys.argv[sys.argv.index("--resume") + 1])
+    sys.exit(0)
+
 if "/usage" in sys.argv:
     print(json.dumps({"type": "result", "subtype": "success", "local_command": "usage", "total_cost_usd": 0,
                       "result": "You are currently using your subscription\n\nCurrent session: 12% used · resets 3pm\n"

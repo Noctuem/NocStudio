@@ -5,9 +5,11 @@ Overview can show what every session in a project is doing right now.
 finds the Studio of the project the session is working in, and updates that session's file under
 `<studio home>/live/`. A project without a Studio costs one cache lookup and nothing is written.
 
-It watches, and it does one thing more: when the user has left notes in the Studio's notes box that
-wait on this session, it hands them over. That happens when the session finishes a turn (it carries on
-and deals with them), and between tool calls once a note has waited a while or is marked urgent. With
+It watches, and it does one thing more: it hands over what the user left in the Studio for a session.
+Notes from the notes box go when the session finishes a turn (it carries on and deals with them), when
+the user sends it a message, and between tool calls once a note has waited a while or is marked urgent.
+Verdicts on batches and answers to what only the user could do go only when it finishes a turn or is
+sent a message, never in the middle of work. An idle session is never woken. With
 no note waiting it prints nothing. When the Studio has a second copy (a server's, for the phone; see
 studiolib/sync.py), it also starts a sync in the background as a session starts, is given a prompt or
 finishes a turn, at most once a minute, so what was left on the phone reaches the session without the
@@ -258,19 +260,29 @@ def record(home: str, e: dict) -> None:
 
 
 def hand_over(home: str, e: dict) -> None:
-    """Print the user's notes that wait on this session, in the shape Claude Code reads back from a hook."""
+    """Print what waits on this session, in the shape Claude Code reads back from a hook: the user's notes
+    (when it finishes a turn, when they send it a message, and between tool calls once a note has waited), and
+    their verdicts and answers from the page (only when it finishes a turn or they send it a message: those
+    never break into work)."""
     kind, session = e.get("hook_event_name"), str(e.get("session_id") or "")
-    if e.get("agent_id") or not session or not Path(home, "notes").is_dir():
-        return  # a subagent is never handed the user's notes: they go to the session itself
+    if e.get("agent_id") or not session:
+        return  # a subagent is never handed any of it: it goes to the session itself
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from studiolib import notes
+    parts = []
     midwork = kind == "PostToolUse"
-    waiting = notes.due(home, session, midwork=midwork)
-    if not waiting:
-        return
-    text = notes.wording(waiting, home, notes.lanes(home), midwork=midwork)
-    out = {"hookSpecificOutput": {"hookEventName": kind, "additionalContext": text}}
-    sys.stdout.write(json.dumps(out))
+    if Path(home, "notes").is_dir():
+        from studiolib import notes
+        waiting = notes.due(home, session, midwork=midwork)
+        if waiting:
+            parts.append(notes.wording(waiting, home, notes.lanes(home), midwork=midwork))
+    if not midwork:
+        from studiolib import verdicts
+        judged = verdicts.due(home, session)
+        if judged:
+            parts.append(verdicts.wording(judged, home, prompt=kind == "UserPromptSubmit"))
+    if parts:
+        out = {"hookSpecificOutput": {"hookEventName": kind, "additionalContext": "\n\n".join(parts)}}
+        sys.stdout.write(json.dumps(out))
 
 
 def fetch(home: str, e: dict) -> None:
@@ -315,7 +327,7 @@ def main() -> int:
             with open(env, "a", encoding="utf-8", newline="\n") as fh:  # so `studio.py lane` knows which session it is
                 fh.write(f"export STUDIO_SESSION={e['session_id']}\n")
         record(home, e)
-        if e.get("hook_event_name") == "Stop":
+        if e.get("hook_event_name") in ("Stop", "UserPromptSubmit"):
             hand_over(home, e)
         fetch(home, e)
     except Exception:  # a watcher must never get in a session's way
