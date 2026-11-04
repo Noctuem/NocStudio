@@ -184,6 +184,37 @@ def make_handler(home: Path, allowed_hosts: set[str], quiet: bool = False, hub: 
             except talk.TalkError as err:
                 return self.fail(400, str(err))
 
+        def idea_post(self, studio: Studio, data: dict):
+            """The idea loop: start it (a session told how to run it), or say it is done (it writes the spec)."""
+            from . import idea, talk
+            action, extra = str(data.get("action") or ""), idea.hub_settings().get("when_done", "")
+            try:
+                if action == "start":
+                    first = str(data.get("text") or "").strip()
+                    if not first:
+                        raise StudioError("write the idea, however loose")
+                    if idea.state(studio).get("new"):
+                        words = "The idea, as I put it: " + first
+                    else:
+                        words = "An idea for this project, as I put it: " + first + "\n\nWork on docs/idea.md in this repo."
+                    t = talk.start(studio.home, self.talk_repo(studio), text=words, system=idea.LOOP)
+                    idea.set_state(studio, stage="loop", key=t.key, first=idea.state(studio).get("first") or first)
+                    return self.send_json({"ok": True, "key": t.key})
+                if action == "done":
+                    key = str(data.get("key") or idea.state(studio).get("key") or "")
+                    try:
+                        t = talk.get(key)
+                        if t.proc.poll() is not None:
+                            raise talk.TalkError("stopped")
+                    except talk.TalkError:  # stopped since: carry it on, with the loop's instructions still in its record
+                        t = talk.start(studio.home, self.talk_repo(studio), resume=key)
+                    t.say(idea.done_words(studio, extra))
+                    idea.set_state(studio, stage="done", key=t.key)
+                    return self.send_json({"ok": True, "key": t.key})
+                raise StudioError("say start or done")
+            except talk.TalkError as err:
+                return self.fail(400, str(err))
+
         # ------------------------------------------------------------- routes
         def do_HEAD(self):
             self.do_GET()
@@ -210,6 +241,9 @@ def make_handler(home: Path, allowed_hosts: set[str], quiet: bool = False, hub: 
                         return self.send_json(board.live(studio))
                     if len(parts) == 3 and parts[1] == "batch":
                         return self.send_json(studio.load_batch(parts[2]))
+                    if parts[1:] == ["idea"]:
+                        from . import idea
+                        return self.send_json(idea.view(studio))
                     if parts[1:2] == ["talk"]:
                         return self.talk_get(studio, parts[2:], split_q(self.path))
                     return self.fail(404, "no such route")
@@ -276,6 +310,8 @@ def make_handler(home: Path, allowed_hosts: set[str], quiet: bool = False, hub: 
                     return self.send_json({"ok": True, "path": str(folder / entry["name"]), "name": entry["name"], "size": entry["size"]})
                 if parts[:2] == ["api", "talk"]:
                     return self.talk_post(self.studio(), parts[2:], self.body())
+                if parts == ["api", "idea"]:
+                    return self.idea_post(self.studio(), self.body())
                 data = self.body()
                 with LOCK:
                     studio = self.studio()

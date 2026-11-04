@@ -149,6 +149,9 @@ class Hub:
                     return self.send((WEB / "hub.html").read_bytes(), TYPES[".html"])
                 if parts == ["api", "hub"]:
                     return self.send_json({"studio_hub": True, "studios": hub.rows(), "ui": Studio.ui()})
+                if parts == ["api", "ideas"]:  # whether the menu may start an idea
+                    from . import idea
+                    return self.send_json({"ideas": bool(idea.hub_settings().get("folder"))})
                 if parts == ["api", "vault"]:  # the user's own notes beside the menu, when hub.toml names them
                     try:
                         cfg = vault.settings()
@@ -170,8 +173,15 @@ class Hub:
                         raise StudioError("request too large")
                     data = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
                     route = urlsplit(self.path).path
-                    if not isinstance(data, dict) or route not in ("/api/open", "/api/dump"):
+                    if not isinstance(data, dict) or route not in ("/api/open", "/api/dump", "/api/idea"):
                         return self.send_json({"error": "no such route"}, 404)
+                    if route == "/api/idea":  # a loose idea: its own project folder and Studio, opened on its Talk page
+                        from . import idea
+                        folder = idea.hub_settings().get("folder")
+                        if not folder:
+                            raise StudioError("say where new projects go: folder = \"...\" under [ideas] in " + str(vault.settings_file()))
+                        home = idea.new(Path(folder), str(data.get("name") or ""), str(data.get("text") or ""), registry=hub.registry)
+                        return self.send_json({"ok": True, "url": hub.open(str(home)) + "#talk"})
                     if route == "/api/dump":
                         cfg = vault.settings()
                         if not cfg:

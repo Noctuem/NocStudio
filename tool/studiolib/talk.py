@@ -175,7 +175,7 @@ def tool_line(name, data) -> str:
 
 # ------------------------------------------------------------------------- one live conversation
 class Talk:
-    def __init__(self, home: Path, repo: Path, resume: str = "", fork: bool = False):
+    def __init__(self, home: Path, repo: Path, resume: str = "", fork: bool = False, system: str = ""):
         self.home, self.repo = Path(home), Path(repo)
         self.key = resume if resume and not fork else f"new-{uuid.uuid4().hex[:8]}"
         self.sid = resume if resume and not fork else ""
@@ -197,6 +197,9 @@ class Talk:
             cmd += ["--resume", resume]
         if resume and fork:
             cmd.append("--fork-session")
+        if system:  # kept in the session's record, so it holds when the session is carried on later
+            cmd += ["--append-system-prompt", system]
+        self.loop = bool(system)
         env = dict(os.environ, STUDIO_TALK="1")
         try:
             self.proc = subprocess.Popen(cmd, cwd=self.repo, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -341,7 +344,7 @@ class Talk:
 
 
 # ------------------------------------------------------------------------- the conversations of this process
-def start(home, repo, text: str = "", resume: str = "", fork: bool = False) -> Talk:
+def start(home, repo, text: str = "", resume: str = "", fork: bool = False, system: str = "") -> Talk:
     repo = Path(repo)
     if not repo.is_dir():
         raise TalkError(f"the project's folder {repo} is not there")
@@ -349,7 +352,7 @@ def start(home, repo, text: str = "", resume: str = "", fork: bool = False) -> T
         if resume and not fork and resume in TALKS and TALKS[resume].proc.poll() is None:
             talk = TALKS[resume]
         else:
-            talk = Talk(home, repo, resume=resume, fork=fork)
+            talk = Talk(home, repo, resume=resume, fork=fork, system=system)
             TALKS[talk.key] = talk
     if text.strip():
         talk.say(text)

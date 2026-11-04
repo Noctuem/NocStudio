@@ -1550,6 +1550,7 @@ class Studio:
         samples, samples_held = self._shown(self.sample_ids())
         samples.sort(key=lambda b: b["order"])
         return {"project": self.config.get("project"), "home": str(self.home), "static": False, "site": str(self.config.get("site") or ""),
+                "idea": (read_json(self.overview_dir / "idea.json", {}) or {}).get("stage", ""),
                 "limits": self.config.get("review"), "batches": batches, "held": held,
                 "samples": samples, "samples_held": samples_held, "ui": self.ui(),
                 "slots": [dict(s, files=self.slot_files(s)) for s in self.slots()],

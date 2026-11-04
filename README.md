@@ -99,6 +99,27 @@ is doing; a conversation left alone for 30 minutes is stopped and can be carried
 `claude -p` with stream-json, so Claude Code's hooks see it like any session: the Overview shows it and
 it is handed your notes. It runs on the PC copy only for now.
 
+**Shape an idea** turns the talk into an idea loop, like plan mode for the idea itself. Give it a loose
+idea; each turn Claude asks the 3 to 5 questions that matter most, each with what it recommends, and
+names the holes it sees. It keeps `docs/idea.md` (the idea, what is settled with your words, what is
+open, what is at risk) and the page shows that file beside the talk. **Done** has it write
+`docs/spec.md` and record what was settled as rulings. Started from the menu (**Start from an idea**),
+an idea gets its own project folder and Studio first, and done also makes it a git repo with a README,
+a TODO and a CLAUDE.md. The menu offers that once the app's `hub.toml` says where new projects go:
+
+```toml
+[ideas]
+folder = "C:/Users/you/Projects"
+when_done = "Add it to my project list."   # a last step of your own, if you want one
+
+[vault]                                    # your own notes under the menu, with a box that adds to one
+folder = "C:/Users/you/Notes"
+show = ["Now.md", "Ideas.md"]
+dump = "Inbox.md"
+```
+
+`hub.toml` sits in the app's data folder (`%LOCALAPPDATA%\NocStudio`).
+
 ### Organised from the start
 
 Say **"start a new project"** or **"plan this project in its Studio"** to Claude Code. It reads

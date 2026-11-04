@@ -716,6 +716,42 @@ def main() -> int:
             check(dump("first thought") == 200 and dump("second\nthought") == 200 and dump("   ") == 400
                   and (notes / "Dump.md").read_bytes() == b"\r\n---\r\n\r\nfirst thought\r\n\r\nsecond\r\nthought\r\n",
                   "the box adds what is typed to the end of the dump page, as typed, in the page's own line endings")
+
+            # the idea loop: from the menu, a loose idea becomes a project folder and a Studio, opened on its Talk page
+            projects = tmp / "projects"; projects.mkdir()
+            with open(tmp / "hub.toml", "a", encoding="utf-8") as fh:
+                fh.write(f'\n[ideas]\nfolder = "{projects.as_posix()}"\nwhen_done = "add it to the list"\n')
+            req = urllib.request.Request(hub.url + "api/idea", data=json.dumps({"name": "Kite Lab", "text": "a kite that films the yard"}).encode(),
+                                         headers={"Content-Type": "application/json"}, method="POST")
+            made = json.loads(urllib.request.urlopen(req, timeout=20).read())
+            kite = projects / "Kite Lab"
+            check(made["url"].endswith("#talk") and (kite / "docs" / "idea.md").is_file() and (projects / "Kite Lab-studio" / "studio.toml").is_file()
+                  and any(r["name"] == "Kite Lab" for r in app._get(hub.url + "api/hub")["studios"]),
+                  "an idea started from the menu gets its own project folder and Studio, and opens on its Talk page")
+            kurl = made["url"].split("#")[0]
+            os.environ["STUDIO_CLAUDE"] = json.dumps([sys.executable, str(Path(__file__).resolve().parent / "selftest_claude.py")])
+            seen = app._get(kurl + "api/idea")
+            check(seen["stage"] == "idea" and seen["first"] == "a kite that films the yard" and "films the yard" in seen["text"],
+                  "the idea's Studio knows it is an idea, and shows docs/idea.md")
+            req = urllib.request.Request(kurl + "api/idea", data=json.dumps({"action": "start", "text": seen["first"]}).encode(),
+                                         headers={"Content-Type": "application/json"}, method="POST")
+            ikey = json.loads(urllib.request.urlopen(req, timeout=20).read())["key"]
+            end = time.time() + 10
+            while time.time() < end and not (app._get(kurl + f"api/talk/{ikey}") or {}).get("asks"):
+                time.sleep(0.1)
+            loop = app._get(kurl + f"api/talk/{ikey}")
+            check(app._get(kurl + "api/idea")["stage"] == "loop" and any(e["text"] == "The idea, as I put it: a kite that films the yard" for e in loop["events"]),
+                  "starting the loop hands the session the idea in the user's words")
+            req = urllib.request.Request(kurl + f"api/talk/{loop['key']}", data=json.dumps({"action": "allow", "ask": loop["asks"][0]["id"]}).encode(),
+                                         headers={"Content-Type": "application/json"}, method="POST")
+            urllib.request.urlopen(req, timeout=10)
+            req = urllib.request.Request(kurl + "api/idea", data=json.dumps({"action": "done"}).encode(),
+                                         headers={"Content-Type": "application/json"}, method="POST")
+            urllib.request.urlopen(req, timeout=20)
+            told = [e["text"] for e in app._get(kurl + f"api/talk/{loop['key']}")["events"] if e["kind"] == "you"]
+            check(app._get(kurl + "api/idea")["stage"] == "done" and told[-1].startswith("They said the idea is done") and told[-1].endswith("Also: add it to the list"),
+                  "done tells the session to write the spec and set the project up, with the user's own last step")
+            del os.environ["STUDIO_CLAUDE"]
             del os.environ["STUDIO_HUB"]
         finally:
             hub.close()

@@ -21,6 +21,10 @@
   .proj .where { font: 12px/1.4 var(--font-mono); color: var(--faint); overflow-wrap: anywhere; }
   .proj .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: auto; }
   #vault { margin-top: 28px; }
+  .ideabox { margin-top: 14px; max-width: 980px; }
+  .ideabox form { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+  .ideabox .row { display: flex; gap: 8px; align-items: center; justify-content: flex-end; }
+  .ideabox .said { flex: 1 1 auto; font-size: 13px; }
   .dump { display: flex; flex-direction: column; gap: 8px; max-width: 980px; margin-bottom: 14px; }
   .dump .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   .dump .row .muted { flex: 1 1 auto; font-size: 13px; }
@@ -50,6 +54,14 @@
     <h1 id="head">Your projects</h1>
     <p class="lede" id="lede">Pick one to open its Studio. It runs while this window is open and stops when you close it.</p>
     <div class="projects" id="list"></div>
+    <div class="ideabox" id="idea" hidden>
+      <button class="btn small" type="button" id="idea-open">Start from an idea</button>
+      <form id="idea-form" hidden>
+        <input class="field" id="idea-name" type="text" maxlength="60" placeholder="A name for it (the project folder gets this name)" aria-label="The idea's name">
+        <textarea class="field" id="idea-text" rows="4" placeholder="The idea, however loose. Claude asks you 3 to 5 questions at a time until it is clear, then writes the spec." aria-label="The idea"></textarea>
+        <div class="row"><span class="said" id="idea-said" role="status"></span><button class="btn small" type="button" id="idea-cancel">Not now</button><button class="btn small primary" type="submit">Start</button></div>
+      </form>
+    </div>
     <div class="empty" id="none" hidden>No project has a Studio yet. In a project, say to Claude Code: <code class="i">create a studio page for this</code></div>
   </section>
   <section id="vault" hidden>
@@ -122,5 +134,23 @@
 })();
 </script>
 <script src="web/vault.js"></script>
+<script>
+(() => { // start from an idea: only where the app's hub.toml says where new projects go
+  const box = document.getElementById('idea'), form = document.getElementById('idea-form'), said = document.getElementById('idea-said');
+  fetch('api/ideas').then((r) => r.json()).then((d) => { box.hidden = !d.ideas; }).catch(() => {});
+  document.getElementById('idea-open').addEventListener('click', () => { form.hidden = false; document.getElementById('idea-name').focus(); });
+  document.getElementById('idea-cancel').addEventListener('click', () => { form.hidden = true; said.textContent = ''; });
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault(); said.textContent = 'Making its folder and Studio…';
+    try {
+      const res = await fetch('api/idea', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: document.getElementById('idea-name').value, text: document.getElementById('idea-text').value }) });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || 'It was not made');
+      location.href = d.url;
+    } catch (err) { said.textContent = String(err.message || err); }
+  });
+})();
+</script>
 </body>
 </html>

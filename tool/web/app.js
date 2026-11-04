@@ -1733,7 +1733,8 @@
       try { d = await call('GET', '/api/talk'); } catch (e) { side.replaceChildren(h('div', { class: 'empty' }, e.message)); return; }
       const rows = [];
       rows.push(h('div', { class: 'jf' }, h('button', { class: 'btn small primary', type: 'button', onclick: () => pick(null) }, 'New session'),
-        d.past.length ? h('button', { class: 'btn small', type: 'button', title: 'Like claude -c: the last session in this project', onclick: () => pick(d.past[0], !!d.past[0].live && d.past[0].live !== 'ended') }, 'Carry on with the last') : null));
+        d.past.length ? h('button', { class: 'btn small', type: 'button', title: 'Like claude -c: the last session in this project', onclick: () => pick(d.past[0], !!d.past[0].live && d.past[0].live !== 'ended') }, 'Carry on with the last') : null,
+        !I.stage ? h('button', { class: 'btn small', type: 'button', title: 'Work a loose idea over with Claude, a few questions at a time, until it is a spec', onclick: () => { I.shaping = true; drawIdea(); } }, 'Shape an idea') : null));
       if (d.talks.length) {
         rows.push(h('h3', {}, 'Going here'));
         for (const t of d.talks) rows.push(h('button', { class: 'trow' + (t.key === T.key ? ' on' : ''), type: 'button', onclick: () => show(t) },
@@ -1757,11 +1758,50 @@
     const box = h('div', { class: 'tbox' }, tray, text, h('div', { class: 'jf' }, h('span', { class: 'grow muted' }, 'Auto mode decides what it may do. What it asks about comes here.'),
       h('button', { class: 'btn small', type: 'button', onclick: () => pickFiles(take) }, 'Attach'), h('button', { class: 'btn small primary', type: 'button', onclick: () => send() }, 'Send')));
     dropTarget(box, take);
-    drawHead(''); list();
+
+    // the idea loop: docs/idea.md beside the talk, kept by the session; start it, then say when it is done
+    const I = S.idea || (S.idea = { stage: '', text: '', first: '', key: '', shaping: false, shown: '' });
+    const ideaBox = h('div', { class: 'tidea' });
+    function drawIdea() {
+      if (!I.stage && !I.shaping) { ideaBox.replaceChildren(); ideaBox.hidden = true; return; }
+      ideaBox.hidden = false;
+      const parts = [h('div', { class: 'jf' }, h('span', { class: 'label grow' }, I.stage === 'loop' ? 'The idea so far (Claude keeps this as you talk)' : I.stage === 'done' ? 'The idea, done: the spec is written from it' : 'The idea loop'),
+        I.stage === 'loop' ? h('button', { class: 'btn small primary', type: 'button', title: 'Claude writes docs/spec.md from this and finishes setting the project up', onclick: ideaDone }, 'Done: write the spec') : null)];
+      if (I.stage === 'idea' || (!I.stage && I.shaping)) {
+        const first = h('textarea', { class: 'field', rows: 3, 'aria-label': 'The idea', placeholder: 'The idea, however loose', value: I.first || '' });
+        parts.push(h('p', { class: 'muted' }, 'Claude asks 3 to 5 questions at a time, each with what it recommends, and names the holes it sees. What gets settled goes into docs/idea.md, shown here. Say "done" with the button when it is clear.'),
+          first, h('div', { class: 'jf' }, h('span', { class: 'grow' }), !I.stage ? h('button', { class: 'btn small', type: 'button', onclick: () => { I.shaping = false; drawIdea(); } }, 'Not now') : null,
+            h('button', { class: 'btn small primary', type: 'button', onclick: () => ideaStart(first.value) }, 'Start the loop')));
+      }
+      if (I.text && I.stage) parts.push(h('div', { class: 'ideadoc' }, md(I.text.replace(/^# .*\n/, ''))));
+      ideaBox.replaceChildren(...parts);
+    }
+    async function ideaLoad() {
+      try {
+        const v = await call('GET', '/api/idea');
+        const key = v.stage + '|' + v.text;
+        Object.assign(I, { stage: v.stage, first: I.first || v.first, key: v.key, text: v.text });
+        if (v.stage === 'loop' && !T.key && !T.resume && v.key) show({ key: v.key, last: 'The idea loop' });
+        if (key !== I.shown) { I.shown = key; drawIdea(); }
+      } catch (e) { /* the page is a sample, or the server is restarting */ }
+    }
+    async function ideaStart(words) {
+      if (!String(words || '').trim()) { toast('Write the idea first'); return; }
+      try {
+        const d = await call('POST', '/api/idea', { action: 'start', text: words });
+        I.shaping = false; I.shown = ''; T.key = ''; show({ key: d.key, last: 'The idea loop' }); ideaLoad();
+      } catch (e) { toast(e.message); }
+    }
+    async function ideaDone() {
+      try { const d = await call('POST', '/api/idea', { action: 'done', key: I.key || T.key }); show({ key: d.key, last: 'The idea loop' }); I.shown = ''; ideaLoad(); toast('Claude is writing the spec'); }
+      catch (e) { toast(e.message); }
+    }
+
+    drawHead(''); list(); drawIdea(); ideaLoad();
     if (T.key) poll(); else if (T.resume) pick({ id: T.resume, title: T.title }, T.fork);
-    const timer = setInterval(poll, 1000), lister = setInterval(list, 8000);
-    S.cleanup.push(() => { clearInterval(timer); clearInterval(lister); });
-    return h('main', { class: 'talk' }, h('section', { class: 'tgrid' }, side, h('div', { class: 'tmain' }, head, log, asks, box)));
+    const timer = setInterval(poll, 1000), lister = setInterval(list, 8000), ideaTimer = setInterval(ideaLoad, 3000);
+    S.cleanup.push(() => { clearInterval(timer); clearInterval(lister); clearInterval(ideaTimer); });
+    return h('main', { class: 'talk' }, h('section', { class: 'tgrid' }, side, h('div', { class: 'tmain' }, head, ideaBox, log, asks, box)));
   }
 
   // --------------------------------------------------------------- playtests
