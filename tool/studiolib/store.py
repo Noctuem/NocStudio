@@ -1313,9 +1313,39 @@ class Studio:
             raise StudioError("say confirm, back, reply, kind, send, urgent, park, done or reopen")
         return self._save_note(note)
 
+    def attach_file(self, nid: str, name: str, stream, length: int, lock=None) -> dict:
+        """A file the user put on a note, from the page: any kind, any size, kept beside the note and out of git.
+        The bytes are written before `lock` is taken, so a big upload never holds up other clicks."""
+        import contextlib
+        from . import notefiles
+        note = self.note(nid)
+        if note["status"] not in notebox.OPEN and note["status"] != "later":
+            raise StudioError("that note is closed; open it again to add a file")
+        try:
+            entry = notefiles.receive(self.home, note["id"], name, stream, length, {f["name"] for f in note.get("files") or []})
+        except notefiles.FilesError as err:
+            raise StudioError(str(err)) from err
+        with lock or contextlib.nullcontext():
+            note = self.note(nid)  # read again: the upload took a while and the note may have moved on
+            note.setdefault("files", []).append(entry)
+            return self._save_note(note)
+
+    def unfile(self, nid: str, name: str) -> dict:
+        """Take a file off a note again (the user attached the wrong one)."""
+        from . import notefiles
+        note = self.note(nid)
+        if note["status"] not in notebox.OPEN and note["status"] != "later":
+            raise StudioError("that note is closed; open it again first")
+        if not any(f["name"] == name for f in note.get("files") or []):
+            raise StudioError(f"{nid} has no file {name!r}")
+        notefiles.drop(self.home, note["id"], name)
+        note["files"] = [f for f in note["files"] if f["name"] != name]
+        return self._save_note(note)
+
     def notes_view(self) -> list[dict]:
         """Every note, with who it waits on and the session it is with, as the page shows it."""
         lane_rows, sessions, told = notebox.lanes(self.home), notebox.alive(self.home), notebox.told(self.home)
+        from . import notefiles
 
         def name(sid: str) -> str:
             rec = sessions.get(sid) or {}
@@ -1329,7 +1359,8 @@ class Studio:
         for note in self.notes():
             to, was = notebox.route(note, lane_rows, sessions), told.get(note["id"]) or {}
             handed = was if was.get("key") == notebox.key(note) and was.get("session") in sessions else None
-            out.append(dict(note, waits=notebox.waits(note), to=to,
+            files = [dict(f, here=bool(notefiles.here(self.home, note["id"], f["name"]))) for f in note.get("files") or []]
+            out.append(dict(note, files=files, waits=notebox.waits(note), to=to,
                             to_name=(lane_rows.get(note.get("lane")) or {}).get("name") or (name(to) if to not in ("", "*") else ""),
                             handed={"session": handed["session"], "name": name(handed["session"]), "at": stamp(handed["at"])} if handed else None))
         return out

@@ -489,3 +489,15 @@ details.setup > :not(summary) { margin: 0 14px 12px; }
 }
 .chip.sync { background: none; cursor: pointer; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+/* files on a note */
+.nfiles { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; }
+.nfiles.pending:empty { display: none; }
+.nfiles .chip .x { margin-left: 6px; background: none; border: 0; color: inherit; cursor: pointer; font: inherit; padding: 0 2px; }
+.nfile { display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; border: 1px solid var(--line); border-radius: var(--radius); padding: 4px 4px 4px 10px; }
+.nfile a { color: inherit; min-width: 0; overflow-wrap: anywhere; }
+.nfile.pic { flex-direction: column; align-items: stretch; padding: 4px; margin: 0; }
+.nfile.pic img { display: block; max-width: min(320px, 100%); max-height: 220px; border-radius: calc(var(--radius) - 2px); object-fit: contain; background: var(--line-soft); }
+.nfile.pic figcaption { display: flex; align-items: center; gap: 6px; font-size: 12px; padding: 4px 2px 0 4px; }
+.nfile .nfname { overflow-wrap: anywhere; }
+.notebox.dropping, .jot.dropping { outline: 2px dashed var(--accent); outline-offset: 2px; }

@@ -19,6 +19,7 @@ import tempfile
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import wave
 import zlib
@@ -337,6 +338,56 @@ def main() -> int:
               and http("POST", base + f"/api/note/{bug}", {"action": "send", "session": "s-3"})[0] == 200
               and "TO DO (1)" in handed(session_id="s-3", cwd=str(deep), hook_event_name="Stop"),
               "a note no session is on waits until the user sends it; an idea for later waits on nobody")
+
+        # files on a note: streamed to disk out of git, handed to a session by path, archived on close, back on reopen
+        def put_file(nid: str, name: str, blob: bytes):
+            req = urllib.request.Request(base + f"/api/note/{nid}/file?name=" + urllib.parse.quote(name), data=blob, method="PUT", headers={"X-Studio-File": "1"})
+            with urllib.request.urlopen(req, timeout=30) as res:
+                return json.loads(res.read())
+
+        def until(test, seconds: float = 8.0) -> bool:
+            end = time.time() + seconds
+            while time.time() < end:
+                if test():
+                    return True
+                time.sleep(0.1)
+            return test()
+
+        status, made = http("POST", base + "/api/note", {"text": "the screenshot shows where it breaks"})
+        fid, blob = made["note"]["id"], os.urandom(3 * 1024 * 1024 + 7)  # bigger than any JSON body may be
+        up = put_file(fid, "../shot 1.png", blob)
+        kept = home / "notes" / "files" / fid / "shot 1.png"
+        check(up["note"]["files"][0]["name"] == "shot 1.png" and kept.read_bytes() == blob,
+              "a file put on a note is kept beside it, whatever its size, under a name that cannot leave its folder")
+        req = urllib.request.Request(base + f"/api/note/{fid}/file?name=x.txt", data=b"x", method="PUT")
+        try:
+            urllib.request.urlopen(req, timeout=10)
+            refused = False
+        except urllib.error.HTTPError as err:
+            refused = err.code == 415
+        check(refused, "a file sent without the page's own header is refused, as another site's form would be")
+        check(put_file(fid, "shot 1.png", b"again")["note"]["files"][1]["name"] == "shot 1 (2).png",
+              "a second file of the same name is kept as well, not written over the first")
+        check((home / "notes" / "files" / ".gitignore").read_text(encoding="utf-8").splitlines()[-1] == "*",
+              "files on notes stay out of the Studio's git")
+        with urllib.request.urlopen(base + f"/notefile/{fid}/" + urllib.parse.quote("shot 1.png")) as res:
+            check(res.read() == blob, "the page shows a note's file")
+        check(str(kept) in note_cli("waiting"), "a session handed the note is given each file's full path")
+        status, after = http("POST", base + f"/api/note/{fid}", {"action": "unfile", "name": "shot 1 (2).png"})
+        check(status == 200 and [f["name"] for f in after["note"]["files"]] == ["shot 1.png"]
+              and not (kept.parent / "shot 1 (2).png").exists(), "a file put on a note by mistake can be taken off it")
+        shelf = tmp / "archive"
+        (home / "studio.local.toml").write_text(f'[files]\narchive = "{shelf.as_posix()}"\n', encoding="utf-8")
+        http("POST", base + f"/api/note/{fid}", {"action": "done"})
+        check(until(lambda: not kept.exists() and (shelf / fid / "shot 1.png").is_file()),
+              "a closed note's files move to the archive and leave this copy")
+        with urllib.request.urlopen(base + f"/notefile/{fid}/" + urllib.parse.quote("shot 1.png")) as res:
+            check(res.read() == blob, "a closed note's file still opens, brought back from the archive")
+        status, _ = http("PUT", base + f"/api/note/{fid}/file?name=x.txt", headers={"X-Studio-File": "1", "Content-Length": "0"})
+        check(status == 400 or status == 411, "a closed note takes no new files")
+        http("POST", base + f"/api/note/{fid}", {"action": "reopen"})
+        check(until(lambda: kept.is_file() and kept.read_bytes() == blob), "opening the note again brings its files back")
+        (home / "studio.local.toml").unlink()
 
         # an asset the user can open: what the game holds, by file, folder or glob
         (game / "content/audio/core").mkdir(parents=True); (game / "content/audio/tape").mkdir(parents=True)

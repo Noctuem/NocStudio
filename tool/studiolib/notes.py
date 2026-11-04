@@ -234,6 +234,25 @@ def _quote(text: str) -> str:
     return "\n".join("      > " + line for line in str(text or "").strip().splitlines() or [""])
 
 
+def _size(n) -> str:
+    n = int(n or 0)
+    for unit in ("bytes", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return f"{n} {unit}" if unit == "bytes" else f"{n:.1f} {unit}"
+        n /= 1024
+    return ""
+
+
+def _files(note: dict, home) -> list:
+    """The files the user put on a note, by their full path, so a session can open them."""
+    out = []
+    for f in note.get("files") or []:
+        path = Path(home) / "notes" / "files" / note["id"] / f["name"]
+        out.append(f"      File: {path}  ({_size(f.get('size'))})" + ("" if path.is_file() else
+                   f"  not on this machine yet: `S note fetch {note['id']}` brings it"))
+    return out
+
+
 def wording(notes: list, home, lane_rows: dict | None = None, midwork: bool = False) -> str:
     """What a session is told, complete in itself: a session that never read the skill can still act on it."""
     s = command(home)
@@ -245,7 +264,8 @@ def wording(notes: list, home, lane_rows: dict | None = None, midwork: bool = Fa
            "while you work; this is how the notes reach you, and nothing else will deliver them. "
            + ("Deal with them at the next sensible point in what you are doing, then carry on with it."
               if midwork else "Deal with them now, before you stop.")
-           + " Their words are quoted exactly; never paraphrase them in what you record.",
+           + " Their words are quoted exactly; never paraphrase them in what you record."
+           + " A File: line is something they attached to that note (a screenshot, a document): open it before you act on the note.",
            "", f"S is: {s}", ""]
     if new:
         out += [f"TO SORT ({len(new)}): nobody has read these yet. For each one, say what kind of note it is and what you take it to mean.", ""]
@@ -253,7 +273,7 @@ def wording(notes: list, home, lane_rows: dict | None = None, midwork: bool = Fa
             head = f"  {n['id']}" + ("  URGENT" if n.get("urgent") else "")
             if n.get("kind"):
                 head += f"  (the user marked it: {SAID.get(n['kind'], n['kind'])}; sort it as `{n['kind']}`)"
-            out += [head, _quote(n.get("text"))]
+            out += [head, _quote(n.get("text"))] + _files(n, home)
             for m in n.get("thread") or []:
                 out.append(f"      {'They' if m.get('who') == 'you' else 'You'} then said: {m.get('text')}")
             if n.get("reading"):
@@ -284,7 +304,7 @@ def wording(notes: list, home, lane_rows: dict | None = None, midwork: bool = Fa
     if go:
         out += [f"TO DO ({len(go)}): these were sent to you. A directive or a rule here is one the user has confirmed.", ""]
         for n in go:
-            out += [f"  {n['id']}  {n.get('kind')}" + ("  URGENT" if n.get("urgent") else ""), _quote(n.get("text"))]
+            out += [f"  {n['id']}  {n.get('kind')}" + ("  URGENT" if n.get("urgent") else ""), _quote(n.get("text"))] + _files(n, home)
             if n.get("reading"):
                 out.append(f"      Taken to mean: {n['reading']}")
             for m in n.get("thread") or []:
@@ -300,7 +320,7 @@ def wording(notes: list, home, lane_rows: dict | None = None, midwork: bool = Fa
     if talk:
         out += [f"TO ANSWER ({len(talk)}): a discussion where the user spoke last.", ""]
         for n in talk:
-            out += [f"  {n['id']}" + ("  URGENT" if n.get("urgent") else ""), _quote(n.get("text"))]
+            out += [f"  {n['id']}" + ("  URGENT" if n.get("urgent") else ""), _quote(n.get("text"))] + _files(n, home)
             for m in n.get("thread") or []:
                 out.append(f"      {'They' if m.get('who') == 'you' else 'You'}: {m.get('text')}")
             out.append("")

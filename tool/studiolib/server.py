@@ -9,7 +9,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from .store import Studio, StudioError, slugify
 
@@ -113,7 +113,8 @@ def make_handler(home: Path, allowed_hosts: set[str], quiet: bool = False, hub: 
                 if origin and urlsplit(origin).netloc.lower() not in allowed_hosts:
                     self.fail(403, "cross-site request refused")
                     return False
-                if "application/json" not in (self.headers.get("Content-Type") or ""):
+                # JSON, or a file sent with the page's own header: a plain form from another site can send neither
+                if "application/json" not in (self.headers.get("Content-Type") or "") and not self.headers.get("X-Studio-File"):
                     self.fail(415, "send JSON")
                     return False
             return True
@@ -164,6 +165,10 @@ def make_handler(home: Path, allowed_hosts: set[str], quiet: bool = False, hub: 
                 if head == "library" and len(parts) > 1:
                     path = self.under(self.studio().library_dir, "/".join(parts[1:]))
                     return self.send_file(path) if path else self.fail(404, "no such file")
+                if head == "notefile" and len(parts) == 3:  # a file on a note; a closed note's comes back from the archive
+                    from . import notefiles
+                    path = notefiles.bring(self.studio(), parts[1], parts[2])
+                    return self.send_file(path) if path else self.fail(404, "that file is not here and the archive does not have it")
                 if head == "motions" and len(parts) == 2:
                     path = self.under(self.studio().motions_dir, parts[1])
                     return self.send_file(path) if path else self.fail(404, "no such file")
@@ -195,8 +200,16 @@ def make_handler(home: Path, allowed_hosts: set[str], quiet: bool = False, hub: 
         def _write(self):
             if not self.guard():
                 return
-            parts = [unquote(p) for p in urlsplit(self.path).path.split("/") if p]
+            split = urlsplit(self.path)
+            parts = [unquote(p) for p in split.path.split("/") if p]
             try:
+                if len(parts) == 4 and parts[:2] == ["api", "note"] and parts[3] == "file" and self.command == "PUT":
+                    length = self.headers.get("Content-Length")  # a file on a note: streamed to disk, no size cap
+                    if length is None or not length.isdigit():
+                        return self.fail(411, "send the file with its length")
+                    name = (parse_qs(split.query).get("name") or [""])[0]
+                    note = self.studio().attach_file(parts[2], name, self.rfile, int(length), lock=LOCK)
+                    return self.send_json({"ok": True, "note": note})
                 data = self.body()
                 with LOCK:
                     studio = self.studio()
@@ -235,9 +248,14 @@ def make_handler(home: Path, allowed_hosts: set[str], quiet: bool = False, hub: 
                         note = studio.add_note(str(data.get("text") or ""), kind=str(data.get("kind") or ""),
                                                urgent=bool(data.get("urgent")))
                         return self.send_json({"ok": True, "note": note})
+                    if len(parts) == 3 and parts[:2] == ["api", "note"] and data.get("action") == "unfile":
+                        return self.send_json({"ok": True, "note": studio.unfile(parts[2], str(data.get("name") or ""))})
                     if len(parts) == 3 and parts[:2] == ["api", "note"]:
                         note = studio.answer_note(parts[2], str(data.get("action") or ""), text=str(data.get("text") or ""),
                                                   kind=str(data.get("kind") or ""), session=str(data.get("session") or ""))
+                        if data.get("action") in ("done", "park", "reopen"):
+                            from . import notefiles
+                            notefiles.kick(studio)  # closed files go to the archive, reopened ones come back
                         return self.send_json({"ok": True, "note": note})
                     if parts == ["api", "hand"]:
                         row = studio.answer_hand(str(data.get("id") or ""), str(data.get("action") or ""),

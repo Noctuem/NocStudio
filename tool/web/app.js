@@ -115,6 +115,7 @@
       for (const x of ((STATIC.state.overview || {}).hands || [])) if (x.id === id) Object.assign(x, { status: { done: 'done', park: 'parked', reopen: 'open' }[action], his_note: note });
     },
     addNote: async () => { throw new Error('This is a sample page: notes are not kept here'); },
+    putFile: async () => { throw new Error('This is a sample page: notes are not kept here'); },
     note: async () => { throw new Error('This is a sample page: notes are not kept here'); },
     src: (url) => STATIC.files[url] || '',
     bytes: async (url) => { if (!STATIC.files[url]) throw new Error('missing'); return b64bytes(STATIC.files[url]); },
@@ -132,6 +133,12 @@
     confirm: (key, confirmed, note) => call('PUT', '/api/triage', { key, confirmed, confirm_note: note }),
     hand: (id, action, note) => call('POST', '/api/hand', { id, action, note }),
     addNote: (text, kind, urgent) => call('POST', '/api/note', { text, kind, urgent }),
+    putFile: async (id, file, name) => { // the file as it is, not JSON: any size; the header tells the server the page sent it
+      const res = await fetch(rel('/api/note/' + encodeURIComponent(id) + '/file?name=' + encodeURIComponent(name || file.name)), { method: 'PUT', headers: { 'X-Studio-File': '1' }, body: file });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || ('The studio answered ' + res.status));
+      return data;
+    },
     note: (id, action, extra) => call('POST', '/api/note/' + encodeURIComponent(id), Object.assign({ action }, extra || {})),
     src: (url) => url,
     bytes: async (url) => { const r = await fetch(rel(url)); if (!r.ok) throw new Error('missing'); return r.arrayBuffer(); },
@@ -1444,9 +1451,53 @@
   const clip = (text, n) => { const t = String(text || '').replace(/\s+/g, ' ').trim(); return t.length > n ? t.slice(0, n - 1).trimEnd() + '…' : t; };
   const afterNote = async (said) => { S.state = await API.state(); if (said) toast(said); const r = route(); if (r === 'notes' || r === 'overview') render(r, true); else { const bar = $('.top'); if (bar) bar.replaceWith(top(r)); } };
 
+  // files on a note: any kind, any size; pictures show, the rest is a link
+  const PICTURE = /\.(png|jpe?g|gif|webp|svg|bmp)$/i;
+  const noteFileUrl = (n, f) => '/notefile/' + encodeURIComponent(n.id) + '/' + encodeURIComponent(f.name);
+  const bytes = (n) => (n < 1024 ? n + ' bytes' : n < 1048576 ? (n / 1024).toFixed(1) + ' KB' : n < 1073741824 ? (n / 1048576).toFixed(1) + ' MB' : (n / 1073741824).toFixed(2) + ' GB');
+  const stampName = (file) => { // a pasted screenshot comes in as "image.png": give it the time instead
+    if (file.name && file.name !== 'image.png') return file.name;
+    const d = new Date(), p = (x) => String(x).padStart(2, '0');
+    return 'screenshot ' + d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds()) + '.' + ((file.type || '').split('/')[1] || 'png');
+  };
+  const pastedFiles = (e) => Array.from((e.clipboardData || {}).files || []);
+  async function sendFiles(nid, files) {
+    if (!files.length) return;
+    toast(files.length === 1 ? 'Sending ' + files[0].name + '…' : 'Sending ' + files.length + ' files…');
+    for (const f of files) await API.putFile(nid, f, f.studioName || f.name);
+  }
+  function pickFiles(take) {
+    const input = h('input', { type: 'file', multiple: true, style: 'display:none', onchange: () => { take(Array.from(input.files || [])); input.remove(); } });
+    document.body.append(input); input.click();
+  }
+  function dropTarget(el, take) {
+    el.addEventListener('dragover', (e) => { if (Array.from(e.dataTransfer.types || []).includes('Files')) { e.preventDefault(); el.classList.add('dropping'); } });
+    el.addEventListener('dragleave', () => el.classList.remove('dropping'));
+    el.addEventListener('drop', (e) => { el.classList.remove('dropping'); const fs = Array.from(e.dataTransfer.files || []); if (fs.length) { e.preventDefault(); take(fs); } });
+  }
+  function noteFiles(n, open) {
+    const files = n.files || [];
+    if (!files.length) return null;
+    const closed = n.status === 'done' || n.status === 'parked';
+    return h('div', { class: 'nfiles' }, files.map((f) => {
+      const url = noteFileUrl(n, f), away = !f.here;
+      const label = h('span', { class: 'nfname' }, f.name, h('span', { class: 'muted' }, ' · ' + bytes(f.size || 0) + (away ? (closed ? ' · in the archive' : ' · on its way from the other copy') : '')));
+      const off = open ? h('button', { class: 'btn small', type: 'button', title: 'Take this file off the note', onclick: async () => {
+        try { await API.note(n.id, 'unfile', { name: f.name }); await afterNote('Taken off'); } catch (e) { toast(e.message); } } }, '×') : null;
+      if (PICTURE.test(f.name) && !(away && !closed)) return h('figure', { class: 'nfile pic' }, h('a', { href: url, target: '_blank', rel: 'noopener' }, h('img', { src: url, alt: f.name, loading: 'lazy' })), h('figcaption', {}, label, off));
+      return h('div', { class: 'nfile' }, away && !closed ? label : h('a', { href: url, target: '_blank', rel: 'noopener', download: f.name }, label), off);
+    }));
+  }
+
   // where the user types: one box, the same on the Notes page and behind the Note button on every page
   function noteBox(done) {
-    const D = S.jot || (S.jot = { text: '', kind: '', urgent: false });
+    const D = S.jot || (S.jot = { text: '', kind: '', urgent: false, files: [] });
+    D.files = D.files || [];
+    const tray = h('div', { class: 'nfiles pending' });
+    const drawTray = () => tray.replaceChildren(...D.files.map((f, i) => h('span', { class: 'chip' }, f.studioName || f.name, ' · ' + bytes(f.size),
+      h('button', { class: 'x', type: 'button', title: 'Leave this file out', onclick: () => { D.files.splice(i, 1); drawTray(); } }, '×'))));
+    const take = (fs) => { for (const f of fs) { f.studioName = stampName(f); D.files.push(f); } drawTray(); };
+    drawTray();
     const text = h('textarea', { class: 'field', rows: 2, placeholder: 'An order, a bug, a question, a half-formed idea. Enter sends it; Shift+Enter starts a new line.', 'aria-label': 'A note for the project',
       value: D.text, oninput: (e) => { D.text = e.target.value; } });
     const picks = NOTE_PICK.map(([k, label]) => { const b = h('button', { class: 'btn small' + (D.kind === k ? ' on' : ''), type: 'button', 'aria-pressed': String(D.kind === k),
@@ -1455,11 +1506,22 @@
       onclick: () => { D.urgent = !D.urgent; urgent.classList.toggle('on', D.urgent); urgent.setAttribute('aria-pressed', String(D.urgent)); } }, 'Urgent');
     const send = async () => {
       if (!text.value.trim()) { toast('Write the note first'); return; }
-      try { await API.addNote(text.value, D.kind, D.urgent); S.jot = null; text.value = ''; await afterNote(D.kind === 'later' ? 'Kept for later' : 'Noted'); if (done) done(); }
-      catch (e) { toast(e.message); }
+      let made = null;
+      try {
+        made = (await API.addNote(text.value, D.kind, D.urgent)).note;
+        await sendFiles(made.id, D.files);
+        S.jot = null; text.value = ''; await afterNote(D.kind === 'later' ? 'Kept for later' : 'Noted'); if (done) done();
+      } catch (e) { // the note is kept even when a file did not get through: say so, and keep the files to try again on the note
+        if (made) { S.jot = null; text.value = ''; await afterNote(); toast('Noted, but a file did not get through: ' + e.message + '. Add it on the note.'); }
+        else toast(e.message);
+      }
     };
     text.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); } });
-    return { el: h('div', { class: 'notebox' }, text, h('div', { class: 'picks' }, picks, h('span', { class: 'grow' }), urgent, h('button', { class: 'btn small primary', type: 'button', onclick: send }, 'Send'))), text };
+    text.addEventListener('paste', (e) => { const fs = pastedFiles(e); if (fs.length) { e.preventDefault(); take(fs); } });
+    const attach = h('button', { class: 'btn small', type: 'button', title: 'Put a file on the note. You can also paste a screenshot into the box, or drop files on it.', onclick: () => pickFiles(take) }, 'Attach');
+    const box = h('div', { class: 'notebox' }, text, tray, h('div', { class: 'picks' }, picks, h('span', { class: 'grow' }), attach, urgent, h('button', { class: 'btn small primary', type: 'button', onclick: send }, 'Send')));
+    dropTarget(box, take);
+    return { el: box, text };
   }
   function closeNotePop() { const el = $('.notepop'); if (el) el.remove(); document.removeEventListener('keydown', notePopKey); }
   function notePopKey(e) { if (e.key === 'Escape') { closeNotePop(); e.stopPropagation(); } }
@@ -1495,12 +1557,16 @@
     S.notes = S.notes || {};
     const key = 'n:' + n.id, open = ['new', 'confirm', 'go', 'talk'].includes(n.status);
     const act = async (action, extra, said) => { try { await API.note(n.id, action, extra); delete S.notes[key]; await afterNote(said); } catch (e) { toast(e.message); } };
-    const words = (hint) => h('textarea', { class: 'field', rows: 1, placeholder: hint, 'aria-label': hint + ' (' + n.id + ')', value: S.notes[key] || '', oninput: (e) => { S.notes[key] = e.target.value; } });
+    const takes = open || n.status === 'later';
+    const addFiles = async (fs) => { for (const f of fs) f.studioName = stampName(f); try { await sendFiles(n.id, fs); await afterNote(fs.length === 1 ? 'File added' : fs.length + ' files added'); } catch (e) { toast(e.message); } };
+    const words = (hint) => h('textarea', { class: 'field', rows: 1, placeholder: hint, 'aria-label': hint + ' (' + n.id + ')', value: S.notes[key] || '', oninput: (e) => { S.notes[key] = e.target.value; },
+      onpaste: (e) => { const fs = pastedFiles(e); if (fs.length) { e.preventDefault(); addFiles(fs); } } });
     const btn = (label, fn, cls) => h('button', { class: 'btn small' + (cls ? ' ' + cls : ''), type: 'button', onclick: fn }, label);
     const kind = open || n.status === 'later' ? h('select', { 'aria-label': 'What kind of note ' + n.id + ' is', title: 'Say what kind of note this is yourself',
       onchange: (e) => { if (e.target.value) act('kind', { kind: e.target.value }, 'Sorted as ' + NOTE[e.target.value].toLowerCase()); } },
       h('option', { value: '' }, n.kind ? 'Change the kind' : 'Sort it yourself'), Object.keys(NOTE).filter((k) => k !== n.kind).map((k) => h('option', { value: k }, NOTE[k]))) : null;
-    const urgent = open ? btn(n.urgent ? 'Not urgent' : 'Urgent', () => act('urgent', {}, n.urgent ? 'No longer urgent' : 'Marked urgent')) : null;
+    const attach = takes ? btn('Attach', () => pickFiles(addFiles)) : null;
+    const urgent = open ? [attach, btn(n.urgent ? 'Not urgent' : 'Urgent', () => act('urgent', {}, n.urgent ? 'No longer urgent' : 'Marked urgent'))] : null;
     let controls = null;
     if (n.status === 'confirm') {
       const t = words('Anything to add, or what you meant instead');
@@ -1518,18 +1584,21 @@
         sessions.filter((s) => s.state !== 'ended').map((s) => h('option', { value: s.id }, clip(s.title || s.prompt || 'A session', 50)))) : null;
       controls = [t, h('div', { class: 'jf' }, btn('Add', () => (t.value.trim() ? act('reply', { text: t.value }, 'Added') : toast('Write what to add first'))), sendTo, btn('Drop it', () => act('park', {}, 'Set aside')), h('span', { class: 'grow' }), kind, urgent)];
     } else if (n.status === 'later') {
-      controls = h('div', { class: 'jf' }, btn('Bring it back', () => act('reopen', {}, 'Back in the box')), btn('Drop it', () => act('park', {}, 'Set aside')), h('span', { class: 'grow' }), kind);
+      controls = h('div', { class: 'jf' }, btn('Bring it back', () => act('reopen', {}, 'Back in the box')), btn('Drop it', () => act('park', {}, 'Set aside')), h('span', { class: 'grow' }), kind, attach);
     } else controls = h('div', { class: 'jf' }, btn('Open again', () => act('reopen', {}, 'Open again')));
-    return h('article', { class: 'jot ' + n.status + (n.waits === 'you' ? ' mine' : ''), id: 'note-' + n.id },
+    const card = h('article', { class: 'jot ' + n.status + (n.waits === 'you' ? ' mine' : ''), id: 'note-' + n.id },
       h('div', { class: 'jh' }, h('span', { class: 'id' }, n.id), h('span', { class: 'chip' + (n.kind ? ' accent' : '') }, n.kind ? NOTE[n.kind] || n.kind : 'Unsorted'),
         n.urgent && open ? h('span', { class: 'chip bad' }, 'Urgent') : null, h('span', { class: 'where' }, noteWhere(n)), h('span', { class: 'd' }, when(n.created))),
       h('blockquote', {}, n.text),
+      noteFiles(n, takes),
       n.from ? h('span', { class: 'sub' }, 'Part of ' + n.from + ', split off so each part gets its own answer.') : null,
       n.reading ? h('div', { class: 'answer' }, h('span', { class: 'label' }, n.status === 'confirm' ? 'Claude takes this to mean' : 'Taken to mean'), h('span', { html: inline(n.reading) })) : null,
       (n.thread || []).map((m) => h('div', { class: 'msg ' + m.who }, h('span', {}, m.who === 'you' ? 'You' : 'Claude', h('br'), when(m.at)), m.who === 'you' ? h('div', { class: 'said' }, m.text) : md(m.text))),
       n.result ? h('div', { class: 'answer' }, h('span', { class: 'label' }, n.status === 'parked' ? 'Why it was left' : 'What was done'), h('span', { html: inline(n.result) }),
         n.ref || n.decision ? h('span', { class: 'mono muted' }, [n.ref, n.decision ? 'on the record as ' + n.decision : ''].filter(Boolean).join(' · ')) : null) : null,
       controls);
+    if (takes) dropTarget(card, addFiles);
+    return card;
   }
   function notesPage() {
     const all = notesOf().slice().reverse(), ov = S.state.overview || {};

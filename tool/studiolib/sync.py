@@ -195,6 +195,8 @@ def step(studio: Studio, commit: str = "") -> dict:
     last = read_json(live / "sync.json", {}) or {}
     out["ok"] = last.get("ok", "") if out["error"] else out["at"]  # when it last went through
     write_json(live / "sync.json", out)
+    from . import notefiles
+    notefiles.tidy(studio)  # files on notes are not in git: closed ones to the archive, open ones carried across
     return out
 
 
@@ -205,6 +207,8 @@ def start(home) -> bool:
         every = settings(studio)["every"]
     except (StudioError, ValueError):
         return False
+    from . import notefiles
+    notefiles.kick(studio)  # files on notes that closed while nothing ran go to the archive now
     key = str(studio.home)
     if not every or key in STARTED:
         return False

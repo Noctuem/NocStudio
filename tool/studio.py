@@ -600,9 +600,23 @@ def cmd_note(a):
         note = s.add_note(" ".join(rest), kind=a.kind)
         print(f"{note['id']}: in the notes box" + (f", as {note['kind']}" if note["kind"] else ""))
         return
+    if a.action == "tidy":
+        from studiolib import notefiles
+        print(json.dumps(notefiles.tidy(s)))
+        return
     if not rest:
         raise StudioError(f"note {a.action} needs an id")
     nid, text = rest[0], " ".join(rest[1:])
+    if a.action == "fetch":  # the files on a note, brought to this machine, by their full paths
+        from studiolib import notefiles
+        note = s.note(nid)
+        out = notefiles.tidy(s) if any(not notefiles.here(s.home, note["id"], f["name"]) for f in note.get("files") or []) else {}
+        for f in note.get("files") or []:
+            path = notefiles.here(s.home, note["id"], f["name"]) or notefiles.bring(s, note["id"], f["name"])
+            print(path if path else f"{f['name']}: not found here, on the other copy or in the archive" + (f" ({out['error']})" if out.get("error") else ""))
+        if not note.get("files"):
+            print(f"{nid} has no files.")
+        return
     if a.action == "show":
         print(json.dumps(s.note(nid), indent=2, ensure_ascii=False))
     elif a.action == "sort":
@@ -867,7 +881,7 @@ def main(argv=None) -> int:
     c.set_defaults(fn=cmd_hand)
 
     c = sub.add_parser("note", help="the user's notes box: sort what they typed, answer a discussion, close what was done")
-    c.add_argument("action", choices=("waiting", "list", "show", "sort", "reply", "split", "done", "add"))
+    c.add_argument("action", choices=("waiting", "list", "show", "sort", "reply", "split", "done", "add", "fetch", "tidy"))
     c.add_argument("rest", nargs="*", help="the note's id, then the words for reply, split and add")
     c.add_argument("--kind", default="", choices=("",) + NOTE_KINDS)
     c.add_argument("--reading", default="", help="sort: what you take the note to mean, plainly; the user confirms a directive or a rule against it")

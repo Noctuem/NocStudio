@@ -68,6 +68,20 @@ A note about work another session is doing goes to that session. If no session i
 of the project, the page says so and you send it yourself. What waits on you (a reading to
 confirm, an answer to read) shows in Needs you.
 
+A note can carry files: paste a screenshot into the box, drop files on it, or press **Attach**.
+Any kind and any size. Pictures show on the note and the rest are links, and the session handed
+the note gets each file's full path. Files stay out of the Studio's git, so a big one never lands
+in its history. When a note closes, its files can move to an archive on another machine and come
+back if the note opens again. Set that in `studio.local.toml`:
+
+```toml
+[files]
+archive = "you@server:/srv/studio-homes/_archive/MyGame-studio"   # or a folder on this machine
+peer = "you@server:/srv/studio-homes/MyGame-studio"              # the phone copy, if there is one
+```
+
+Remote places are reached with `ssh` and `tar`, so ssh must work without a password prompt.
+
 ![The Notes page: a discussion, a change waiting to be confirmed, and a note not yet read](docs/screenshots/notes.png)
 
 ### Organised from the start
