@@ -120,9 +120,23 @@ def drop(home, nid: str, name: str) -> None:
 
 
 # --------------------------------------------------------------------------- places: a folder, or ssh
+def _pick(value, home: Path) -> str:
+    """One place, or a list of them where a copy sees the same folder under different paths (a server's
+    copy on the host and inside its container): the first that is remote, or whose parent folder exists here."""
+    if not isinstance(value, list):
+        return str(value or "")
+    for spec in (str(v) for v in value if v):
+        if re.fullmatch(r"[^/\\:@\s]+@[^/\\:\s]+:/.+", spec):
+            return spec
+        path = Path(spec)
+        if (path if path.is_absolute() else home / path).parent.is_dir():
+            return spec
+    return ""
+
+
 def settings(studio) -> dict:
     raw = studio.config.get("files") or {}
-    return {"archive": str(raw.get("archive") or ""), "peer": str(raw.get("peer") or "")}
+    return {"archive": _pick(raw.get("archive"), studio.home), "peer": _pick(raw.get("peer"), studio.home)}
 
 
 class Place:
