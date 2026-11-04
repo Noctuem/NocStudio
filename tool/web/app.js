@@ -545,10 +545,56 @@
       h('nav', { class: 'nav', 'aria-label': 'Sections' }, tab('overview', 'Overview'), tab('inbox', 'Inbox', mine, true), tab('notes', 'Notes', noteQ, true), st.static || st.site ? null : tab('talk', 'Talk'), tab('library', 'Library'), tab('decisions', 'Decisions', st.decisions.length), tab('build', 'Build'), st.has_playtests === false ? null : tab('playtests', 'Playtests', confirmQ, true)),
       h('span', { class: 'spacer' }),
       syncChip(st.sync),
+      usageChip(),
       st.static ? null : h('button', { class: 'btn small', type: 'button', title: 'Leave a note for the project (N)', onclick: openNotePop }, 'Note'),
       st.hub ? h('a', { class: 'btn small allp', href: st.hub, title: 'Back to the list of your projects' }, 'All projects') : null, scaleControl(), themeControl(),
       st.static ? h('span', { class: 'sample' }, 'Sample data. Candidates are placeholders drawn by script.') : null);
   }
+  // the plan's usage: Claude Code's own /usage, read on the PC (it calls no model, so reading it costs nothing)
+  const U = { data: null, err: '', at: 0, busy: false };
+  async function usageLoad(fresh) {
+    if (U.busy) return;
+    U.busy = true; drawUsagePop();
+    try { U.data = await call('GET', '/api/usage' + (fresh ? '?fresh=1' : '')); U.err = ''; } catch (e) { U.err = e.message; }
+    U.busy = false; U.at = Date.now();
+    for (const b of document.querySelectorAll('.usage-btn')) b.replaceWith(usageButton());
+    drawUsagePop();
+  }
+  function usageTop() { const l = (U.data || {}).limits || []; return l.length ? l.reduce((a, b) => (b.pct > a.pct ? b : a)) : null; }
+  function usageButton() {
+    const t = usageTop();
+    return h('button', { class: 'btn small usage-btn' + (t && t.pct >= 80 ? ' hot' : ''), type: 'button', onclick: toggleUsage,
+      title: t ? t.name + ': ' + Math.round(t.pct) + '% used' + (t.resets ? ', resets ' + t.resets : '') : 'Your plan\'s usage (/usage)' }, t ? 'Usage ' + Math.round(t.pct) + '%' : 'Usage');
+  }
+  function usageChip() {
+    if (S.state.static || S.state.site) return null;
+    if (!U.at || Date.now() - U.at > 5 * 60000) usageLoad(false);
+    return usageButton();
+  }
+  function closeUsage() { const el = $('.usagepop'); if (el) el.remove(); document.removeEventListener('keydown', usageKey); }
+  function usageKey(e) { if (e.key === 'Escape') { closeUsage(); e.stopPropagation(); } }
+  function toggleUsage() {
+    if ($('.usagepop')) { closeUsage(); return; }
+    document.body.append(h('div', { class: 'notepop usagepop', role: 'dialog', 'aria-label': 'Usage' }));
+    document.addEventListener('keydown', usageKey);
+    if (!U.at || Date.now() - U.at > 60000) usageLoad(true); else drawUsagePop();
+  }
+  function drawUsagePop() {
+    const el = $('.usagepop'), d = U.data || {};
+    if (!el) return;
+    el.replaceChildren(
+      h('div', { class: 'jh' }, h('h2', { class: 'grow' }, 'Usage'),
+        h('button', { class: 'btn small', type: 'button', disabled: U.busy, onclick: () => usageLoad(true) }, U.busy ? 'Reading…' : 'Check again'),
+        h('button', { class: 'btn small', type: 'button', onclick: closeUsage }, 'Close (Esc)')),
+      ...(d.limits || []).map((l) => h('div', { class: 'ubar' + (l.pct >= 80 ? ' hot' : '') },
+        h('div', { class: 'jh' }, h('b', { class: 'grow' }, l.name), h('span', {}, Math.round(l.pct) + '% used')),
+        h('div', { class: 'um' }, h('span', { style: 'width:' + Math.max(0, Math.min(100, l.pct)) + '%' })),
+        l.resets ? h('div', { class: 'muted' }, 'Resets ' + l.resets) : null)),
+      U.err ? h('div', { class: 'tline bad' }, U.err) : null,
+      d.text ? h('details', {}, h('summary', {}, 'Everything /usage says'), h('pre', { class: 'utext' }, d.text)) : U.busy ? h('div', { class: 'muted' }, 'Reading /usage…') : null,
+      d.at ? h('div', { class: 'muted' }, 'Read ' + when(d.at) + '. Reading it calls no model, so it costs nothing.') : null);
+  }
+
   // a Studio kept in step with another copy (sync.py): quiet while it goes through, plain when it does not
   function syncChip(sy) {
     if (!sy) return null;
@@ -1639,7 +1685,20 @@
     const text = h('textarea', { class: 'field', rows: 3, 'aria-label': 'Your message to the session',
       placeholder: 'Talk to the session. Enter sends; Shift+Enter starts a new line. Paste a screenshot or drop files to attach them.',
       value: T.draft, oninput: (e) => { T.draft = e.target.value; } });
-    let busy = false, ended = false;
+    let busy = false, ended = false, cur = '';
+    const working = () => cur === 'working' || cur === 'asking';
+    const acts = h('span', { class: 'tacts' });
+    async function stopIt() {
+      try { await call('POST', '/api/talk/' + encodeURIComponent(T.key), { action: 'interrupt' }); poll(); } catch (e) { toast(e.message); }
+    }
+    function drawActs() {
+      text.placeholder = working() ? 'It is working. Enter sends: it reads your message at its next step, as in the terminal. Esc stops it.'
+        : 'Talk to the session. Enter sends; Shift+Enter starts a new line. Paste a screenshot or drop files to attach them.';
+      acts.replaceChildren(...[h('button', { class: 'btn small', type: 'button', onclick: () => pickFiles(take) }, 'Attach'),
+        working() ? h('button', { class: 'btn small', type: 'button', title: 'Stop what it is doing now (Esc); the session stays', onclick: stopIt }, 'Stop') : null,
+        working() ? h('button', { class: 'btn small', type: 'button', title: 'Stop what it is doing, then send this as your next message', onclick: () => send(undefined, true) }, 'Stop and send') : null,
+        h('button', { class: 'btn small primary', type: 'button', title: working() ? 'It reads this at its next step, without stopping' : 'Send (Enter)', onclick: () => send() }, 'Send')].filter(Boolean));
+    }
 
     const drawTray = () => tray.replaceChildren(...T.files.map((f, i) => h('span', { class: 'chip' }, f.studioName || f.name, ' · ' + bytes(f.size),
       h('button', { class: 'x', type: 'button', title: 'Leave this file out', onclick: () => { T.files.splice(i, 1); drawTray(); } }, '×'))));
@@ -1678,10 +1737,11 @@
       }));
     }
     function drawHead(state) {
+      if (state !== cur) { cur = state; drawActs(); }
       const label = state ? TALK_STATE[state] || state : (T.resume ? 'Not started here yet' : 'New session');
       head.replaceChildren(...[h('h2', { class: 'grow' }, T.title || (T.key || T.resume ? 'A session' : 'A new session')),
         h('span', { class: 'chip' + (state === 'asking' ? ' accent' : state === 'ended' ? ' bad' : '') }, label),
-        state === 'working' || state === 'asking' ? h('button', { class: 'btn small', type: 'button', title: 'Stop what it is doing now; the session stays', onclick: async () => { try { await call('POST', '/api/talk/' + encodeURIComponent(T.key), { action: 'interrupt' }); } catch (e) { toast(e.message); } } }, 'Stop') : null].filter(Boolean));
+        state === 'working' || state === 'asking' ? h('button', { class: 'btn small', type: 'button', title: 'Stop what it is doing now (Esc); the session stays', onclick: stopIt }, 'Stop') : null].filter(Boolean));
     }
     async function poll() {
       if (!T.key || busy) return;
@@ -1704,7 +1764,7 @@
       Object.assign(T, { key: row.key, after: 0, resume: '', fork: false, title: clip(row.last, 60) || 'A session' });
       log.replaceChildren(); asks.replaceChildren(); poll(); list();
     }
-    async function send(words) {
+    async function send(words, stop) {
       const said = (words === undefined ? text.value : words).trim();
       if (!said && !T.files.length) { toast('Write your message first'); return; }
       let full = said;
@@ -1719,7 +1779,7 @@
           }
           full += (full ? '\n\n' : '') + 'Files I attached:\n' + paths.map((p) => '- ' + p).join('\n');
         }
-        if (T.key && !ended) await call('POST', '/api/talk/' + encodeURIComponent(T.key), { action: 'say', text: full });
+        if (T.key && !ended) await call('POST', '/api/talk/' + encodeURIComponent(T.key), { action: 'say', text: full, stop: !!stop });
         else {
           const d = await call('POST', '/api/talk', { text: full, resume: T.key || T.resume, fork: T.fork });
           T.key = d.key; T.after = T.resume ? 0 : T.after; if (T.resume) log.replaceChildren(); T.resume = '';
@@ -1753,10 +1813,13 @@
       side.replaceChildren(...rows);
     }
 
-    text.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); } });
+    text.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
+      else if (e.key === 'Escape' && working()) { e.preventDefault(); stopIt(); }
+    });
     text.addEventListener('paste', (e) => { const fs = pastedFiles(e); if (fs.length) { e.preventDefault(); take(fs); } });
-    const box = h('div', { class: 'tbox' }, tray, text, h('div', { class: 'jf' }, h('span', { class: 'grow muted' }, 'Auto mode decides what it may do. What it asks about comes here.'),
-      h('button', { class: 'btn small', type: 'button', onclick: () => pickFiles(take) }, 'Attach'), h('button', { class: 'btn small primary', type: 'button', onclick: () => send() }, 'Send')));
+    drawActs();
+    const box = h('div', { class: 'tbox' }, tray, text, h('div', { class: 'jf' }, h('span', { class: 'grow muted' }, 'Auto mode decides what it may do. What it asks about comes here.'), acts));
     dropTarget(box, take);
 
     // the idea loop: docs/idea.md beside the talk, kept by the session; start it, then say when it is done

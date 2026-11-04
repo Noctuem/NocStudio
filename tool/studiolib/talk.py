@@ -14,6 +14,10 @@ spoken to for IDLE seconds is stopped; it can be carried on later, from where it
 The earlier part of a session the page did not start is read from its transcript, so carrying on with
 yesterday's session shows what was said. Claude Code's hooks see these sessions like any other, so the
 Overview shows them and they are handed the user's notes.
+
+A message sent while a session works reaches it at its next step, as one typed in the terminal does; Stop
+interrupts the turn (the session stays), and Stop and send interrupts it and then says the message.
+`usage()` runs Claude Code's own /usage, which spends nothing, for the page to show.
 """
 from __future__ import annotations
 
@@ -185,6 +189,7 @@ class Talk:
         self.state = "starting"
         self.error = ""
         self.touched = time.time()
+        self.stopping = False  # an interrupt was sent: the turn it ends is "stopped", not an error
         self.replied = 0   # the seq of the last finished turn
         self.seen = 0      # the seq the page last showed while it was in front of the user
         self.lock = threading.Lock()
@@ -296,7 +301,11 @@ class Talk:
                                                                      "error": "not handled by the Studio page"}})
         elif kind == "result":
             self.state = "idle"
-            if msg.get("is_error") or msg.get("subtype") not in (None, "success"):
+            self.asks.clear()  # a question the turn left open is moot once it ends
+            if self.stopping:
+                self.stopping = False
+                self._add({"kind": "note", "text": "Stopped."})
+            elif msg.get("is_error") or msg.get("subtype") not in (None, "success"):
                 self._add({"kind": "note", "text": "The turn ended with an error: " + str(msg.get("result") or msg.get("subtype"))[:400]})
             self._add({"kind": "turn", "text": "", "cost": msg.get("total_cost_usd")})
             self.replied = self.seq
@@ -321,10 +330,18 @@ class Talk:
         except OSError as err:
             raise TalkError(f"could not reach the session: {err}") from err
 
-    def say(self, text: str) -> None:
+    def busy(self) -> bool:
+        """In the middle of a turn: working, or waiting on an answer from the page."""
+        return self.proc.poll() is None and self.state in ("starting", "working", "asking")
+
+    def say(self, text: str, stop: bool = False) -> None:
+        """Say something. While it works, the session reads it at its next step; with stop, the turn is
+        stopped first and the message starts the next one."""
         text = str(text or "").strip()
         if not text:
             raise TalkError("write something first")
+        if stop and self.state in ("working", "asking"):
+            self.interrupt()
         self.touched = time.time()
         self._send({"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": text}]}})
         self.state = "working"
@@ -344,8 +361,11 @@ class Talk:
         self._add({"kind": "answer", "text": ("Allowed: " if allow else "Denied: ") + ask["line"] + (f" ({why.strip()})" if why.strip() and not allow else "")})
 
     def interrupt(self) -> None:
+        if self.state not in ("working", "asking"):
+            raise TalkError("it is not doing anything to stop")
+        self.stopping = True
         self._send({"type": "control_request", "request_id": f"stop-{uuid.uuid4().hex[:8]}", "request": {"subtype": "interrupt"}})
-        self._add({"kind": "note", "text": "Asked the session to stop what it is doing."})
+        self._add({"kind": "note", "text": "Stopping what it is doing…"})
 
     def stop(self) -> None:
         if self.proc.poll() is None:
@@ -408,6 +428,49 @@ def waiting(home) -> dict:
         elif w == "reply":
             out["replies"] += 1
     return out
+
+
+def busy() -> list["Talk"]:
+    """The conversations of this process in the middle of a turn: closing the app would cut them off."""
+    out, seen = [], set()
+    for talk in list(TALKS.values()):
+        if id(talk) not in seen and talk.busy():
+            seen.add(id(talk))
+            out.append(talk)
+    return out
+
+
+# ------------------------------------------------------------------------- the plan's usage
+_USAGE: dict = {}
+_USAGE_LOCK = threading.Lock()
+USAGE_FRESH = 60  # seconds a reading is reused for
+
+
+def usage(fresh: bool = False) -> dict:
+    """Claude Code's /usage, run on its own: no model is called, nothing is spent, no session is kept and no
+    hook runs. Returns its text and each limit it names, e.g. {"name": "Current week (all models)",
+    "pct": 40, "resets": "Nov 6, 8am (America/Chicago)"}."""
+    with _USAGE_LOCK:
+        if _USAGE and not fresh and time.time() - _USAGE["t"] < USAGE_FRESH:
+            return _USAGE["data"]
+        where = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "NocStudio"
+        where.mkdir(parents=True, exist_ok=True)
+        cmd = [*claude_exe(), "-p", "/usage", "--output-format", "json", "--no-session-persistence",
+               "--settings", json.dumps({"disableAllHooks": True})]
+        try:
+            run = subprocess.run(cmd, cwd=where, capture_output=True, timeout=60, env=dict(os.environ, STUDIO_TALK="1"),
+                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            text = str(json.loads(run.stdout.decode("utf-8", "replace")).get("result") or "")
+        except (OSError, subprocess.SubprocessError, ValueError) as err:
+            raise TalkError(f"/usage did not answer: {err}") from err
+        limits = []
+        for line in text.splitlines():
+            m = re.match(r"\s*(.+?):\s*(\d+(?:\.\d+)?)% used(?:\s*\W\s*resets\s+(.+))?\s*$", line)
+            if m:
+                limits.append({"name": m.group(1), "pct": float(m.group(2)), "resets": (m.group(3) or "").strip()})
+        data = {"text": text.strip(), "limits": limits, "at": _now()}
+        _USAGE.update(t=time.time(), data=data)
+        return data
 
 
 _SWEEPING = False

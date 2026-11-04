@@ -18,6 +18,7 @@ import sys
 import tempfile
 import threading
 import time
+import types
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -423,6 +424,32 @@ def main() -> int:
               "denied on the page, the session is told no and says so")
         status, listed = http("GET", base + "/api/talk")
         check(status == 200 and [t["id"] for t in listed["talks"]] == [seen["id"]], "the page lists the conversations it has going")
+
+        # stop, and stop and send; and closing the app waits for a session in the middle of a turn
+        from studiolib import app as app_mod, talk as talk_mod
+        http("POST", base + f"/api/talk/{key}", {"action": "say", "text": "a third thing"})
+        seen = talk_until(key, lambda v: v["asks"])
+        lingered = threading.Thread(target=app_mod.linger, args=(types.SimpleNamespace(seen=0.0), 0.05), daemon=True)
+        idle_was, app_mod.IDLE_SECONDS = app_mod.IDLE_SECONDS, 0
+        lingered.start(); time.sleep(0.4)
+        check(lingered.is_alive() and talk_mod.busy(), "with the window closed, the app stays while a session is in the middle of a turn")
+        status, _ = http("POST", base + f"/api/talk/{key}", {"action": "say", "text": "do this instead", "stop": True})
+        seen = talk_until(key, lambda v: v["asks"] and any(e["text"] == "do this instead" for e in v["events"]))
+        notes = [e["text"] for e in seen["events"] if e["kind"] == "note"]
+        check(status == 200 and "Stopped." in notes and not any("error" in n for n in notes) and len(seen["asks"]) == 1,
+              "stop and send stops the turn, says it stopped (not an error), and starts the next turn with the message")
+        status, _ = http("POST", base + f"/api/talk/{key}", {"action": "interrupt"})
+        seen = talk_until(key, lambda v: v["state"] == "idle")
+        lingered.join(2)
+        check(status == 200 and seen["state"] == "idle" and not seen["asks"] and not lingered.is_alive(),
+              "Stop ends the turn and the question it left open, and then the app with no window may close")
+        app_mod.IDLE_SECONDS = idle_was
+        status, said = http("POST", base + f"/api/talk/{key}", {"action": "interrupt"})
+        check(status == 400 and "not doing anything" in said["error"], "Stop on a session that is not working says so")
+        status, used = http("GET", base + "/api/usage?fresh=1")
+        check(status == 200 and used["limits"] == [{"name": "Current session", "pct": 12.0, "resets": "3pm"},
+                                                   {"name": "Current week (all models)", "pct": 40.0, "resets": "Nov 6, 8am (America/Chicago)"}],
+              "the page reads the plan's usage from /usage, each limit with its share and when it resets")
         http("POST", base + f"/api/talk/{key}", {"action": "stop"})
         check(talk_until(key, lambda v: v["state"] == "ended")["state"] == "ended", "a conversation can be stopped, and says it stopped")
         del os.environ["STUDIO_CLAUDE"]

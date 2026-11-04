@@ -94,8 +94,13 @@ the session gets their paths.
 
 Auto mode decides what a session may do. Anything it asks about comes to the page with **Allow** and
 **Deny** (and a reason, if you want the session to know why). Something auto mode blocks shows there
-too, with **Allow it**, which tells the session in your words that you allow it. **Stop** halts what it
-is doing; a conversation left alone for 30 minutes is stopped and can be carried on later. Each one is
+too, with **Allow it**, which tells the session in your words that you allow it.
+
+While a session works you can still type: as in the terminal, it reads your message at its next step
+without stopping. **Stop** (or Esc) halts the turn and the session stays; **Stop and send** halts it
+and sends your message as the next turn. A conversation left alone for 30 minutes is stopped and can
+be carried on later. **Usage**, at the top of every page, shows your plan's limits from Claude Code's
+own `/usage`, which calls no model, so reading it costs nothing. Each one is
 `claude -p` with stream-json, so Claude Code's hooks see it like any session: the Overview shows it and
 it is handed your notes. It runs on the PC copy only for now.
 
@@ -175,8 +180,13 @@ erased. The next session can read what you already settled instead of asking aga
 
 ### One window for every project
 
-`NocStudio` in the Start menu opens a menu of every project that has a Studio. Pick one and it
-starts and opens there; close the window and it stops. Nothing runs in between.
+`NocStudio` in the Start menu opens a menu of every project that has a Studio, the one worked on
+last at the top. A project whose Talk page waits on you (a question to answer, or a reply you have
+not read) is lit up, and opens straight on its Talk page. Pick one and it starts and opens there;
+moving between projects leaves each one's sessions running. Close the window and it stops, but not
+while a session is in the middle of a turn: then it stays with no window until every session has
+finished (one waiting on Allow or Deny waits for you), and opening NocStudio again shows the same
+sessions where they were.
 
 ![The menu of projects](docs/screenshots/menu.png)
 

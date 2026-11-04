@@ -54,11 +54,12 @@
 </style>
 </head>
 <body>
-<header class="top"><span class="brand"><b>Noc</b>Studio<small>Your projects</small></span></header>
+<header class="top"><span class="brand"><b>Noc</b>Studio<small>Your projects</small></span><span class="spacer"></span><button class="btn small usage-btn" id="usage-btn" type="button" title="Your plan's usage (/usage)" hidden>Usage</button></header>
+<div class="notepop usagepop" id="usage-pop" role="dialog" aria-label="Usage" hidden></div>
 <main>
   <section>
     <h1 id="head">Your projects</h1>
-    <p class="lede" id="lede">Pick one to open its Studio. It runs while this window is open and stops when you close it.</p>
+    <p class="lede" id="lede">Pick one to open its Studio. It runs while this window is open. Close the window and it stops, once every Talk session has finished what it is doing.</p>
     <div class="projects" id="list"></div>
     <div class="ideabox" id="idea" hidden>
       <button class="btn small" type="button" id="idea-open">Start from an idea</button>
@@ -159,6 +160,57 @@
 })();
 </script>
 <script src="web/vault.js"></script>
+<script>
+(() => { // the plan's usage: Claude Code's own /usage, which calls no model, so reading it costs nothing
+  const btn = document.getElementById('usage-btn'), pop = document.getElementById('usage-pop');
+  const U = { data: null, err: '', at: 0, busy: false };
+  const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text !== undefined) n.textContent = text; return n; };
+  const top = () => { const l = (U.data || {}).limits || []; return l.length ? l.reduce((a, b) => (b.pct > a.pct ? b : a)) : null; };
+  function draw() {
+    const t = top();
+    btn.textContent = t ? 'Usage ' + Math.round(t.pct) + '%' : 'Usage';
+    btn.classList.toggle('hot', !!t && t.pct >= 80);
+    if (t) btn.title = t.name + ': ' + Math.round(t.pct) + '% used' + (t.resets ? ', resets ' + t.resets : '');
+    if (pop.hidden) return;
+    const head = el('div', 'jh'), again = el('button', 'btn small', U.busy ? 'Reading…' : 'Check again'), close = el('button', 'btn small', 'Close (Esc)');
+    again.type = close.type = 'button'; again.disabled = U.busy;
+    again.onclick = () => load(true); close.onclick = hide;
+    head.append(el('h2', 'grow', 'Usage'), again, close);
+    const kids = [head];
+    for (const l of (U.data || {}).limits || []) {
+      const bar = el('div', 'ubar' + (l.pct >= 80 ? ' hot' : '')), row = el('div', 'jh'), m = el('div', 'um'), fill = el('span');
+      row.append(el('b', 'grow', l.name), el('span', '', Math.round(l.pct) + '% used'));
+      fill.style.width = Math.max(0, Math.min(100, l.pct)) + '%'; m.append(fill);
+      bar.append(row, m); if (l.resets) bar.append(el('div', 'muted', 'Resets ' + l.resets));
+      kids.push(bar);
+    }
+    if (U.err) kids.push(el('div', 'tline bad', U.err));
+    if ((U.data || {}).text) { const d = el('details'); d.append(el('summary', '', 'Everything /usage says'), el('pre', 'utext', U.data.text)); kids.push(d); }
+    else if (U.busy) kids.push(el('div', 'muted', 'Reading /usage…'));
+    if ((U.data || {}).at) kids.push(el('div', 'muted', 'Read at ' + new Date(U.data.at).toLocaleTimeString() + '. Reading it calls no model, so it costs nothing.'));
+    pop.replaceChildren(...kids);
+  }
+  async function load(fresh) {
+    if (U.busy) return;
+    U.busy = true; draw();
+    try {
+      const res = await fetch('api/usage' + (fresh ? '?fresh=1' : '')), d = await res.json();
+      if (!res.ok) throw new Error(d.error || 'usage did not answer');
+      U.data = d; U.err = '';
+    } catch (e) { U.err = String(e.message || e); }
+    U.busy = false; U.at = Date.now(); draw();
+  }
+  const key = (e) => { if (e.key === 'Escape') hide(); };
+  function hide() { pop.hidden = true; document.removeEventListener('keydown', key); }
+  btn.addEventListener('click', () => {
+    if (!pop.hidden) { hide(); return; }
+    pop.hidden = false; document.addEventListener('keydown', key);
+    if (Date.now() - U.at > 60000) load(true); else draw();
+  });
+  fetch('api/hub').then((r) => r.json()).then((d) => { if (d.served) return; btn.hidden = false; load(false);
+    setInterval(() => { if (document.visibilityState === 'visible') load(false); }, 5 * 60000); }).catch(() => {});
+})();
+</script>
 <script>
 (() => { // start from an idea: only where the app's hub.toml says where new projects go
   const box = document.getElementById('idea'), form = document.getElementById('idea-form'), said = document.getElementById('idea-said');

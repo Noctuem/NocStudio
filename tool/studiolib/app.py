@@ -187,6 +187,12 @@ class Hub:
                     return self.send((WEB / "hub.html").read_bytes(), TYPES[".html"])
                 if parts == ["api", "hub"]:
                     return self.send_json({"studio_hub": True, "studios": hub.rows(), "ui": Studio.ui()})
+                if parts == ["api", "usage"]:  # the plan's usage, from Claude Code's own /usage
+                    from . import talk
+                    try:
+                        return self.send_json(talk.usage(fresh="fresh=1" in urlsplit(self.path).query))
+                    except talk.TalkError as err:
+                        return self.send_json({"error": str(err)}, 502)
                 if parts == ["api", "ideas"]:  # whether the menu may start an idea
                     from . import idea
                     return self.send_json({"ideas": bool(idea.hub_settings().get("folder"))})
@@ -270,6 +276,20 @@ def window(url: str, quiet: bool = False) -> subprocess.Popen | None:
                              "--no-default-browser-check", "--disable-background-mode"], startupinfo=info)
 
 
+def linger(hub: Hub, every: float = 2.0) -> None:
+    """The window is closed. A Talk session in the middle of a turn is not cut off: the app stays, with no
+    window, until every session has finished its turn (one waiting on Allow or Deny waits for it), and then
+    until no page has been open for IDLE_SECONDS. Opening NocStudio again meanwhile opens a window on this
+    app, with the same sessions where they were."""
+    from . import talk
+    if not talk.busy():
+        return
+    print(f"window closed; staying while {len(talk.busy())} session(s) finish their turn", flush=True)
+    while talk.busy() or time.monotonic() - hub.seen < IDLE_SECONDS:
+        time.sleep(every)
+    print("every session has finished its turn", flush=True)
+
+
 def main(quiet: bool = False) -> int:
     if sys.stderr is None or sys.stdout is None:  # started with no console: keep what would be printed
         DATA.mkdir(parents=True, exist_ok=True)
@@ -295,6 +315,7 @@ def main(quiet: bool = False) -> int:
         hub.touch()
         while time.monotonic() - hub.seen < IDLE_SECONDS:
             time.sleep(2)
+    linger(hub)
     hub.close()
     print("closed")
     return 0

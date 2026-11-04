@@ -538,3 +538,13 @@ details.setup > :not(summary) { margin: 0 14px 12px; }
 .tidea .jf { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .tidea .grow { flex: 1 1 auto; }
 .tidea .ideadoc { max-height: 38vh; overflow: auto; font-size: 14px; }
+
+/* the plan's usage */
+.usage-btn.hot { border-color: var(--accent); color: var(--accent-fg); }
+.usagepop { gap: 12px; }
+.usagepop .ubar { display: flex; flex-direction: column; gap: 4px; }
+.usagepop .um { height: 8px; border-radius: 4px; background: var(--line); overflow: hidden; }
+.usagepop .um span { display: block; height: 100%; background: var(--fg); opacity: 0.7; }
+.usagepop .ubar.hot .um span { background: var(--accent); opacity: 1; }
+.usagepop .utext { white-space: pre-wrap; font: 12px/1.45 var(--font-mono); color: var(--muted); max-height: 40vh; overflow: auto; margin: 6px 0 0; }
+.tacts { display: flex; gap: 6px; flex-wrap: wrap; }

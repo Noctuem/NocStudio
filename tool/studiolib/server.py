@@ -174,8 +174,8 @@ def make_handler(home: Path, allowed_hosts: set[str], quiet: bool = False, hub: 
                                    resume=str(data.get("resume") or ""), fork=bool(data.get("fork")))
                     return self.send_json({"ok": True, "key": t.key})
                 t, action = talk.get(rest[0]), str(data.get("action") or "")
-                if action == "say":
-                    t.say(str(data.get("text") or ""))
+                if action == "say":  # while it works it reads this at its next step; with stop, the turn stops first
+                    t.say(str(data.get("text") or ""), stop=bool(data.get("stop")))
                 elif action in ("allow", "deny"):
                     t.answer(str(data.get("ask") or ""), action == "allow", str(data.get("text") or ""))
                 elif action == "interrupt":
@@ -250,6 +250,14 @@ def make_handler(home: Path, allowed_hosts: set[str], quiet: bool = False, hub: 
                         return self.send_json(idea.view(studio))
                     if parts[1:2] == ["talk"]:
                         return self.talk_get(studio, parts[2:], split_q(self.path))
+                    if parts[1:] == ["usage"]:  # the plan's usage, from Claude Code's own /usage
+                        from . import talk
+                        if studio.config.get("site"):
+                            return self.fail(404, "usage is read on the PC")
+                        try:
+                            return self.send_json(talk.usage(fresh=(split_q(self.path).get("fresh") or [""])[0] == "1"))
+                        except talk.TalkError as err:
+                            return self.fail(502, str(err))
                     return self.fail(404, "no such route")
                 if head == "files" and len(parts) > 2:
                     studio = self.studio()
