@@ -49,8 +49,9 @@ _TOUCHED: dict[str, tuple] = {}
 
 
 def touched(repo: str, home: str) -> float:
-    """When a project was last worked on: the newest of its git activity, its Claude Code sessions (its
-    worktrees' too) and its Studio's own commits. Kept for half a minute; the menu asks every few seconds."""
+    """When a project was last worked on: the newest of its commits and checkouts, its Claude Code sessions
+    (its worktrees' too) and, for a folder that is not git yet, the folder. Kept for half a minute; the
+    menu asks every few seconds."""
     hit = _TOUCHED.get(repo + "|" + home)
     if hit and time.monotonic() - hit[0] < 30:
         return hit[1]
@@ -62,14 +63,13 @@ def touched(repo: str, home: str) -> float:
             times.append(path.stat().st_mtime)
         except OSError:
             pass
-    for folder in filter(None, (repo, home)):
-        for name in (".git/logs/HEAD", ".git/index"):
-            mtime(Path(folder) / name)
-    if repo:
-        mtime(Path(repo))
+    if repo:  # not git's index: a plain `git status` rewrites it, so anything that only looks would count
+        mtime(Path(repo) / ".git" / "logs" / "HEAD")
+        if not (Path(repo) / ".git").exists():
+            mtime(Path(repo))
         base = slug(Path(repo))
         try:
-            dirs = [d for d in projects_dir().iterdir() if d.name == base or d.name.startswith(base + "--claude-worktrees-")]
+            dirs = [d for d in projects_dir().iterdir() if d.name == base or d.name.startswith((base + "--claude-worktrees-", base + "-wt"))]
         except OSError:
             dirs = []
         for d in dirs:
