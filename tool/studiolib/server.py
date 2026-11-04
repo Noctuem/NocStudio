@@ -24,6 +24,10 @@ MAX_BODY = 2 * 1024 * 1024
 LOCK = threading.Lock()  # one writer at a time; the files are the database
 
 
+def split_q(path: str) -> dict:
+    return parse_qs(urlsplit(path).query)
+
+
 def make_handler(home: Path, allowed_hosts: set[str], quiet: bool = False, hub: str = "", seen=None):
     """`hub` is the Studio app's menu, when this Studio was started from it; `seen` is called on every request."""
     class Handler(BaseHTTPRequestHandler):
@@ -131,6 +135,55 @@ def make_handler(home: Path, allowed_hosts: set[str], quiet: bool = False, hub: 
                 raise StudioError("send a JSON object")
             return data
 
+        # ------------------------------------------------------------- talking to sessions
+        def talk_repo(self, studio: Studio) -> Path:
+            if studio.config.get("site"):
+                raise StudioError("sessions run on the PC; talking to them from this copy comes later")
+            repo = studio.game_root()
+            if repo is None or not repo.is_dir():
+                raise StudioError("this Studio names no project folder (game_repo in studio.toml)")
+            return repo
+
+        def talk_get(self, studio: Studio, rest: list, query: dict):
+            from . import board, talk
+            try:
+                if not rest:
+                    repo = self.talk_repo(studio)
+                    live = {s["id"]: s for s in board.sessions(studio)}
+                    mine = {r["id"] for r in talk.listing(studio.home)}
+                    past = [dict(r, live=live.get(r["id"], {}).get("state", "") if r["id"] not in mine else "") for r in talk.past(repo)]
+                    return self.send_json({"talks": talk.listing(studio.home), "past": past, "repo": str(repo)})
+                if len(rest) == 1:
+                    after = int((query.get("after") or ["0"])[0] or 0)
+                    return self.send_json(talk.get(rest[0]).view(after))
+                if len(rest) == 2 and rest[1] == "history":  # an older session, read from its transcript before carrying on
+                    return self.send_json({"events": talk.history(self.talk_repo(studio), rest[0])})
+                return self.fail(404, "no such route")
+            except talk.TalkError as err:
+                return self.fail(404, str(err))
+
+        def talk_post(self, studio: Studio, rest: list, data: dict):
+            from . import talk
+            try:
+                if not rest:
+                    t = talk.start(studio.home, self.talk_repo(studio), text=str(data.get("text") or ""),
+                                   resume=str(data.get("resume") or ""), fork=bool(data.get("fork")))
+                    return self.send_json({"ok": True, "key": t.key})
+                t, action = talk.get(rest[0]), str(data.get("action") or "")
+                if action == "say":
+                    t.say(str(data.get("text") or ""))
+                elif action in ("allow", "deny"):
+                    t.answer(str(data.get("ask") or ""), action == "allow", str(data.get("text") or ""))
+                elif action == "interrupt":
+                    t.interrupt()
+                elif action == "stop":
+                    t.stop()
+                else:
+                    raise talk.TalkError("say say, allow, deny, interrupt or stop")
+                return self.send_json({"ok": True, "key": t.key})
+            except talk.TalkError as err:
+                return self.fail(400, str(err))
+
         # ------------------------------------------------------------- routes
         def do_HEAD(self):
             self.do_GET()
@@ -157,6 +210,8 @@ def make_handler(home: Path, allowed_hosts: set[str], quiet: bool = False, hub: 
                         return self.send_json(board.live(studio))
                     if len(parts) == 3 and parts[1] == "batch":
                         return self.send_json(studio.load_batch(parts[2]))
+                    if parts[1:2] == ["talk"]:
+                        return self.talk_get(studio, parts[2:], split_q(self.path))
                     return self.fail(404, "no such route")
                 if head == "files" and len(parts) > 2:
                     studio = self.studio()
@@ -210,6 +265,17 @@ def make_handler(home: Path, allowed_hosts: set[str], quiet: bool = False, hub: 
                     name = (parse_qs(split.query).get("name") or [""])[0]
                     note = self.studio().attach_file(parts[2], name, self.rfile, int(length), lock=LOCK)
                     return self.send_json({"ok": True, "note": note})
+                if parts == ["api", "talkfile"] and self.command == "PUT":
+                    length = self.headers.get("Content-Length")  # a file for a session: kept under live/, its path goes in the message
+                    if length is None or not length.isdigit():
+                        return self.fail(411, "send the file with its length")
+                    from . import notefiles
+                    studio = self.studio()
+                    folder = studio.home / "live" / "talkfiles" / time.strftime("%Y-%m-%d")
+                    entry = notefiles.receive_to(folder, (parse_qs(split.query).get("name") or [""])[0], self.rfile, int(length))
+                    return self.send_json({"ok": True, "path": str(folder / entry["name"]), "name": entry["name"], "size": entry["size"]})
+                if parts[:2] == ["api", "talk"]:
+                    return self.talk_post(self.studio(), parts[2:], self.body())
                 data = self.body()
                 with LOCK:
                     studio = self.studio()

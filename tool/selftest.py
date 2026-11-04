@@ -389,6 +389,40 @@ def main() -> int:
         check(until(lambda: kept.is_file() and kept.read_bytes() == blob), "opening the note again brings its files back")
         (home / "studio.local.toml").unlink()
 
+        # talking to a session from the page: a stand-in for Claude Code asks to run a command, the page answers
+        os.environ["STUDIO_CLAUDE"] = json.dumps([sys.executable, str(Path(__file__).resolve().parent / "selftest_claude.py")])
+
+        def talk_until(key: str, test, seconds: float = 10.0):
+            end, seen = time.time() + seconds, None
+            while time.time() < end:
+                status, seen = http("GET", base + f"/api/talk/{key}")
+                if status == 200 and test(seen):
+                    return seen
+                time.sleep(0.1)
+            return seen
+
+        status, began = http("POST", base + "/api/talk", {"text": "make the thing"})
+        key = began.get("key", "")
+        seen = talk_until(key, lambda v: v["asks"])
+        check(status == 200 and seen["asks"] and seen["asks"][0]["line"] == "Bash: make thing" and seen["state"] == "asking",
+              "a session started from the page asks there before it runs something auto mode would not")
+        status, _ = http("POST", base + f"/api/talk/{key}", {"action": "allow", "ask": seen["asks"][0]["id"]})
+        seen = talk_until(key, lambda v: v["state"] == "idle")
+        said = [e["text"] for e in seen["events"] if e["kind"] == "claude"]
+        check(status == 200 and said == ["made it: make the thing"] and seen["id"] and seen["key"] == seen["id"],
+              "allowed on the page, the session goes on and its answer shows, under the session's own id")
+        status, _ = http("POST", base + f"/api/talk/{key}", {"action": "say", "text": "and again"})
+        seen = talk_until(key, lambda v: v["asks"])
+        http("POST", base + f"/api/talk/{seen['id']}", {"action": "deny", "ask": seen["asks"][0]["id"], "text": "not now"})
+        seen = talk_until(key, lambda v: v["state"] == "idle" and any(e["text"] == "did not: and again" for e in v["events"]))
+        check(any(e["text"] == "did not: and again" for e in seen["events"]) and any(e["text"].startswith("Denied: ") for e in seen["events"]),
+              "denied on the page, the session is told no and says so")
+        status, listed = http("GET", base + "/api/talk")
+        check(status == 200 and [t["id"] for t in listed["talks"]] == [seen["id"]], "the page lists the conversations it has going")
+        http("POST", base + f"/api/talk/{key}", {"action": "stop"})
+        check(talk_until(key, lambda v: v["state"] == "ended")["state"] == "ended", "a conversation can be stopped, and says it stopped")
+        del os.environ["STUDIO_CLAUDE"]
+
         # an asset the user can open: what the game holds, by file, folder or glob
         (game / "content/audio/core").mkdir(parents=True); (game / "content/audio/tape").mkdir(parents=True)
         make_wav(game / "content/audio/core/step_1.wav", -24.0, 0.2); make_wav(game / "content/audio/tape/step_1.wav", -24.0, 0.2)

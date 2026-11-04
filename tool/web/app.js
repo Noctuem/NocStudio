@@ -542,7 +542,7 @@
       h('div', { class: 'brand' }, link('overview', { class: 'name' }, h('b', {}, 'Noc'), 'Studio'),
         st.hub ? h('a', { class: 'proj', href: st.hub, title: 'Your other projects' }, st.project || '', h('span', { 'aria-hidden': 'true' }, ' ▾'))
           : h('small', {}, st.project || '')),
-      h('nav', { class: 'nav', 'aria-label': 'Sections' }, tab('overview', 'Overview'), tab('inbox', 'Inbox', mine, true), tab('notes', 'Notes', noteQ, true), tab('library', 'Library'), tab('decisions', 'Decisions', st.decisions.length), tab('build', 'Build'), st.has_playtests === false ? null : tab('playtests', 'Playtests', confirmQ, true)),
+      h('nav', { class: 'nav', 'aria-label': 'Sections' }, tab('overview', 'Overview'), tab('inbox', 'Inbox', mine, true), tab('notes', 'Notes', noteQ, true), st.static || st.site ? null : tab('talk', 'Talk'), tab('library', 'Library'), tab('decisions', 'Decisions', st.decisions.length), tab('build', 'Build'), st.has_playtests === false ? null : tab('playtests', 'Playtests', confirmQ, true)),
       h('span', { class: 'spacer' }),
       syncChip(st.sync),
       st.static ? null : h('button', { class: 'btn small', type: 'button', title: 'Leave a note for the project (N)', onclick: openNotePop }, 'Note'),
@@ -574,6 +574,7 @@
       else if (r === 'decisions') page = decisionsPage();
       else if (r === 'playtests') page = playtestsPage();
       else if (r === 'notes') page = notesPage();
+      else if (r === 'talk') page = talkPage();
       else if (r === 'build') page = buildPage();
       else page = overviewPage();
       app.replaceChildren(top(r), page);
@@ -1625,6 +1626,144 @@
       h('section', {}, h('div', { class: 'filters' }, tabs), list));
   }
 
+  // ------------------------------------------------------------ talking to the project's sessions
+  const TALK_STATE = { starting: 'Starting', working: 'Working', asking: 'Asks you', idle: 'Your turn', ended: 'Stopped' };
+  function talkPage() {
+    const T = S.talk || (S.talk = { key: '', after: 0, draft: '', files: [], resume: '', fork: false, title: '' });
+    T.files = T.files || [];
+    const side = h('div', { class: 'tside' });
+    const log = h('div', { class: 'tlog', 'aria-live': 'polite' });
+    const asks = h('div', { class: 'tasks' });
+    const head = h('div', { class: 'thead' });
+    const tray = h('div', { class: 'nfiles pending' });
+    const text = h('textarea', { class: 'field', rows: 3, 'aria-label': 'Your message to the session',
+      placeholder: 'Talk to the session. Enter sends; Shift+Enter starts a new line. Paste a screenshot or drop files to attach them.',
+      value: T.draft, oninput: (e) => { T.draft = e.target.value; } });
+    let busy = false, ended = false;
+
+    const drawTray = () => tray.replaceChildren(...T.files.map((f, i) => h('span', { class: 'chip' }, f.studioName || f.name, ' · ' + bytes(f.size),
+      h('button', { class: 'x', type: 'button', title: 'Leave this file out', onclick: () => { T.files.splice(i, 1); drawTray(); } }, '×'))));
+    const take = (fs) => { for (const f of fs) { f.studioName = stampName(f); T.files.push(f); } drawTray(); };
+    drawTray();
+
+    function line(e) {
+      const old = e.old ? ' old' : '';
+      if (e.kind === 'you') return h('div', { class: 'msg you' + old }, h('span', {}, 'You', h('br'), when(e.at)), h('div', { class: 'said' }, e.text));
+      if (e.kind === 'claude') return h('div', { class: 'msg claude' + old }, h('span', {}, 'Claude', h('br'), when(e.at)), md(e.text));
+      if (e.kind === 'tool') return h('div', { class: 'tline' + old }, '› ' + e.text);
+      if (e.kind === 'tool-error') return h('div', { class: 'tline bad' }, '› ' + clip(e.text, 300));
+      if (e.kind === 'ask') return h('div', { class: 'tline' }, 'Asked to: ' + e.text);
+      if (e.kind === 'answer') return h('div', { class: 'tline' }, e.text);
+      if (e.kind === 'turn') return h('div', { class: 'tturn' });
+      if (e.kind === 'blocked') {
+        const row = h('div', { class: 'tblock' }, h('span', { class: 'label' }, 'Auto mode blocked this'), h('div', {}, e.text));
+        if (!e.old && !ended) row.append(h('div', { class: 'jf' },
+          h('button', { class: 'btn small primary', type: 'button', onclick: () => send('I allow what auto mode just blocked (' + clip(e.text, 300) + '). Go ahead and do it.') }, 'Allow it'),
+          h('button', { class: 'btn small', type: 'button', onclick: () => row.remove() }, 'Leave it')));
+        return row;
+      }
+      return h('div', { class: 'tline' + (e.kind === 'ended' ? ' bad' : '') }, e.text);
+    }
+    function add(events) {
+      const atEnd = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
+      for (const e of events) log.append(line(e));
+      if (atEnd || events.some((e) => e.kind === 'you')) log.scrollTop = log.scrollHeight;
+    }
+    function drawAsks(list) {
+      asks.replaceChildren(...list.map((a) => {
+        const why = h('input', { class: 'field', type: 'text', placeholder: 'Why not (optional, the session reads it)', 'aria-label': 'Why not' });
+        const act = async (action) => { try { await call('POST', '/api/talk/' + encodeURIComponent(T.key), { action, ask: a.id, text: why.value }); poll(); } catch (e) { toast(e.message); } };
+        return h('div', { class: 'task' }, h('span', { class: 'label' }, 'The session asks to'), h('code', { class: 'cmd' }, a.line), a.why ? h('div', { class: 'muted' }, a.why) : null,
+          h('div', { class: 'jf' }, h('button', { class: 'btn small primary', type: 'button', onclick: () => act('allow') }, 'Allow'), h('button', { class: 'btn small', type: 'button', onclick: () => act('deny') }, 'Deny'), why));
+      }));
+    }
+    function drawHead(state) {
+      const label = state ? TALK_STATE[state] || state : (T.resume ? 'Not started here yet' : 'New session');
+      head.replaceChildren(...[h('h2', { class: 'grow' }, T.title || (T.key || T.resume ? 'A session' : 'A new session')),
+        h('span', { class: 'chip' + (state === 'asking' ? ' accent' : state === 'ended' ? ' bad' : '') }, label),
+        state === 'working' || state === 'asking' ? h('button', { class: 'btn small', type: 'button', title: 'Stop what it is doing now; the session stays', onclick: async () => { try { await call('POST', '/api/talk/' + encodeURIComponent(T.key), { action: 'interrupt' }); } catch (e) { toast(e.message); } } }, 'Stop') : null].filter(Boolean));
+    }
+    async function poll() {
+      if (!T.key || busy) return;
+      busy = true;
+      try {
+        const v = await call('GET', '/api/talk/' + encodeURIComponent(T.key) + '?after=' + T.after);
+        if (v.key && v.key !== T.key) T.key = v.key;
+        add(v.events); T.after = v.seq; ended = v.state === 'ended';
+        drawAsks(v.asks || []); drawHead(v.state);
+      } catch (e) { drawHead('ended'); ended = true; }
+      finally { busy = false; }
+    }
+    function pick(row, fork) { // an older session: show what was said; it starts again here when you send
+      Object.assign(T, { key: '', after: 0, resume: row ? row.id : '', fork: !!fork, title: row ? (row.title || clip(row.prompt, 60)) : '' });
+      log.replaceChildren(); asks.replaceChildren(); ended = false; drawHead('');
+      if (row) call('GET', '/api/talk/' + encodeURIComponent(row.id) + '/history').then((d) => { if (T.resume === row.id && !T.key) add(d.events || []); }).catch(() => {});
+      text.focus(); list();
+    }
+    function show(row) { // a conversation this page has going
+      Object.assign(T, { key: row.key, after: 0, resume: '', fork: false, title: clip(row.last, 60) || 'A session' });
+      log.replaceChildren(); asks.replaceChildren(); poll(); list();
+    }
+    async function send(words) {
+      const said = (words === undefined ? text.value : words).trim();
+      if (!said && !T.files.length) { toast('Write your message first'); return; }
+      let full = said;
+      try {
+        if (T.files.length) {
+          const paths = [];
+          for (const f of T.files) {
+            const res = await fetch(rel('/api/talkfile?name=' + encodeURIComponent(f.studioName || f.name)), { method: 'PUT', headers: { 'X-Studio-File': '1' }, body: f });
+            const d = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(d.error || 'a file did not get through');
+            paths.push(d.path);
+          }
+          full += (full ? '\n\n' : '') + 'Files I attached:\n' + paths.map((p) => '- ' + p).join('\n');
+        }
+        if (T.key && !ended) await call('POST', '/api/talk/' + encodeURIComponent(T.key), { action: 'say', text: full });
+        else {
+          const d = await call('POST', '/api/talk', { text: full, resume: T.key || T.resume, fork: T.fork });
+          T.key = d.key; T.after = T.resume ? 0 : T.after; if (T.resume) log.replaceChildren(); T.resume = '';
+        }
+        if (words === undefined) { text.value = ''; T.draft = ''; }
+        T.files = []; drawTray(); poll(); list();
+      } catch (e) { toast(e.message); }
+    }
+    async function list() {
+      let d;
+      try { d = await call('GET', '/api/talk'); } catch (e) { side.replaceChildren(h('div', { class: 'empty' }, e.message)); return; }
+      const rows = [];
+      rows.push(h('div', { class: 'jf' }, h('button', { class: 'btn small primary', type: 'button', onclick: () => pick(null) }, 'New session'),
+        d.past.length ? h('button', { class: 'btn small', type: 'button', title: 'Like claude -c: the last session in this project', onclick: () => pick(d.past[0], !!d.past[0].live && d.past[0].live !== 'ended') }, 'Carry on with the last') : null));
+      if (d.talks.length) {
+        rows.push(h('h3', {}, 'Going here'));
+        for (const t of d.talks) rows.push(h('button', { class: 'trow' + (t.key === T.key ? ' on' : ''), type: 'button', onclick: () => show(t) },
+          h('span', { class: 'chip' + (t.asks ? ' accent' : '') }, t.asks ? 'Asks you' : TALK_STATE[t.state] || t.state), h('span', { class: 'tt' }, clip(t.last, 90) || 'Starting')));
+      }
+      const mine = new Set(d.talks.map((t) => t.id));
+      const past = d.past.filter((p) => !mine.has(p.id));
+      if (past.length) {
+        rows.push(h('h3', {}, 'Earlier sessions'));
+        for (const p of past) {
+          const elsewhere = p.live && p.live !== 'ended';
+          rows.push(h('button', { class: 'trow' + (p.id === T.resume ? ' on' : ''), type: 'button', title: elsewhere ? 'Open in a terminal now: carrying on here makes a copy, so the two do not trip over each other' : 'Show it; send a message to carry on with it',
+            onclick: () => pick(p, elsewhere) }, h('span', { class: 'tt' }, p.title || clip(p.prompt, 80) || p.id), h('span', { class: 'd' }, (elsewhere ? 'open elsewhere · ' : '') + when(p.at))));
+        }
+      }
+      side.replaceChildren(...rows);
+    }
+
+    text.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); } });
+    text.addEventListener('paste', (e) => { const fs = pastedFiles(e); if (fs.length) { e.preventDefault(); take(fs); } });
+    const box = h('div', { class: 'tbox' }, tray, text, h('div', { class: 'jf' }, h('span', { class: 'grow muted' }, 'Auto mode decides what it may do. What it asks about comes here.'),
+      h('button', { class: 'btn small', type: 'button', onclick: () => pickFiles(take) }, 'Attach'), h('button', { class: 'btn small primary', type: 'button', onclick: () => send() }, 'Send')));
+    dropTarget(box, take);
+    drawHead(''); list();
+    if (T.key) poll(); else if (T.resume) pick({ id: T.resume, title: T.title }, T.fork);
+    const timer = setInterval(poll, 1000), lister = setInterval(list, 8000);
+    S.cleanup.push(() => { clearInterval(timer); clearInterval(lister); });
+    return h('main', { class: 'talk' }, h('section', { class: 'tgrid' }, side, h('div', { class: 'tmain' }, head, log, asks, box)));
+  }
+
   // --------------------------------------------------------------- playtests
   function playtestsPage() {
     const sessions = S.state.playtests;
@@ -1683,7 +1822,7 @@
         const fresh = S.state.batches.filter((b) => b.status === 'open' && !before.has(b.id));
         if (fresh.length) toast('New in your inbox: ' + fresh[0].title);
         const r = route();
-        if (!r.startsWith('b.') && !r.startsWith('s.') && !S.over && !/^(TEXTAREA|INPUT)$/.test((document.activeElement || {}).tagName || '')) render(r, true);
+        if (!r.startsWith('b.') && !r.startsWith('s.') && r !== 'talk' && !S.over && !/^(TEXTAREA|INPUT)$/.test((document.activeElement || {}).tagName || '')) render(r, true);
         else { const bar = $('.top'); if (bar) bar.replaceWith(top(r)); }
       }
     } catch (e) { /* the server is restarting; try again on the next beat */ }

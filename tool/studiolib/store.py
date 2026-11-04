@@ -1549,7 +1549,7 @@ class Studio:
         batches.sort(key=lambda b: b.get("filed") or b.get("created") or "", reverse=True)
         samples, samples_held = self._shown(self.sample_ids())
         samples.sort(key=lambda b: b["order"])
-        return {"project": self.config.get("project"), "home": str(self.home), "static": False,
+        return {"project": self.config.get("project"), "home": str(self.home), "static": False, "site": str(self.config.get("site") or ""),
                 "limits": self.config.get("review"), "batches": batches, "held": held,
                 "samples": samples, "samples_held": samples_held, "ui": self.ui(),
                 "slots": [dict(s, files=self.slot_files(s)) for s in self.slots()],

@@ -84,6 +84,21 @@ Remote places are reached with `ssh` and `tar`, so ssh must work without a passw
 
 ![The Notes page: a discussion, a change waiting to be confirmed, and a note not yet read](docs/screenshots/notes.png)
 
+### Talk to the project's sessions
+
+The **Talk** page runs Claude Code in the project's folder and lets you talk to it there. Start a new
+session, carry on with the last one (like `claude -c`), or pick any earlier session: what was said
+before shows first, and your next message carries on from there. A session open in a terminal is
+carried on as a copy, so the two don't trip over each other. Paste a screenshot or attach files and
+the session gets their paths.
+
+Auto mode decides what a session may do. Anything it asks about comes to the page with **Allow** and
+**Deny** (and a reason, if you want the session to know why). Something auto mode blocks shows there
+too, with **Allow it**, which tells the session in your words that you allow it. **Stop** halts what it
+is doing; a conversation left alone for 30 minutes is stopped and can be carried on later. Each one is
+`claude -p` with stream-json, so Claude Code's hooks see it like any session: the Overview shows it and
+it is handed your notes. It runs on the PC copy only for now.
+
 ### Organised from the start
 
 Say **"start a new project"** or **"plan this project in its Studio"** to Claude Code. It reads

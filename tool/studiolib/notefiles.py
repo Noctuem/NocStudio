@@ -79,7 +79,11 @@ def _free(directory: Path, name: str, taken: set[str]) -> str:
 def receive(home, nid: str, name: str, stream, length: int, taken: set[str]) -> dict:
     """Write an upload to the note's folder as it arrives. Returns the entry for the note's list."""
     _root(home)
-    target = folder(home, nid)
+    return receive_to(folder(home, nid), name, stream, length, taken)
+
+
+def receive_to(target: Path, name: str, stream, length: int, taken: set[str] = frozenset()) -> dict:
+    """Write an upload into a folder as it arrives, under a safe name no other file there has."""
     target.mkdir(parents=True, exist_ok=True)
     name = _free(target, clean_name(name), taken)
     part = target / f".{name}.{os.getpid()}.{threading.get_ident()}.part"
