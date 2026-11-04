@@ -20,8 +20,9 @@ and a growing list of things only you can do.
 
 NocStudio gives all of that one place. The agent keeps a **board** you look at instead of asking
 for a status update. It **files** what you must judge, and you **judge** it in a page built for
-looking, listening and comparing. Nothing happens until you say **"process my studio
-verdicts"**, and then the agent acts on exactly what you marked, in your words.
+looking, listening and comparing. When you submit a verdict, it reaches the agent the next time it
+finishes a turn or you send it a message (or when you say **"process my studio verdicts"**), and the
+agent acts on exactly what you marked, in your words.
 
 It is a small Python program and a folder of plain files. No account, no cloud, no packages to
 install, and nothing leaves your machine.
@@ -102,7 +103,8 @@ and sends your message as the next turn. A conversation left alone for 30 minute
 be carried on later. **Usage**, at the top of every page, shows your plan's limits from Claude Code's
 own `/usage`, which calls no model, so reading it costs nothing. Each one is
 `claude -p` with stream-json, so Claude Code's hooks see it like any session: the Overview shows it and
-it is handed your notes. It runs on the PC copy only for now.
+it is handed your notes. It runs on the PC copy only for now. **Open in Claude app** carries a session
+on in the Claude desktop app instead (`claude --desktop --resume`): the same session, with all of it.
 
 **Shape an idea** turns the talk into an idea loop, like plan mode for the idea itself. Give it a loose
 idea; each turn Claude asks the 3 to 5 questions that matter most, each with what it recommends, and
@@ -247,7 +249,9 @@ Code the rules:
    pick in chat.
 2. One batch, one decision, six candidates at most.
 3. You only see what passes the checks.
-4. Nothing happens on a verdict until you say so.
+4. Nothing happens on a verdict until you submit it. Claude Code's hooks hand it to a session when
+   it finishes a turn or you send it a message; never in the middle of its work, and an idle session
+   is never woken for it.
 5. Your words are quoted, never paraphrased.
 6. The board is kept true as work happens: a step moves, work starts or lands, a merge, a
    publish, a setback.
