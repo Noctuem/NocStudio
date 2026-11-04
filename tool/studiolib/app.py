@@ -20,7 +20,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
-from . import setup, sync
+from . import setup, sync, vault
 from .server import MAX_BODY, TYPES, WEB, glance, make_handler
 from .store import Studio, StudioError
 
@@ -149,6 +149,12 @@ class Hub:
                     return self.send((WEB / "hub.html").read_bytes(), TYPES[".html"])
                 if parts == ["api", "hub"]:
                     return self.send_json({"studio_hub": True, "studios": hub.rows(), "ui": Studio.ui()})
+                if parts == ["api", "vault"]:  # the user's own notes beside the menu, when hub.toml names them
+                    try:
+                        cfg = vault.settings()
+                        return self.send_json(vault.view(cfg) if cfg else {"vault": False})
+                    except vault.VaultError as err:
+                        return self.send_json({"vault": False, "error": str(err)})
                 if parts[0] == "web" and len(parts) > 1:
                     path = (WEB / "/".join(parts[1:])).resolve()
                     if path.is_relative_to(WEB.resolve()) and path.is_file():
@@ -163,9 +169,17 @@ class Hub:
                     if length > MAX_BODY:
                         raise StudioError("request too large")
                     data = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
-                    if urlsplit(self.path).path != "/api/open" or not isinstance(data, dict):
+                    route = urlsplit(self.path).path
+                    if not isinstance(data, dict) or route not in ("/api/open", "/api/dump"):
                         return self.send_json({"error": "no such route"}, 404)
+                    if route == "/api/dump":
+                        cfg = vault.settings()
+                        if not cfg:
+                            raise StudioError("no notes folder is set (hub.toml)")
+                        return self.send_json({"ok": True, "page": vault.add(cfg, str(data.get("text") or ""))})
                     return self.send_json({"ok": True, "url": hub.open(str(data.get("home") or ""))})
+                except vault.VaultError as err:
+                    return self.send_json({"error": str(err)}, 400)
                 except (StudioError, ValueError) as err:
                     return self.send_json({"error": str(err)}, 400)
 

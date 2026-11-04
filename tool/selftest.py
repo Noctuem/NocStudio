@@ -657,6 +657,32 @@ def main() -> int:
                 hub.open(str(tmp / "gone")); check(False, "a Studio whose folder is gone is not started")
             except StudioError:
                 check(True, "a Studio whose folder is gone is not started")
+
+            # the user's own notes under the menu: pages to read, a box that only adds to the end of one
+            os.environ["STUDIO_HUB"] = str(tmp / "hub.toml")
+            check(app._get(hub.url + "api/vault") == {"vault": False}, "with no notes folder set, the menu shows only the projects")
+            notes = tmp / "notes"; notes.mkdir()
+            (notes / "Now.md").write_text("# Now\n- [ ] one\n- [x] two\n", encoding="utf-8")
+            (notes / "Dump.md").write_bytes(b"\r\n---\r\n")
+            (tmp / "hub.toml").write_text(f'[vault]\nfolder = "{notes.as_posix()}"\nshow = ["Now.md", "Gone.md", "../outside.md"]\ndump = "Dump.md"\n', encoding="utf-8")
+            seen = app._get(hub.url + "api/vault")
+            check(seen.get("vault") is False and "outside" in seen.get("error", ""), "a page outside the notes folder is refused")
+            (tmp / "hub.toml").write_text(f'[vault]\nfolder = "{notes.as_posix()}"\nshow = ["Now.md", "Gone.md"]\ndump = "Dump.md"\n', encoding="utf-8")
+            seen = app._get(hub.url + "api/vault")
+            check(seen["pages"][0]["text"].startswith("# Now") and seen["pages"][1]["missing"] and seen["dump"] == "Dump",
+                  "the menu shows the notes pages named, and says which is not there")
+
+            def dump(text):
+                req = urllib.request.Request(hub.url + "api/dump", data=json.dumps({"text": text}).encode(),
+                                             headers={"Content-Type": "application/json"}, method="POST")
+                try:
+                    return urllib.request.urlopen(req, timeout=5).status
+                except urllib.error.HTTPError as err:
+                    return err.code
+            check(dump("first thought") == 200 and dump("second\nthought") == 200 and dump("   ") == 400
+                  and (notes / "Dump.md").read_bytes() == b"\r\n---\r\n\r\nfirst thought\r\n\r\nsecond\r\nthought\r\n",
+                  "the box adds what is typed to the end of the dump page, as typed, in the page's own line endings")
+            del os.environ["STUDIO_HUB"]
         finally:
             hub.close()
         check(app._get(url + "api/state") is None and app._get(hub.url + "api/hub") is None, "closing the app stops every Studio it started")

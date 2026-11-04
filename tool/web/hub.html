@@ -20,6 +20,27 @@
   .proj .name { font: 700 22px/1.15 var(--font-display); font-stretch: 87%; color: var(--fg); }
   .proj .where { font: 12px/1.4 var(--font-mono); color: var(--faint); overflow-wrap: anywhere; }
   .proj .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: auto; }
+  #vault { margin-top: 28px; }
+  .dump { display: flex; flex-direction: column; gap: 8px; max-width: 980px; margin-bottom: 14px; }
+  .dump .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .dump .row .muted { flex: 1 1 auto; font-size: 13px; }
+  .dump .said { font-size: 13px; color: var(--fg); }
+  .vpages { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 520px), 1fr)); gap: 14px; align-items: start; }
+  .vpage { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 18px; max-height: 70vh; overflow: auto; min-width: 0; }
+  .vpage .vh { display: flex; gap: 10px; align-items: baseline; }
+  .vpage .vh h2 { margin: 0; }
+  .vpage .md { font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
+  .vpage .md h3, .vpage .md h4 { margin: 14px 0 4px; font-size: 15px; }
+  .vpage .md p { margin: 4px 0; }
+  .vpage .md ul, .vpage .md ol { margin: 4px 0; padding-left: 22px; }
+  .vpage .md li.task { list-style: none; margin-left: -20px; display: flex; gap: 8px; }
+  .vpage .md li.task .tick { flex: 0 0 16px; height: 16px; margin-top: 3px; border: 1px solid var(--line); border-radius: 3px; font-size: 12px; line-height: 14px; text-align: center; color: var(--accent-fg); }
+  .vpage .md li.task.done { color: var(--muted); }
+  .vpage .md .wl { color: var(--accent-fg); }
+  .vpage .md .tw { overflow-x: auto; }
+  .vpage .md table { border-collapse: collapse; font-size: 13px; margin: 6px 0; }
+  .vpage .md th, .vpage .md td { border: 1px solid var(--line); padding: 3px 8px; text-align: left; vertical-align: top; }
+  .vpage .md hr { border: 0; border-top: 1px solid var(--line); margin: 10px 0; }
 </style>
 </head>
 <body>
@@ -30,6 +51,14 @@
     <p class="lede" id="lede">Pick one to open its Studio. It runs while this window is open and stops when you close it.</p>
     <div class="projects" id="list"></div>
     <div class="empty" id="none" hidden>No project has a Studio yet. In a project, say to Claude Code: <code class="i">create a studio page for this</code></div>
+  </section>
+  <section id="vault" hidden>
+    <h1>Your notes</h1>
+    <div class="dump" id="vault-dump" hidden>
+      <textarea class="field" id="vault-text" rows="2" aria-label="A thought for later" placeholder="A thought for later. Enter adds it; Shift+Enter starts a new line."></textarea>
+      <div class="row"><span class="muted" id="vault-dump-to"></span><span class="said" id="vault-said" role="status"></span><button class="btn small primary" type="button" id="vault-add">Add</button></div>
+    </div>
+    <div class="vpages" id="vault-pages"></div>
   </section>
 </main>
 <script>
@@ -92,5 +121,6 @@
   window.addEventListener('pageshow', () => { busy = false; load(); });
 })();
 </script>
+<script src="web/vault.js"></script>
 </body>
 </html>
