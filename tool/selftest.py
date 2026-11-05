@@ -187,6 +187,94 @@ def main() -> int:
         studio.see_hand("walk")
         check(studio.unseen_hands() == [], "and leaves it once read")
 
+        # buttons: a session files a line to run or a file to open; the user's click does it on the PC
+        from studiolib import buttons
+        tool = Path(__file__).resolve().parent / "studio.py"
+        def ask_cli(*args, env=None):
+            return subprocess.run([sys.executable, str(tool), "--home", str(home), "hand", "set", *args], capture_output=True,
+                                  text=True, encoding="utf-8", env=dict(os.environ, **(env or {})))
+        made = ask_cli("build", "--title", "Build it", "--button", "Build", "--run", "echo built-it > here.txt; echo built-it; exit 3",
+                       "--cwd", str(game), env={"STUDIO_SESSION": "s-btn"})
+        row = next((x for x in studio.hands() if x["id"] == "build"), {})
+        check(made.returncode == 0 and row.get("button") == "Build" and Path(row.get("cwd", "")) == game.resolve() and row.get("session") == "s-btn",
+              "a session files a button with one command: its words, the line, the folder, and which session filed it")
+        bad = ask_cli("both", "--title", "Both", "--button", "X", "--run", "echo x", "--open", str(game))
+        loose = ask_cli("loose", "--title", "Loose", "--open", str(game))
+        check(bad.returncode == 2 and loose.returncode == 2 and not any(x["id"] in ("both", "loose") for x in studio.hands()),
+              "a button runs a line or opens a file, not both, and a file to open needs a button")
+        status, state = http("GET", base + "/api/state")
+        shown = next(x for x in state["overview"]["hands"] if x["id"] == "build")
+        check(shown["can_run"] is True and shown["ran"] is None and "can_run" not in next(x for x in state["overview"]["hands"] if x["id"] == "walk"),
+              "the page is told which asks have a button it can press")
+        status, _ = http("POST", base + "/api/button", {"id": "build"}, {"Origin": "http://elsewhere.example"})
+        refused = [status]
+        req = urllib.request.Request(base + "/api/button", data=b"id=build", method="POST", headers={"Content-Type": "application/x-www-form-urlencoded"})
+        try:
+            urllib.request.urlopen(req, timeout=10); refused.append(200)
+        except urllib.error.HTTPError as err:
+            refused.append(err.code)
+        status, said = http("POST", base + "/api/button", {"id": "walk", "run": "echo hacked > hacked.txt"})
+        refused.append(status)
+        status, _ = http("GET", base + "/api/button/..%2F..%2Fstudio")
+        refused.append(status)
+        check(refused == [403, 415, 400, 404] and "no button" in said.get("error", "") and not (game / "hacked.txt").exists()
+              and not (home / "hacked.txt").exists(), "only a button a session filed runs: another site, a plain form, a line sent from the page are all refused")
+        clock = time.time()
+        status, pressed = http("POST", base + "/api/button", {"id": "build"})
+        quick = time.time() - clock
+        ran = {}
+        for _ in range(300):
+            ran = http("GET", base + "/api/button/build")[1].get("ran") or {}
+            if ran.get("state") != "running":
+                break
+            time.sleep(0.1)
+        check(status == 200 and pressed["ran"]["state"] == "running" and quick < 3 and ran.get("state") == "done" and ran.get("code") == 3
+              and "built-it" in ran.get("tail", []) and (game / "here.txt").exists(),
+              "pressing it runs the line in its folder, and the page reads its exit code and its last lines")
+        ask_cli("wait", "--title", "A long build", "--button", "Build slowly", "--run", "sleep 20", "--cwd", str(game))
+        clock = time.time()
+        status, _ = http("POST", base + "/api/button", {"id": "wait"})
+        quick, again = time.time() - clock, http("POST", base + "/api/button", {"id": "wait"})
+        state_now = http("GET", base + "/api/state")[1]
+        status_stop, _ = http("POST", base + "/api/button", {"id": "wait", "action": "stop"})
+        for _ in range(100):
+            ran = http("GET", base + "/api/button/wait")[1].get("ran") or {}
+            if ran.get("state") != "running":
+                break
+            time.sleep(0.1)
+        check(status == 200 and quick < 3 and again[0] == 400 and "still running" in again[1]["error"] and status_stop == 200
+              and next(x for x in state_now["overview"]["hands"] if x["id"] == "wait")["ran"]["state"] == "running" and ran.get("state") == "stopped",
+              "a long run leaves the page free, is not started twice, and stops when the user says")
+        opened = []
+        buttons.OPENER = opened.append
+        (game / "notes.txt").write_text("read me", encoding="utf-8")
+        ask_cli("look", "--title", "Read the notes", "--button", "Open the notes", "--open", str(game / "notes.txt"))
+        status, pressed = http("POST", base + "/api/button", {"id": "look"})
+        check(status == 200 and opened == [game.resolve() / "notes.txt"] and pressed["ran"]["state"] == "opened",
+              "a button that opens a file opens it in its default app")
+        studio.answer_hand("look", "done")
+        status, said = http("POST", base + "/api/button", {"id": "look"})
+        studio.see_hand("look")
+        check(status == 400 and len(opened) == 1, "a button on an ask that is done does nothing")
+        far_copy = Studio.init(tmp / "site-copy", "Site copy", str(game))
+        (far_copy.home / "studio.local.toml").write_text('site = "p"\n', encoding="utf-8")
+        far_copy = Studio(far_copy.home)
+        far_copy.set_hand("build", title="Build it", button="Build", run="echo built > far.txt", cwd=str(game))
+        far = ThreadingHTTPServer(("127.0.0.1", 0), None)
+        far.RequestHandlerClass = server.make_handler(far_copy.home, {f"127.0.0.1:{far.server_address[1]}"}, quiet=True)
+        threading.Thread(target=far.serve_forever, daemon=True).start()
+        fbase = f"http://127.0.0.1:{far.server_address[1]}"
+        status, _ = http("POST", fbase + "/api/button", {"id": "build"})
+        shown = next(x for x in http("GET", fbase + "/api/state")[1]["overview"]["hands"] if x["id"] == "build")
+        far.shutdown(); far.server_close()
+        try:
+            buttons.press(far_copy, "build"); direct = True
+        except StudioError:
+            direct = False
+        time.sleep(0.5)
+        check(status == 403 and shown["can_run"] is False and not direct and not (game / "far.txt").exists(),
+              "the server's copy for the phone runs nothing: it is not the PC")
+
         # the board: progress counted from steps, work in progress, the log, a snapshot a day
         studio.set_milestone("M2", name="Two rooms", status="next", weight=3)
         board.set_step(studio, "M1", "walls", name="Walls", status="done", date="2026-01-02")
@@ -420,6 +508,10 @@ def main() -> int:
         said = [e["text"] for e in seen["events"] if e["kind"] == "claude"]
         check(status == 200 and said == ["made it: make the thing"] and seen["id"] and seen["key"] == seen["id"],
               "allowed on the page, the session goes on and its answer shows, under the session's own id")
+        studio.set_hand("talk-btn", title="Try it", button="Run it", run="echo hi", cwd=str(game), session=seen["id"])
+        studio.set_hand("other-btn", title="Not this one", button="Run that", run="echo no", cwd=str(game), session="s-other")
+        shown = [b["id"] for b in http("GET", base + f"/api/talk/{key}")[1].get("buttons", [])]
+        check(shown == ["talk-btn"], "the Talk page shows the buttons its own session filed, beside the talk")
         waits = lambda: [t["waits"] for t in http("GET", base + "/api/talk")[1]["talks"]]
         before = waits()
         http("GET", base + f"/api/talk/{key}?after=0&seen=1")

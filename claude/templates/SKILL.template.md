@@ -1,6 +1,6 @@
 ---
 name: studio
-description: The Studio is where the user sees where {{PROJECT}} stands, judges everything its makers produce, and where their rulings are kept. Use this skill whenever work produces something the user must judge (concept art, textures, models, animations, sounds, tuning or feel options, design questions with options), whenever they say anything like "process my verdicts", "process my studio verdicts", "act on my reviews", "what did I pick", "what is waiting on me" or "plan this project in its Studio", whenever they rule on something in chat or in a playtest note, whenever a hook hands you notes or verdicts they left in the Studio or they say "process my notes", before asking them to look at any file, folder or in-app option or to do something only they can do, whenever you have a question for them, and whenever work starts, lands, merges, is published or hits a setback, a build is delivered, a milestone moves or the plan changes (the Overview must stay true).
+description: The Studio is where the user sees where {{PROJECT}} stands, judges everything its makers produce, and where their rulings are kept. Use this skill whenever work produces something the user must judge (concept art, textures, models, animations, sounds, tuning or feel options, design questions with options), whenever they say anything like "process my verdicts", "process my studio verdicts", "act on my reviews", "what did I pick", "what is waiting on me" or "plan this project in its Studio", whenever they rule on something in chat or in a playtest note, whenever a hook hands you notes or verdicts they left in the Studio or they say "process my notes", before asking them to look at any file, folder or in-app option, to run a command or a build on this PC, or to do something only they can do, whenever you have a question for them, and whenever work starts, lands, merges, is published or hits a setback, a build is delivered, a milestone moves or the plan changes (the Overview must stay true).
 ---
 
 # The Studio for {{PROJECT}}
@@ -322,6 +322,37 @@ S ask set <id> --kind action|decision|play|info \
 They answer on the page. `S todo` prints what they said; act on it, then
 `S ask seen <id>`. If they answer in chat instead, close it with their words:
 `S ask answered <id> --answer "<their words, exact>"`.
+
+### Buttons: a command to run, a file to open
+
+When the user has to run something on this PC (a build, a script, a game to
+launch, a setting to change) or look at a file or folder, give them a button
+instead of a line to paste into a terminal. A button is an ask with
+`--button`; their click on the page does it.
+
+```
+S ask set <id> --title "<what it is for>" --button "<the words on the button>" \
+      --run "<the line>" --cwd <the folder it runs in>     # default: the folder you are in
+S ask set <id> --title "<what it is for>" --button "<the words on the button>" \
+      --open <a file or folder>                            # opens in its default app
+```
+
+- The line runs in Windows PowerShell, in that folder, with no window and
+  nothing to type into. The page shows that it is running, then its exit code
+  and its last lines. Write a line that finishes on its own; one that waits
+  for input never ends. Start a game or an app the same way: it shows as
+  running until it is closed.
+- It shows in Needs you, and beside you on the Talk page when you run there.
+  Add `--detail`, `--time` and `--kind play` as for any ask. `--status later`
+  for one they will want again, so it does not count as waiting on them.
+- Only what you filed runs; the page sends nothing else. Nothing runs on the
+  server's copy for the phone. The line is shown on the button's card, so
+  write it the way you would want to read it.
+- Read the result yourself when it matters: the last run is kept in
+  `<the studio home>/live/runs/<id>.json` (its exit code) and `<id>.log`
+  (all it printed).
+- No button for a line meant for another machine, or for something you can
+  run yourself. Plain `--run` without `--button` is still a line to copy.
 
 ### The build in hand
 

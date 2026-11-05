@@ -562,7 +562,8 @@ def cmd_hand(a):
     if a.action == "list":
         for x in s.hands():
             flag = "  (the user answered, not read yet)" if x.get("answered") and not x.get("seen") else ""
-            print(f"{x['status']:7} {x.get('kind', 'action'):9} {x['id']:28} {x['title']}{flag}")
+            btn = f"  [button: {x['button']}]" if x.get("button") else ""
+            print(f"{x['status']:7} {x.get('kind', 'action'):9} {x['id']:28} {x['title']}{btn}{flag}")
         return
     if not a.id:
         raise StudioError(f"hand {a.action} needs an id")
@@ -576,10 +577,24 @@ def cmd_hand(a):
         s.close_hand(a.id, a.answer)
         print(f"{a.id}: closed with their answer")
         return
+    opened = cwd = session = ""
+    if a.open:  # paths are kept whole, from the folder this was filed in, so the click finds them from anywhere
+        opened = str(Path(a.open).expanduser().resolve())
+        if not Path(opened).exists():
+            print(f"note: {opened} is not there yet; the button says so until it is", file=sys.stderr)
+    if a.button and a.run:
+        cwd = str(Path(a.cwd or os.getcwd()).expanduser().resolve())
+        if not Path(cwd).is_dir():
+            raise StudioError(f"--cwd {cwd} is not a folder")
+    elif a.cwd:
+        raise StudioError("--cwd is for a button that runs a command: --button \"<label>\" --run \"<line>\" --cwd <folder>")
+    if a.button:  # the Talk page shows a session's own buttons beside it
+        session = os.environ.get("STUDIO_SESSION", "") or board._caller(s)
     x = s.set_hand(a.id, title=a.title, detail=text_arg(a.detail, a.detail_file), gates=a.gates, time=a.time,
                    run=a.run, status=a.status, group=a.group, kind=a.kind, default=a.default,
+                   button=a.button, open=opened, cwd=cwd, session=session,
                    urgent=True if a.urgent else (False if a.no_urgent else None))
-    print(f"{x['id']}: {x['status']}")
+    print(f"{x['id']}: {x['status']}" + (f", with a button: {x['button']}" if x.get("button") else ""))
 
 
 def cmd_note(a):
@@ -875,7 +890,10 @@ def main(argv=None) -> int:
     c.add_argument("--title", default=""); c.add_argument("--detail", default=""); c.add_argument("--detail-file", default="")
     c.add_argument("--gates", default="", help="what waits on it")
     c.add_argument("--time", default="", help="how long it takes the user")
-    c.add_argument("--run", default="", help="a line for the user to copy and run")
+    c.add_argument("--run", default="", help="a line for the user to copy; with --button, the line the button runs on the PC (PowerShell)")
+    c.add_argument("--button", default="", help="the words on a button that runs --run, or opens --open, when the user presses it")
+    c.add_argument("--open", default="", help="with --button: a file or folder the button opens in its default app")
+    c.add_argument("--cwd", default="", help="with --button and --run: the folder it runs in (default: the one you are in)")
     c.add_argument("--group", default="", help="Playtest, Machines, Steam, ...")
     c.add_argument("--status", default="", choices=("",) + HAND_STATUS)
     c.set_defaults(fn=cmd_hand)

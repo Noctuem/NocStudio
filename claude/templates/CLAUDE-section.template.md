@@ -11,7 +11,8 @@ Use the `studio` skill; `S` is `{{S}}`.
   and do what it lists; close each with `S done`.
 - A ruling they make in chat goes on the log in their words: `S decide`.
 - Anything else that waits on them (a chore only they can do, a question with a plain answer) is
-  `S ask set`, with the default you will use; never a line in chat or in a document.
+  `S ask set`, with the default you will use; never a line in chat or in a document. A command for
+  them to run on this PC, or a file for them to open, is a button: `S ask set <id> --button`.
 - Notes they type in the Studio are handed to you by Claude Code's hooks; never poll for them. Sort
   each one (`S note sort`, or `S note reply` for a discussion), make no change for a directive or a
   rule until they confirm it on the page, and close what you did with `S note done`.

@@ -1112,6 +1112,10 @@ class Studio:
     def hands(self) -> list[dict]:
         return (read_json(self.overview_dir / "hands.json", {}) or {}).get("items", [])
 
+    def _hands_shown(self) -> list[dict]:
+        from . import buttons
+        return buttons.attach(self, self.hands())
+
     def _save_hands(self, rows: list) -> None:
         write_json(self.overview_dir / "hands.json", {"schema": SCHEMA, "items": rows})
 
@@ -1123,6 +1127,8 @@ class Studio:
 
     def set_hand(self, hid: str, **fields) -> dict:
         """One thing only the user can do: try a build, run a check on another machine, sign a paper."""
+        if fields.get("run") and fields.get("open"):
+            raise StudioError("a button runs a command (--run) or opens a file or folder (--open), one of the two")
         rows = self.hands()
         row = next((r for r in rows if r["id"] == hid), None)
         if row is None:
@@ -1132,10 +1138,19 @@ class Studio:
         for key, value in fields.items():
             if value not in (None, ""):
                 row[key] = value
+        if fields.get("open"):  # a button opens a file now, or runs a line now: not both
+            row["run"] = ""
+            row.pop("cwd", None)
+        elif fields.get("run") and fields.get("cwd"):
+            row.pop("open", None)
         if row.get("status") not in HAND_STATUS:
             raise StudioError(f"hand status must be one of: {', '.join(HAND_STATUS)}")
         if row.setdefault("kind", "action") not in HAND_KINDS:
             raise StudioError(f"an ask is one of: {', '.join(HAND_KINDS)}")
+        if row.get("button") and bool(row.get("run")) == bool(row.get("open")):
+            raise StudioError("a button runs a command (--run) or opens a file or folder (--open), one of the two")
+        if row.get("open") and not row.get("button"):
+            raise StudioError("--open needs --button, the words on the button")
         row["urgent"] = bool(row.get("urgent"))
         row["updated"] = iso_now()
         self._save_hands(rows)
@@ -1406,7 +1421,7 @@ class Studio:
     def overview(self) -> dict:
         from . import board, setup
         hooks = bool(setup.hooks_installed())
-        return {"now": self.now(), "game": self.game_git(), "milestones": self.roadmap(), "hands": self.hands(),
+        return {"now": self.now(), "game": self.game_git(), "milestones": self.roadmap(), "hands": self._hands_shown(),
                 "board": board.view(self), "live": board.live(self), "hooks": hooks, "hooks_notes": setup.hooks_hand_over(),
                 "setup": board.checklist(self, hooks)}
 

@@ -526,6 +526,18 @@ details.setup > :not(summary) { margin: 0 14px 12px; }
 .task .cmd { white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.45 var(--font-mono); }
 .tasks { display: flex; flex-direction: column; gap: 8px; }
 .tasks:empty { display: none; }
+.tbtns { display: flex; flex-direction: column; gap: 8px; }
+.tbtns:empty { display: none; }
+/* a button a session filed: the press, how the last one went, and its last lines */
+.bbox { display: flex; flex-direction: column; gap: 6px; }
+.brow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.brow .grow { flex: 1 1 auto; }
+.bpress { white-space: nowrap; }
+.need > summary .bpress { flex: none; }
+.bwhat { overflow-wrap: anywhere; font-size: 12px; }
+.bwhat code { user-select: all; }
+.bout { margin: 0; max-height: 220px; overflow: auto; padding: 8px 10px; background: var(--stage); color: var(--fg); border: 1px solid var(--line-soft);
+  border-radius: 3px; font: 11.5px/1.45 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 .task .jf, .tblock .jf, .tbox .jf { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .task .jf input { flex: 1 1 200px; }
 .tbox { display: flex; flex-direction: column; gap: 6px; }

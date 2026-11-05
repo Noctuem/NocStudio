@@ -157,6 +157,9 @@ def make_handler(home: Path, allowed_hosts: set[str], quiet: bool = False, hub: 
                     after = int((query.get("after") or ["0"])[0] or 0)
                     t = talk.get(rest[0])
                     view = t.view(after)
+                    from . import buttons  # the buttons this session filed, beside the talk
+                    view["buttons"] = [r for r in buttons.attach(studio, studio.hands()) if r.get("button")
+                                       and r.get("status") in buttons.RUNNABLE and r.get("session") in (rest[0], view.get("key"))]
                     if (query.get("seen") or [""])[0] == "1":  # the page is in front of the user: what it shows is read
                         t.mark_seen()
                     return self.send_json(view)
@@ -248,6 +251,9 @@ def make_handler(home: Path, allowed_hosts: set[str], quiet: bool = False, hub: 
                         return self.send_json(board.live(studio))
                     if len(parts) == 3 and parts[1] == "batch":
                         return self.send_json(studio.load_batch(parts[2]))
+                    if len(parts) == 3 and parts[1] == "button":  # the last press: running, or its exit code and last lines
+                        from . import buttons
+                        return self.send_json({"ran": buttons.last(studio, parts[2], with_tail=True)})
                     if parts[1:] == ["idea"]:
                         from . import idea
                         return self.send_json(idea.view(studio))
@@ -328,6 +334,16 @@ def make_handler(home: Path, allowed_hosts: set[str], quiet: bool = False, hub: 
                 if parts == ["api", "idea"]:
                     return self.idea_post(self.studio(), self.body())
                 data = self.body()
+                if parts == ["api", "button"]:  # the user's click on a button a session filed: only its id comes from the page
+                    from . import buttons
+                    studio, hid = self.studio(), str(data.get("id") or "")
+                    if studio.config.get("site"):
+                        return self.fail(403, "buttons run on the PC; this copy runs nothing")
+                    action = str(data.get("action") or "press")
+                    if action not in ("press", "stop"):
+                        raise StudioError("say press or stop")
+                    done = buttons.press(studio, hid) if action == "press" else buttons.stop(studio, hid)
+                    return self.send_json({"ok": True, "ran": done})
                 with LOCK:
                     studio = self.studio()
                     if len(parts) == 4 and parts[:2] == ["api", "batch"]:

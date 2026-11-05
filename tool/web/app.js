@@ -660,6 +660,53 @@
   const pctText = (n) => Math.round(n) + '%';
   const split = (text) => { const at = String(text).indexOf(' :: '); return at < 0 ? [String(text), ''] : [text.slice(0, at), text.slice(at + 4)]; };
 
+  // a button a session filed: the click runs its line on the PC, or opens its file. Only the ask's id goes to the server.
+  function buttonBox(x, inline, onPress) {
+    const can = !!x.can_run && (x.status === 'open' || x.status === 'later') && !S.state.static && !S.state.site;
+    let ran = x.ran || null, timer = 0;
+    const press = h('button', { class: 'btn small primary bpress', type: 'button', disabled: !can,
+      title: can ? (x.open ? 'Open it on this PC' : 'Run it on this PC') : 'Buttons work on the PC, not on this copy',
+      onclick: (e) => { e.preventDefault(); e.stopPropagation(); go('press'); } }, (x.open ? '\u2197 ' : '\u25B6 ') + x.button);
+    const stopBtn = h('button', { class: 'btn small', type: 'button', hidden: true, onclick: () => go('stop') }, 'Stop');
+    const status = h('span', { class: 'bstatus' });
+    const out = h('pre', { class: 'bout', hidden: true, 'aria-label': 'What it printed, the last lines' });
+    const what = x.open ? h('div', { class: 'bwhat' }, h('span', { class: 'muted' }, 'Opens '), h('code', { class: 'i' }, x.open))
+      : h('div', { class: 'bwhat' }, h('code', { class: 'i' }, x.run), x.cwd ? h('span', { class: 'muted' }, ' in ' + x.cwd) : null);
+    const box = h('div', { class: 'bbox' }, h('div', { class: 'brow' }, inline ? press : null, stopBtn, status, h('span', { class: 'grow' }), copyButton(x.open || x.run)), what, out);
+    function draw() {
+      const running = !!ran && ran.state === 'running';
+      press.disabled = !can || running;
+      stopBtn.hidden = !running;
+      if (!ran) { status.replaceChildren(); out.hidden = true; return; }
+      const ok = ran.state === 'done' && ran.code === 0, bad = ran.state === 'done' && ran.code !== 0;
+      const chip = { running: 'Running', opened: 'Opened', stopped: 'Stopped', lost: 'Not known', done: ok ? 'Done' : 'Failed' }[ran.state] || ran.state;
+      const said = ran.state === 'running' ? 'since ' + when(ran.started)
+        : ran.state === 'lost' ? 'started ' + when(ran.started) + '; the Studio restarted while it ran'
+        : ran.state === 'opened' ? when(ran.started)
+        : (ran.code != null && ran.state === 'done' ? 'exit ' + ran.code + ' \u00b7 ' : '') + when(ran.ended);
+      status.replaceChildren(h('span', { class: 'chip ' + (ran.state === 'running' ? 'accent' : ok || ran.state === 'opened' ? 'ok' : bad ? 'bad' : '') }, chip), ' ', h('span', { class: 'sub' }, said));
+      if (ran.tail) { out.textContent = ran.tail.length ? ran.tail.join('\n') : '(it printed nothing)'; out.hidden = false; out.scrollTop = out.scrollHeight; }
+    }
+    async function look() {
+      if (!box.isConnected) { clearInterval(timer); timer = 0; return; }
+      try {
+        ran = (await call('GET', '/api/button/' + encodeURIComponent(x.id))).ran; draw();
+        if (!ran || ran.state !== 'running') { clearInterval(timer); timer = 0; }
+      } catch (e) { /* the server is restarting; the next beat tries again */ }
+    }
+    function watch() { if (!timer) timer = setInterval(look, 1000); look(); }
+    async function go(action) {
+      try {
+        ran = Object.assign({}, ran, (await call('POST', '/api/button', { id: x.id, action })).ran); draw();
+        if (onPress) onPress();
+        if (ran.kind === 'run') watch(); else toast('Opened');
+      } catch (e) { toast(e.message); }
+    }
+    draw();
+    if (can && ran && ran.kind === 'run') setTimeout(watch, 0); // the last lines, and more while it runs
+    return { el: box, press };
+  }
+
   function askRow(x) {
     S.notes = S.notes || {};
     const open = x.status === 'open' || x.status === 'later', decide = x.kind === 'decision';
@@ -670,19 +717,22 @@
       catch (e) { toast(e.message); }
     };
     const fact = (label, text) => (text ? h('div', { class: 'fact' }, h('span', {}, label), h('span', { html: inline(text) })) : null);
+    let row = null; // a button's press is in the row itself, one click from the rail; its output opens below
+    const bb = x.button ? buttonBox(x, !open, () => { if (row) { row.open = true; OPEN.set('ask:' + x.id, true); } }) : null;
     const body = h('div', { class: 'askbody' },
       x.detail ? h('p', { html: inline(x.detail) }) : null,
       fact('Blocks', x.gates), fact('If you say nothing', x.default), fact('Takes you', x.time), fact('Waiting since', when(x.created)),
-      x.run ? h('div', { class: 'runline' }, h('code', { class: 'i' }, x.run), copyButton(x.run)) : null,
+      bb ? bb.el : x.run ? h('div', { class: 'runline' }, h('code', { class: 'i' }, x.run), copyButton(x.run)) : null,
       !open && x.his_note ? h('blockquote', {}, x.his_note) : null,
       open ? [note, h('div', { class: 'btns' },
         decide ? h('button', { class: 'btn small primary', type: 'button', onclick: () => (note.value.trim() ? send('done') : toast('Write your answer first')) }, 'Answer') : h('button', { class: 'btn small primary', type: 'button', onclick: () => send('done') }, 'Mark done'),
         decide && x.default ? h('button', { class: 'btn small', type: 'button', onclick: () => send('done', 'Use the default: ' + x.default) }, 'Use the default') : null,
         x.status === 'open' ? h('button', { class: 'btn small', type: 'button', onclick: () => send('park') }, 'Not now') : null)]
         : h('div', { class: 'btns' }, h('button', { class: 'btn small', type: 'button', onclick: () => send('reopen') }, 'Open again')));
-    return fold('ask:' + x.id, !!x.urgent, 'need' + (x.urgent && open ? ' urgent' : ''),
+    row = fold('ask:' + x.id, !!x.urgent, 'need' + (x.urgent && open ? ' urgent' : ''),
       [h('span', { class: 'chip' + (open ? ' accent' : '') }, open ? (ASK[x.kind] || 'To do') : (x.status === 'done' ? 'Done' : 'Set aside')),
-        h('span', { class: 'grow' }, x.title), x.urgent && open ? h('span', { class: 'chip bad' }, 'Urgent') : null], body);
+        h('span', { class: 'grow' }, x.title), x.urgent && open ? h('span', { class: 'chip bad' }, 'Urgent') : null, bb && open ? bb.press : null], body);
+    return row;
   }
 
   // what moves by the second: the lanes Claude reports and the sessions the hooks see
@@ -1680,6 +1730,8 @@
     const side = h('div', { class: 'tside' });
     const log = h('div', { class: 'tlog', 'aria-live': 'polite' });
     const asks = h('div', { class: 'tasks' });
+    const btns = h('div', { class: 'tbtns' });
+    let btnKey = '';
     const head = h('div', { class: 'thead' });
     const tray = h('div', { class: 'nfiles pending' });
     const text = h('textarea', { class: 'field', rows: 3, 'aria-label': 'Your message to the session',
@@ -1736,6 +1788,12 @@
           h('div', { class: 'jf' }, h('button', { class: 'btn small primary', type: 'button', onclick: () => act('allow') }, 'Allow'), h('button', { class: 'btn small', type: 'button', onclick: () => act('deny') }, 'Deny'), why));
       }));
     }
+    function drawButtons(list) { // drawn again only when the session files or changes one, so a run being read keeps going
+      const key = JSON.stringify(list.map((b) => [b.id, b.button, b.run, b.open, b.cwd]));
+      if (key === btnKey) return;
+      btnKey = key;
+      btns.replaceChildren(...list.map((b) => h('div', { class: 'task' }, h('span', { class: 'label' }, 'A button for you: ' + b.title), buttonBox(b, true).el)));
+    }
     function drawHead(state) {
       if (state !== cur) { cur = state; drawActs(); }
       const label = state ? TALK_STATE[state] || state : (T.resume ? 'Not started here yet' : 'New session');
@@ -1752,7 +1810,7 @@
         toast('Opening it in the Claude app…');
         await call('POST', '/api/talk/desktop', { id });
         toast('It is in the Claude app now. Carry on there.');
-        Object.assign(T, { key: '', resume: '', title: '' }); log.replaceChildren(); asks.replaceChildren(); drawHead(''); list();
+        Object.assign(T, { key: '', resume: '', title: '' }); log.replaceChildren(); asks.replaceChildren(); btns.replaceChildren(); btnKey = ''; drawHead(''); list();
       } catch (e) { toast(e.message); }
     }
     async function poll() {
@@ -1762,19 +1820,19 @@
         const v = await call('GET', '/api/talk/' + encodeURIComponent(T.key) + '?after=' + T.after + (document.visibilityState === 'visible' ? '&seen=1' : ''));
         if (v.key && v.key !== T.key) T.key = v.key;
         add(v.events); T.after = v.seq; ended = v.state === 'ended';
-        drawAsks(v.asks || []); drawHead(v.state);
+        drawAsks(v.asks || []); drawButtons(v.buttons || []); drawHead(v.state);
       } catch (e) { drawHead('ended'); ended = true; }
       finally { busy = false; }
     }
     function pick(row, fork) { // an older session: show what was said; it starts again here when you send
       Object.assign(T, { key: '', after: 0, resume: row ? row.id : '', fork: !!fork, title: row ? (row.title || clip(row.prompt, 60)) : '' });
-      log.replaceChildren(); asks.replaceChildren(); ended = false; drawHead('');
+      log.replaceChildren(); asks.replaceChildren(); btns.replaceChildren(); btnKey = ''; ended = false; drawHead('');
       if (row) call('GET', '/api/talk/' + encodeURIComponent(row.id) + '/history').then((d) => { if (T.resume === row.id && !T.key) add(d.events || []); }).catch(() => {});
       text.focus(); list();
     }
     function show(row) { // a conversation this page has going
       Object.assign(T, { key: row.key, after: 0, resume: '', fork: false, title: clip(row.last, 60) || 'A session' });
-      log.replaceChildren(); asks.replaceChildren(); poll(); list();
+      log.replaceChildren(); asks.replaceChildren(); btns.replaceChildren(); btnKey = ''; poll(); list();
     }
     async function send(words, stop) {
       const said = (words === undefined ? text.value : words).trim();
@@ -1876,7 +1934,7 @@
     if (T.key) poll(); else if (T.resume) pick({ id: T.resume, title: T.title }, T.fork);
     const timer = setInterval(poll, 1000), lister = setInterval(list, 8000), ideaTimer = setInterval(ideaLoad, 3000);
     S.cleanup.push(() => { clearInterval(timer); clearInterval(lister); clearInterval(ideaTimer); });
-    return h('main', { class: 'talk' }, h('section', { class: 'tgrid' }, side, h('div', { class: 'tmain' }, head, ideaBox, log, asks, box)));
+    return h('main', { class: 'talk' }, h('section', { class: 'tgrid' }, side, h('div', { class: 'tmain' }, head, ideaBox, log, btns, asks, box)));
   }
 
   // --------------------------------------------------------------- playtests

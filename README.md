@@ -46,7 +46,10 @@ The first page is a live board:
   and setbacks in a log, newest first.
 - **Needs you.** A rail of everything that waits on you: batches to judge, builds to try, chores
   only you can do, and questions only you can answer. Each ask says what it blocks and **what
-  the agent will do if you say nothing**, so work does not stop while you are away.
+  the agent will do if you say nothing**, so work does not stop while you are away. When you have
+  to run something on your PC (a build, a script, the game) or open a file, the ask carries a
+  **button**: press it and the page shows it running, then its exit code and its last lines.
+  Only a line the agent filed runs, and the server's copy for a phone runs nothing.
 
 ### A notes box that reaches your sessions
 
