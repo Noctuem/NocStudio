@@ -33,7 +33,7 @@ with no window and stays up; opening NocStudio opens a window on it (it does tha
 which sends Ignition's wake (`ignite wake`) and waits for the app. Pages that need nothing from the PC
 (the Studio itself, verdicts, notes) work as now.
 
-**Notes on the menu come from Nextcloud, not the PC** (the default; see the questions). The vault is a
+**Notes on the menu come from Nextcloud, not the PC** (decided). The vault is a
 Nextcloud folder, so the server can read Now and Ideas and add to Dump over WebDAV with the PC off. Writing
 through WebDAV, not the data folder on disk, keeps Nextcloud's index right.
 
@@ -59,9 +59,12 @@ Steps 1 to 3 come first; the rest each need only those. Step 6 needs none of the
   sign-in; nothing is opened to the internet.
 - Talk's stream on the PC is long-polled by the page. Keep it long-polled through the bridge, not buffered.
 
+## Decided (2026-11-05)
+
+- Notes on the menu come from Nextcloud on the server. The user gives the Nextcloud app password when that
+  step is reached; ask for it then.
+- The PC app starts at login with no window.
+
 ## Not decided yet (in the Studio, with defaults)
 
-- Notes on the menu: from Nextcloud on the server (default), or through the PC.
 - Tapping Send when the PC is asleep: wake it and send (default), or ask first.
-- The PC app staying up with its window closed: start at login with no window (default), or only after the
-  window has been opened once.
