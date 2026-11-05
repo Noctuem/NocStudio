@@ -327,6 +327,8 @@ def tidy(studio) -> dict:
         try:
             live = studio.home / "live"
             live.mkdir(exist_ok=True)
+            if not (live / ".gitignore").exists():  # this can be the first thing a home writes in live/
+                (live / ".gitignore").write_text("# what sessions are doing right now: not history\n*\n", encoding="utf-8")
             (live / "files.json").write_text(json.dumps(out), encoding="utf-8")
         except OSError:
             pass
