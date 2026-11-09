@@ -180,6 +180,24 @@ def cmd_file(a):
     return 0
 
 
+def cmd_withdraw(a):
+    """Take filed batches the user has not judged out of the Inbox, to be made again."""
+    import datetime
+    s = Studio(find_home(a.home))
+    code = 0
+    for bid in a.batch:
+        batch = s.load_batch(bid)
+        if batch["status"] not in ("open", "draft") or (batch["status"] == "draft" and not a.started):
+            print(f"{bid}: left as it is ({batch['status']}: the user has judged or started it)")
+            code = 1
+            continue
+        batch["ready"] = False
+        batch["withdrawn"] = {"why": a.why, "on": datetime.date.today().isoformat()}
+        s.save_batch(batch)
+        print(f"{bid}: out of the Inbox ({a.why})")
+    return code
+
+
 def cmd_status(a):
     s = Studio(find_home(a.home))
     state = s.state()
@@ -747,6 +765,11 @@ def main(argv=None) -> int:
     c = sub.add_parser("file", help="run the checks and put the batch in the user's inbox")
     c.add_argument("batch"); c.add_argument("--force", action="store_true", help="file despite errors")
     c.set_defaults(fn=cmd_file)
+
+    c = sub.add_parser("withdraw", help="take filed, unjudged batches out of the user's inbox, to be made again")
+    c.add_argument("batch", nargs="+"); c.add_argument("--why", required=True)
+    c.add_argument("--started", action="store_true", help="also one the user has started judging")
+    c.set_defaults(fn=cmd_withdraw)
 
     c = sub.add_parser("status", help="what waits on whom"); c.set_defaults(fn=cmd_status)
 
