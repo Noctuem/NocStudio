@@ -65,6 +65,7 @@ Steps 1 to 3 come first; the rest each need only those. Step 6 needs none of the
   step is reached; ask for it then.
 - The PC app starts at login with no window.
 
-## Not decided yet (in the Studio, with defaults)
+## Not decided yet
 
-- Tapping Send when the PC is asleep: wake it and send (default), or ask first.
+- Tapping Send when the PC is asleep: wake it and send, or ask first. The user set this aside on 2026-11-09.
+  Ask it again when step 3 (`wake`) starts; until then the page only shows Wake and sends nothing on its own.
