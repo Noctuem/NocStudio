@@ -1164,14 +1164,29 @@ class Studio:
         self._save_hands(rows)
         return row
 
+    UNDO_KEYS = ("status", "his_note", "answered", "seen", "updated")
+
     def answer_hand(self, hid: str, action: str, note: str = "") -> dict:
-        """The user's own word from the page: done, parked, or open again. Claude reads it in `todo`."""
-        status = {"done": "done", "park": "parked", "reopen": "open"}.get(action)
-        if not status:
-            raise StudioError("say done, park or reopen")
+        """The user's own word from the page: done, parked, or open again. Claude reads it in `todo`.
+        `undo` puts the ask back as it was before their last word, as if it had not been said."""
         rows = self.hands()
         row = self._hand(rows, hid)
-        row.update(status=status, his_note=note.strip(), answered=iso_now(), seen=False, updated=iso_now())
+        if action == "undo":
+            before = row.pop("undo", None)
+            if not isinstance(before, dict):
+                raise StudioError("there is nothing to undo on this one")
+            for key in self.UNDO_KEYS:
+                if before.get(key) is None:
+                    row.pop(key, None)
+                else:
+                    row[key] = before[key]
+            self._save_hands(rows)
+            return row
+        status = {"done": "done", "park": "parked", "reopen": "open"}.get(action)
+        if not status:
+            raise StudioError("say done, park, reopen or undo")
+        before = {key: row.get(key) for key in self.UNDO_KEYS}
+        row.update(status=status, his_note=note.strip(), answered=iso_now(), seen=False, updated=iso_now(), undo=before)
         self._save_hands(rows)
         return row
 

@@ -80,6 +80,29 @@
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => el.remove(), 2600);
   }
+  // a toast with Undo on it: it stays a few seconds, fades, and is gone; hovering over it holds it
+  const UNDO_MS = 8000;
+  function undoToast(msg, undo) {
+    document.querySelectorAll('.toast').forEach((t) => t.remove());
+    clearTimeout(toastTimer);
+    let left = UNDO_MS, last = Date.now(), held = false;
+    const btn = h('button', { class: 'btn small', type: 'button' }, 'Undo');
+    const el = h('div', { class: 'toast undo', role: 'status', style: '--undo-ms:' + UNDO_MS + 'ms' }, h('span', {}, msg), btn);
+    const tick = () => {
+      if (!el.isConnected) return;
+      const now = Date.now();
+      if (!held) left -= now - last;
+      last = now;
+      if (left <= 0) { el.remove(); return; }
+      el.style.opacity = String(Math.min(1, 0.25 + left / UNDO_MS));
+      toastTimer = setTimeout(tick, 100);
+    };
+    el.addEventListener('mouseenter', () => { held = true; el.style.opacity = '1'; });
+    el.addEventListener('mouseleave', () => { held = false; last = Date.now(); });
+    btn.addEventListener('click', () => { btn.disabled = true; clearTimeout(toastTimer); el.remove(); undo(); });
+    document.body.append(el);
+    toastTimer = setTimeout(tick, 100);
+  }
   function copyButton(text, label) {
     const btn = h('button', { class: 'btn small', type: 'button' }, label || 'Copy');
     btn.addEventListener('click', () => {
@@ -136,7 +159,11 @@
       for (const p of STATIC.state.playtests) for (const r of p.reports) if (r.key === key) Object.assign(r.triage, { confirmed, confirm_note: note });
     },
     hand: async (id, action, note) => {
-      for (const x of ((STATIC.state.overview || {}).hands || [])) if (x.id === id) Object.assign(x, { status: { done: 'done', park: 'parked', reopen: 'open' }[action], his_note: note });
+      for (const x of ((STATIC.state.overview || {}).hands || [])) if (x.id === id) {
+        if (action === 'undo') { Object.assign(x, x.undo || { status: 'open' }); delete x.undo; continue; }
+        x.undo = { status: x.status, his_note: x.his_note, answered: x.answered };
+        Object.assign(x, { status: { done: 'done', park: 'parked', reopen: 'open' }[action], his_note: note, answered: new Date().toISOString() });
+      }
     },
     addNote: async () => { throw new Error('This is a sample page: notes are not kept here'); },
     putFile: async () => { throw new Error('This is a sample page: notes are not kept here'); },
@@ -737,7 +764,16 @@
     const note = h('textarea', { class: 'field', rows: 1, placeholder: decide ? 'Your answer, in your words' : 'Anything to add (optional)', 'aria-label': 'Note on ' + x.title,
       value: S.notes[x.id] || '', oninput: (e) => { S.notes[x.id] = e.target.value; } });
     const send = async (action, text) => {
-      try { await API.hand(x.id, action, text === undefined ? note.value : text); delete S.notes[x.id]; S.state = await API.state(); toast({ done: decide ? 'Answered' : 'Marked done', park: 'Set aside', reopen: 'Open again' }[action]); render(null, true); }
+      const typed = note.value;
+      try {
+        await API.hand(x.id, action, text === undefined ? typed : text); delete S.notes[x.id]; S.state = await API.state(); render(null, true);
+        const said = { done: decide ? 'Answered' : 'Marked done', park: 'Set aside', reopen: 'Open again' }[action];
+        if (action === 'reopen') { toast(said); return; }
+        undoToast(said + ': ' + x.title, async () => {  // as it was before: open, with what they had typed still in the box
+          try { await API.hand(x.id, 'undo'); if (typed) S.notes[x.id] = typed; OPEN.set('ask:' + x.id, true); S.state = await API.state(); render(null, true); toast('Back in Needs you'); }
+          catch (e) { toast(e.message); }
+        });
+      }
       catch (e) { toast(e.message); }
     };
     const fact = (label, text) => (text ? h('div', { class: 'fact' }, h('span', {}, label), h('span', { html: inline(text) })) : null);
@@ -831,7 +867,8 @@
     const sent = st.batches.filter((b) => b.status === 'submitted');
     const confirms = st.playtests.reduce((n, p) => n + p.reports.filter((x) => x.triage.status === 'fixed' && x.triage.confirmed == null).length, 0);
     const openHands = hands.filter((x) => x.status === 'open').sort((a, b) => (b.urgent ? 1 : 0) - (a.urgent ? 1 : 0));
-    const laterHands = hands.filter((x) => x.status === 'later'), oldHands = hands.filter((x) => x.status === 'done' || x.status === 'parked');
+    const laterHands = hands.filter((x) => x.status === 'later'), oldHands = hands.filter((x) => x.status === 'done' || x.status === 'parked')
+      .sort((a, b) => String(b.answered || b.updated || '').localeCompare(String(a.answered || a.updated || '')));  // the last one answered first
     const myNotes = notesOf().filter((n) => n.waits === 'you');
     const owed = mine.length + (confirms ? 1 : 0) + openHands.length + myNotes.length;
     const col = h('div', { class: 'hudmain' });

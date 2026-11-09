@@ -178,6 +178,13 @@ def main() -> int:
         studio.set_milestone("M1", name="One room", status="current")
         studio.set_now(headline="Built.", next=["The user's picks"])
         studio.set_hand("walk", title="Walk the build", status="open")
+        before = next(x for x in studio.hands() if x["id"] == "walk")
+        http("POST", base + "/api/hand", {"id": "walk", "action": "done", "note": "by mistake"})
+        status, _ = http("POST", base + "/api/hand", {"id": "walk", "action": "undo"})
+        back = next(x for x in studio.hands() if x["id"] == "walk")
+        again, _ = http("POST", base + "/api/hand", {"id": "walk", "action": "undo"})
+        check(status == 200 and back == before and studio.unseen_hands() == [] and again == 400,
+              "Undo puts an answered ask back as it was, out of Claude's queue, and only once")
         status, state = http("GET", base + "/api/state")
         ov = state["overview"]
         check(ov["milestones"][0]["status"] == "current" and ov["now"]["next"] == ["The user's picks"] and ov["hands"][0]["id"] == "walk",

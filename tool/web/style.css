@@ -138,6 +138,9 @@ textarea.field { field-sizing: content; resize: none; min-height: 38px; }  /* gr
 .say code { font-family: var(--font-mono); background: var(--bg); padding: 5px 9px; border-radius: 3px; border: 1px solid var(--line); user-select: all; }
 .toast { position: fixed; left: 50%; bottom: calc(96px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); z-index: 90;
   background: var(--fg); color: var(--bg); padding: 9px 16px; border-radius: 20px; font-weight: 600; max-width: calc(100vw / var(--scale, 1) - 32px); }
+.toast.undo { display: flex; align-items: center; gap: 12px; padding: 6px 6px 6px 16px; transition: opacity .1s linear; }
+.toast.undo > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.toast.undo .btn { flex: none; background: var(--bg); color: var(--fg); border-color: var(--bg); }
 blockquote { margin: 0; padding: 2px 0 2px 14px; border-left: 3px solid var(--accent); white-space: pre-wrap; font-size: 15px; line-height: 1.5; }
 .md { display: flex; flex-direction: column; gap: 8px; max-width: 68ch; }
 .md ul { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; }
