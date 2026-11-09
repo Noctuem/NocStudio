@@ -23,11 +23,35 @@
   }
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const inline = (s) => esc(s).replace(/`([^`]+)`/g, '<code class="i">$1</code>').replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
+  // a table row's cells: the outer pipes dropped, split on the rest (an escaped \| stays in its cell)
+  const cells = (line) => line.trim().replace(/^\|/, '').replace(/(^|[^\\])\|$/, '$1').split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, '|'));
+  const TABLE_RULE = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
+  function mdTable(head, rule, rows) {
+    const align = cells(rule).map((c) => (c.startsWith(':') && c.endsWith(':') ? 'center' : c.endsWith(':') ? 'right' : ''));
+    const row = (tag, line) => h('tr', {}, cells(line).map((c, i) => h(tag, { html: inline(c), style: align[i] ? 'text-align:' + align[i] : null })));
+    return h('div', { class: 'tablewrap' }, h('table', {}, h('thead', {}, row('th', head)), h('tbody', {}, rows.map((r) => row('td', r)))));
+  }
   function md(text) {
     const out = h('div', { class: 'md' });
     let list = null;
-    for (const raw of String(text || '').split('\n')) {
-      const line = raw.trimEnd();
+    const lines = String(text || '').replace(/\r\n?/g, '\n').split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trimEnd();
+      const fence = line.match(/^\s*(```|~~~)/);
+      if (fence) {  // a fenced block, shown as it is
+        const body = [];
+        while (++i < lines.length && !lines[i].trim().startsWith(fence[1])) body.push(lines[i]);
+        list = null; out.append(h('pre', { class: 'code' }, body.join('\n')));
+        continue;
+      }
+      if (line.includes('|') && i + 1 < lines.length && TABLE_RULE.test(lines[i + 1]) && lines[i + 1].includes('|')) {
+        const rows = [];
+        let j = i + 2;
+        while (j < lines.length && lines[j].trim() && lines[j].includes('|')) rows.push(lines[j++]);
+        list = null; out.append(mdTable(line, lines[i + 1], rows));
+        i = j - 1;
+        continue;
+      }
       const item = line.match(/^\s*[-*] (.*)/);
       if (item) { if (!list) { list = h('ul'); out.append(list); } list.append(h('li', { html: inline(item[1]) })); continue; }
       list = null;

@@ -141,6 +141,11 @@ textarea.field { field-sizing: content; resize: none; min-height: 38px; }  /* gr
 blockquote { margin: 0; padding: 2px 0 2px 14px; border-left: 3px solid var(--accent); white-space: pre-wrap; font-size: 15px; line-height: 1.5; }
 .md { display: flex; flex-direction: column; gap: 8px; max-width: 68ch; }
 .md ul { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; }
+.md .tablewrap { overflow-x: auto; max-width: 100%; }
+.md table { border-collapse: collapse; font-size: 13px; }
+.md th, .md td { border: 1px solid var(--line-soft); padding: 4px 10px; text-align: left; vertical-align: top; }
+.md th { background: var(--bg); font-weight: 600; }
+.md pre.code { margin: 0; padding: 8px 10px; overflow-x: auto; font-family: var(--font-mono); font-size: 12px; background: var(--bg); border: 1px solid var(--line-soft); border-radius: 3px; white-space: pre; }
 .md code, code.i { font-family: var(--font-mono); font-size: 12px; background: var(--bg); border: 1px solid var(--line-soft); padding: 1px 5px; border-radius: 3px; }
 
 /* ------------------------------------------------------------------ inbox */
