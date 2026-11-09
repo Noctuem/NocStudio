@@ -273,7 +273,16 @@ def main() -> int:
         fbase = f"http://127.0.0.1:{far.server_address[1]}"
         status, _ = http("POST", fbase + "/api/button", {"id": "build"})
         shown = next(x for x in http("GET", fbase + "/api/state")[1]["overview"]["hands"] if x["id"] == "build")
+        far.RequestHandlerClass = server.make_handler(far_copy.home, {f"127.0.0.1:{far.server_address[1]}"}, quiet=True, launch="/ignition")
+        asked = http("GET", fbase + "/api/state")[1]["launch"]
         far.shutdown(); far.server_close()
+        spaced = Studio.init(tmp / "site-copy-2", "Spaced", str(tmp / "Two Words"))
+        (spaced.home / "studio.local.toml").write_text('site = "p"\ngame_repo = ""\n', encoding="utf-8")
+        spaced_info = server.launch_info(Studio(spaced.home), "/ignition/")
+        check(asked == {"url": "/ignition/", "folder": game.name, "repo": "p:" + game.name, "why": ""}
+              and spaced_info["repo"] == "" and "Two Words" in spaced_info["why"]
+              and server.launch_info(studio, "/ignition/") is None and server.launch_info(far_copy, "") is None,
+              "a server copy's page is told where to start Claude for its project folder; never the PC's, and not a name the launcher refuses")
         try:
             buttons.press(far_copy, "build"); direct = True
         except StudioError:

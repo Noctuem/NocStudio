@@ -8,10 +8,10 @@ import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from .store import Studio, StudioError, slugify
+from .store import Studio, StudioError, slugify, tomllib
 
 WEB = Path(__file__).resolve().parent.parent / "web"
 TYPES = {".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
@@ -28,8 +28,31 @@ def split_q(path: str) -> dict:
     return parse_qs(urlsplit(path).query)
 
 
-def make_handler(home: Path, allowed_hosts: set[str], quiet: bool = False, hub: str = "", seen=None):
-    """`hub` is the Studio app's menu, when this Studio was started from it; `seen` is called on every request."""
+LAUNCH_NAME = re.compile(r"[A-Za-z0-9._-]{1,48}")
+
+
+def launch_info(studio: Studio, url: str) -> dict | None:
+    """Where the page asks for a remote Claude session on the PC (an Ignition launcher, `[serve] launch` on a
+    server copy), and the project folder it names. The folder is the PC's, from studio.toml itself: a server
+    copy's own studio.local.toml clears game_repo."""
+    if not url or not studio.config.get("site"):
+        return None
+    try:
+        with open(studio.home / "studio.toml", "rb") as fh:
+            repo = str((tomllib.load(fh) if tomllib else {}).get("game_repo") or "")
+    except (OSError, ValueError):
+        repo = ""
+    name = PureWindowsPath(repo.replace("/", "\\")).name if repo else ""
+    if not name:
+        return None
+    ok = bool(LAUNCH_NAME.fullmatch(name))
+    return {"url": url if url.endswith("/") else url + "/", "folder": name, "repo": "p:" + name if ok else "",
+            "why": "" if ok else f"The launcher takes folder names of letters, digits, dots, dashes and underscores; “{name}” has something else in it."}
+
+
+def make_handler(home: Path, allowed_hosts: set[str], quiet: bool = False, hub: str = "", seen=None, launch: str = ""):
+    """`hub` is the Studio app's menu, when this Studio was started from it; `seen` is called on every request.
+    `launch` is where a server copy's page asks for a remote Claude session on the PC (see launch_info)."""
     class Handler(BaseHTTPRequestHandler):
         server_version = "Studio/0.1"
         protocol_version = "HTTP/1.1"
@@ -243,7 +266,7 @@ def make_handler(home: Path, allowed_hosts: set[str], quiet: bool = False, hub: 
                 if head == "api":
                     studio = self.studio()
                     if parts[1:] == ["state"]:
-                        return self.send_json(dict(studio.state(), hub=hub))
+                        return self.send_json(dict(studio.state(), hub=hub, launch=launch_info(studio, launch)))
                     if parts[1:] == ["pulse"]:
                         return self.send_json({"stamp": studio.stamp()})
                     if parts[1:] == ["live"]:
@@ -413,7 +436,7 @@ def serve(home, port: int = 0, host: str = "", open_browser: bool = False, hosts
     if host not in ("127.0.0.1", "localhost", "0.0.0.0"):
         allowed.add(f"{host}:{port}")
     allowed |= {str(x).lower() for x in [*(served.get("hosts") or []), *hosts] if x}
-    httpd = ThreadingHTTPServer((host, port), make_handler(studio.home, allowed))
+    httpd = ThreadingHTTPServer((host, port), make_handler(studio.home, allowed, launch=str(served.get("launch") or "")))
     httpd.daemon_threads = True
     url = f"http://127.0.0.1:{port}/"
     syncing = sync.start(studio.home)
@@ -454,9 +477,9 @@ def studios_by_name(homes) -> dict:
     return studios
 
 
-def menu_handler(studios: dict, allowed: set[str]):
+def menu_handler(studios: dict, allowed: set[str], launch: str = ""):
     """The handler for several Studios behind one address: the menu at /, each Studio at /<its name>/."""
-    handlers = {slug: make_handler(home, allowed, quiet=True, hub="../") for slug, home in studios.items()}
+    handlers = {slug: make_handler(home, allowed, quiet=True, hub="../", launch=launch) for slug, home in studios.items()}
 
     class Menu(handlers[next(iter(handlers))]):
         def pass_on(self, verb: str) -> bool:
@@ -516,7 +539,7 @@ def serve_all(homes, port: int = 0, host: str = "", hosts=()) -> None:
     if host not in ("127.0.0.1", "localhost", "0.0.0.0"):
         allowed.add(f"{host}:{port}")
     allowed |= {str(x).lower() for x in [*(served.get("hosts") or []), *hosts] if x}
-    httpd = ThreadingHTTPServer((host, port), menu_handler(studios, allowed))
+    httpd = ThreadingHTTPServer((host, port), menu_handler(studios, allowed, launch=str(served.get("launch") or "")))
     httpd.daemon_threads = True
     for home in studios.values():
         sync.start(home)

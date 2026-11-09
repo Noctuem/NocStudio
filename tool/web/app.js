@@ -597,6 +597,7 @@
       h('span', { class: 'spacer' }),
       syncChip(st.sync),
       usageChip(),
+      st.launch ? h('button', { class: 'btn small primary launch-btn', type: 'button', title: 'Start a remote Claude session on the PC in ' + st.launch.folder + ', for the Claude app', onclick: toggleLaunch }, 'Start Claude') : null,
       st.static ? null : h('button', { class: 'btn small', type: 'button', title: 'Leave a note for the project (N)', onclick: openNotePop }, 'Note'),
       st.hub ? h('a', { class: 'btn small allp', href: st.hub, title: 'Back to the list of your projects' }, 'All projects') : null, scaleControl(), themeControl(),
       st.static ? h('span', { class: 'sample' }, 'Sample data. Candidates are placeholders drawn by script.') : null);
@@ -633,7 +634,7 @@
   function drawUsagePop() {
     const el = $('.usagepop'), d = U.data || {};
     if (!el) return;
-    el.replaceChildren(
+    el.replaceChildren(...[  // replaceChildren writes a null out as the word: keep only what is there
       h('div', { class: 'jh' }, h('h2', { class: 'grow' }, 'Usage'),
         h('button', { class: 'btn small', type: 'button', disabled: U.busy, onclick: () => usageLoad(true) }, U.busy ? 'Reading…' : 'Check again'),
         h('button', { class: 'btn small', type: 'button', onclick: closeUsage }, 'Close (Esc)')),
@@ -643,7 +644,62 @@
         l.resets ? h('div', { class: 'muted' }, 'Resets ' + l.resets) : null)),
       U.err ? h('div', { class: 'tline bad' }, U.err) : null,
       d.text ? h('details', {}, h('summary', {}, 'Everything /usage says'), h('pre', { class: 'utext' }, d.text)) : U.busy ? h('div', { class: 'muted' }, 'Reading /usage…') : null,
-      d.at ? h('div', { class: 'muted' }, 'Read ' + when(d.at) + '. Reading it calls no model, so it costs nothing.') : null);
+      d.at ? h('div', { class: 'muted' }, 'Read ' + when(d.at) + '. Reading it calls no model, so it costs nothing.') : null].filter(Boolean));
+  }
+
+  // a server copy's Start Claude: asks the launcher beside it (Ignition) to wake the PC and start `claude remote-control`
+  // in this project's folder, then the Claude app's Code tab picks the session up. Same address and sign-in as the page.
+  const LA = { job: null, err: '', busy: false, desk: null, poll: 0 };
+  async function launchCall(method, path, body) {
+    const res = await fetch(S.state.launch.url + path, { method, credentials: 'same-origin', cache: 'no-store',
+      headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
+    let data = {};
+    try { data = await res.json(); } catch (e) { /* not JSON */ }
+    if (res.status === 401) throw new Error('The launcher answers only behind the sign-in: open this page through the site.');
+    if (!res.ok && res.status !== 202) throw new Error(data.error || data.detail || ('The launcher answered ' + res.status));
+    return data;
+  }
+  function closeLaunch() { const el = $('.launchpop'); if (el) el.remove(); document.removeEventListener('keydown', launchKey); }
+  function launchKey(e) { if (e.key === 'Escape') { closeLaunch(); e.stopPropagation(); } }
+  function toggleLaunch() {
+    if ($('.launchpop')) { closeLaunch(); return; }
+    document.body.append(h('div', { class: 'notepop launchpop', role: 'dialog', 'aria-label': 'Start Claude' }));
+    document.addEventListener('keydown', launchKey);
+    drawLaunch();
+    if (!LA.busy) launchCall('GET', 'status').then((d) => { LA.desk = d; drawLaunch(); }).catch(() => {});
+  }
+  async function launchStart(fresh) {
+    const lc = S.state.launch;
+    LA.busy = true; LA.err = ''; LA.job = { status: 'running', log: 'Asking the launcher…' }; drawLaunch();
+    try {
+      const made = await launchCall('POST', 'launch', { tool: 'claude', repo: lc.repo, fresh: !!fresh });
+      clearTimeout(LA.poll);
+      const step = async () => {
+        try { LA.job = await launchCall('GET', 'launch/' + encodeURIComponent(made.id)); } catch (e) { LA.err = e.message; LA.busy = false; drawLaunch(); return; }
+        if (LA.job.status === 'running') { drawLaunch(); LA.poll = setTimeout(step, 2000); return; }
+        LA.busy = false; drawLaunch();
+        if (!$('.launchpop')) toast(LA.job.status === 'failed' ? 'Claude did not start: ' + (LA.job.result || 'see Start Claude') : 'Claude is ready: open the Claude app, Code tab');
+      };
+      await step();
+    } catch (e) { LA.err = e.message; LA.busy = false; LA.job = null; drawLaunch(); }
+  }
+  function drawLaunch() {
+    const el = $('.launchpop'), lc = S.state.launch, j = LA.job, d = LA.desk;
+    if (!el || !lc) return;
+    const lines = j && j.log ? String(j.log).trim().split('\n').slice(-4) : [];
+    const ready = j && (j.status === 'launched' || j.status === 'already-running');
+    el.replaceChildren(...[
+      h('div', { class: 'jh' }, h('h2', { class: 'grow' }, 'Start Claude'), h('button', { class: 'btn small', type: 'button', onclick: closeLaunch }, 'Close (Esc)')),
+      h('p', {}, 'Starts a remote-controlled Claude session on the PC in ', h('b', {}, lc.folder), ', then you talk to it in the Claude app\'s Code tab. It carries on the last conversation there unless you start a new one.'),
+      d ? h('div', { class: 'muted' }, d.desktop === 'down' ? 'The PC is asleep: starting wakes it first, about a minute.' : d.desktop === 'up' ? 'The PC is awake.' : 'Could not tell whether the PC is awake.') : null,
+      lc.repo ? h('div', { class: 'btns' },
+        h('button', { class: 'btn small primary', type: 'button', disabled: LA.busy, onclick: () => launchStart(false) }, LA.busy ? 'Starting…' : 'Carry on the last conversation'),
+        h('button', { class: 'btn small', type: 'button', disabled: LA.busy, onclick: () => launchStart(true) }, 'New conversation'))
+        : h('div', { class: 'tline bad' }, lc.why),
+      lines.length ? h('pre', { class: 'utext' }, lines.join('\n')) : null,
+      ready ? h('div', { class: 'tline ok' }, j.status === 'already-running' ? 'A session is already running there. ' : 'Started. ', 'Open the Claude app, Code tab: it is named “' + lc.folder + ' (claude)”.') : null,
+      j && j.status === 'failed' ? h('div', { class: 'tline bad' }, j.result || 'It did not start.') : null,
+      LA.err ? h('div', { class: 'tline bad' }, LA.err) : null].filter(Boolean));
   }
 
   // a Studio kept in step with another copy (sync.py): quiet while it goes through, plain when it does not

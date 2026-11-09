@@ -528,6 +528,9 @@ details.setup > :not(summary) { margin: 0 14px 12px; }
 .tlog .old { opacity: 0.6; }
 .tline { font: 12px/1.45 var(--font-mono); color: var(--muted); overflow-wrap: anywhere; }
 .tline.bad { color: var(--accent-fg); }
+.tline.ok { color: var(--ok); }
+.launchpop { gap: 12px; }
+.launchpop p { margin: 0; }
 .tturn { border-top: 1px dashed var(--line); margin: 2px 0; }
 .tblock, .task { border: 1px solid color-mix(in srgb, var(--accent) 60%, transparent); border-radius: var(--radius); padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; background: var(--accent-soft); }
 .tblock .label, .task .label { font-size: 12px; font-weight: 600; color: var(--accent-fg); }
