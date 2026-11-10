@@ -330,6 +330,8 @@ def cmd_todo(a):
                 label = f" ({row['label']})" if row.get("label") else ""
                 note = f" \"{row['note']}\"" if row.get("note") else ""
                 print(f"   {name.rstrip('s'):7} {row['candidate']}{label}: {row['title']}{score}{note}")
+                if row.get("edited"):
+                    print(f"           the user edited it; their version: {row['edited']}")
         print("   do:")
         for k, step in enumerate(item["steps"], 1):
             print(f"     {k}. {step}")

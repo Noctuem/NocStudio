@@ -56,6 +56,13 @@ S file <batch>
 - **question**: options are candidates with `--body` or `--body-file`
   (markdown: what it costs, what it risks, what it feels like). Mark yours
   with `--recommended`. Put the words that raised the question in `--brief`.
+- **A text for them to edit and approve** (a script to record, words for a
+  page): `--kind text --mode rate`, one candidate per draft, each a `.md`
+  file. They can edit it on the card, then approve it. If they edited it,
+  `todo` prints the path of their version
+  (`batches/<batch>/edited/<candidate>/<file>`) and a line that shows what
+  they changed. Their version is the one that counts: `import` copies it, and
+  the first draft stays as it was. Work from their version, never the draft.
 
 What makes a batch worth their time:
 

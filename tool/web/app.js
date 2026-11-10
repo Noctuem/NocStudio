@@ -1296,7 +1296,7 @@
       stage.append(h('video', { src: API.src(fileUrl(b.id, file.path)), controls: true, loop: true, muted: true, playsinline: true, preload: 'auto', style: 'width:100%;display:block' }));
     } else if (file.kind === 'text') {
       const holder = h('div', { class: 'option' }, 'Loading');
-      API.bytes(fileUrl(b.id, file.path)).then((buf) => holder.replaceChildren(md(new TextDecoder().decode(buf)))).catch(() => holder.replaceChildren('Could not read the file.'));
+      API.bytes(fileUrl(b.id, file.path)).then((buf) => holder.replaceWith(textCard(cand, new TextDecoder().decode(buf)))).catch(() => holder.replaceChildren('Could not read the file.'));
       stage.className = ''; stage.append(holder);
     } else {
       const src = API.src(fileUrl(b.id, file.path));
@@ -1314,6 +1314,42 @@
       if (big) { stage.style.flex = '1'; stage.style.minHeight = '0'; }
     }
     return api;
+  }
+
+  // a markdown or text candidate the user can edit on the card; their version is what ships
+  function textCard(cand, first) {
+    const cid = cand.id;
+    const mine = () => { const e = S.verdict.candidates[cid]; return e && typeof e.edited === 'string' ? e.edited : null; };
+    let editing = false, showFirst = false;
+    const view = h('div', { class: 'option' });
+    const area = h('textarea', { class: 'field mdedit', spellcheck: 'true', 'aria-label': 'Edit the text of ' + cand.title,
+      oninput: () => { const e = entry(cid); if (area.value === first) delete e.edited; else e.edited = area.value; fit(); changed(cid); chip.hidden = backBtn.hidden = mine() === null; } });
+    const fit = () => { area.style.height = 'auto'; area.style.height = Math.max(area.scrollHeight + 2, 240) + 'px'; };
+    const chip = h('span', { class: 'chip redo' }, 'Your edits');
+    const editBtn = h('button', { class: 'btn small primary', type: 'button', onclick: () => {
+      editing = !editing; showFirst = false; paint();
+      if (editing) { area.value = mine() ?? first; fit(); area.focus(); }
+    } });
+    const firstBtn = h('button', { class: 'btn small', type: 'button', onclick: () => { showFirst = !showFirst; paint(); } });
+    const backBtn = h('button', { class: 'btn small', type: 'button', onclick: () => {
+      const was = mine(); if (was === null) return;
+      delete entry(cid).edited; editing = false; changed(cid);
+      undoToast('Put back the first draft', () => { entry(cid).edited = was; changed(cid); });
+    } }, 'Put back the first draft');
+    function paint() {
+      const ed = mine() !== null, can = editable();
+      if (!can) editing = false;
+      chip.hidden = !ed;
+      editBtn.hidden = !can; editBtn.textContent = editing ? 'Done editing' : 'Edit';
+      firstBtn.hidden = !ed || editing; firstBtn.textContent = showFirst ? 'Show your version' : 'Show the first draft';
+      backBtn.hidden = !ed || !can;
+      area.hidden = !editing; view.hidden = editing;
+      if (!editing) view.replaceChildren(md(showFirst ? first : (mine() ?? first)));
+    }
+    const upd = () => { if (document.activeElement !== area) paint(); };
+    (S.ui[cid] = S.ui[cid] || []).push(upd);
+    paint();
+    return h('div', { class: 'mdcard' }, h('div', { class: 'mdbar' }, chip, h('span', { style: 'flex:1' }), firstBtn, backBtn, editBtn), view, area);
   }
 
   // -------------------------------------------------------------- batch page
@@ -1424,7 +1460,7 @@
     const refreshCmp = () => { cmpBtn.hidden = S.cmp.size < 2; cmpBtn.textContent = 'Compare the ' + S.cmp.size + ' ticked'; };
 
     // grid
-    const tileW = moving ? 340 : ({ image: 440, texture: 300, model: 340, audio: 380, ingame: 300, question: 380 }[b.kind] || 380);
+    const tileW = moving ? 340 : ({ image: 440, texture: 300, model: 340, audio: 380, ingame: 300, question: 380, text: 560 }[b.kind] || 380);
     const grid = h('div', { class: 'grid', style: '--tile:' + tileW + 'px' });
     const tiles = {};
     for (const cand of b.candidates) {

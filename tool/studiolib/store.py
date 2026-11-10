@@ -56,6 +56,7 @@ ACTIONS = {
 SLOT_STATUS = ("needed", "placeholder", "in_review", "approved", "in_game", "parked")
 TRIAGE_STATUS = ("open", "planned", "fixed", "wontfix", "question")
 MILESTONE_STATUS = ("done", "current", "next", "later", "parked")
+EDIT_MAX = 400_000  # characters of the user's own version of a text candidate
 HAND_STATUS = ("open", "later", "done", "parked")  # later: the user's, but nothing waits on it yet
 HAND_KINDS = ("action", "decision", "play", "info")  # something to do, a question to answer, a build to try, a thing to know
 # how the user likes the page: one answer for every Studio here (STUDIO_PREFS names another file, for a test)
@@ -465,6 +466,7 @@ class Studio:
     def _clean_verdict(self, batch: dict, raw: dict, strict: bool) -> dict:
         mode = batch.get("mode", "pick")
         ids = [c["id"] for c in batch.get("candidates", [])]
+        texts = {c["id"] for c in batch.get("candidates", []) if self.text_file(c)}
         out_c = {}
         for cid, entry in (raw.get("candidates") or {}).items():
             if cid not in ids or not isinstance(entry, dict):
@@ -475,8 +477,17 @@ class Studio:
             score = entry.get("score")
             score = int(score) if isinstance(score, (int, float)) and 1 <= int(score) <= 10 else None
             note = str(entry.get("note") or "").strip()
-            if call or score or note:
+            edited = entry.get("edited")
+            if not (isinstance(edited, str) and cid in texts):
+                edited = None
+            elif len(edited) > EDIT_MAX:
+                if strict:
+                    raise StudioError(f"the edited text of {cid} is over {EDIT_MAX // 1000} KB")
+                edited = None
+            if call or score or note or edited is not None:
                 out_c[cid] = {"call": call, "score": score, "note": note}
+                if edited is not None:
+                    out_c[cid]["edited"] = edited.replace("\r\n", "\n")
         action = raw.get("action")
         if action not in ACTIONS[mode]:
             action = None
@@ -488,6 +499,37 @@ class Studio:
             if problem:
                 raise StudioError(problem)
         return verdict
+
+    @staticmethod
+    def text_file(cand: dict) -> dict | None:
+        """The markdown or text file the user can edit on the card, if the candidate's main file is one."""
+        files = cand.get("files") or []
+        main = next((f for f in files if f.get("role") == "primary"), files[0] if files else None)
+        return main if main and main.get("kind") == "text" else None
+
+    def edited_path(self, batch_id: str, cand: dict) -> Path | None:
+        """Where the user's own version of a text candidate is kept once they submit."""
+        main = self.text_file(cand)
+        return self.batch_dir(batch_id) / "edited" / cand["id"] / Path(main["path"]).name if main else None
+
+    def _write_edits(self, batch: dict, verdict: dict) -> None:
+        shutil.rmtree(self.batch_dir(batch["id"]) / "edited", ignore_errors=True)
+        for cand in batch["candidates"]:
+            text = (verdict["candidates"].get(cand["id"]) or {}).get("edited")
+            out = self.edited_path(batch["id"], cand) if isinstance(text, str) else None
+            if out:
+                out.parent.mkdir(parents=True, exist_ok=True)
+                out.write_text(text, encoding="utf-8", newline="\n")
+
+    def edits(self, batch: dict) -> dict[str, str]:
+        """{candidate: the user's version, relative to the home} for each text they edited."""
+        verdict = batch.get("verdict") or {}
+        out = {}
+        for cand in batch["candidates"]:
+            path = self.edited_path(batch["id"], cand)
+            if path and isinstance((verdict.get("candidates", {}).get(cand["id"]) or {}).get("edited"), str) and path.is_file():
+                out[cand["id"]] = path.relative_to(self.home).as_posix()
+        return out
 
     @staticmethod
     def verdict_problem(batch: dict, verdict: dict) -> str:
@@ -523,6 +565,7 @@ class Studio:
         verdict["submitted"] = iso_now()
         verdict["revision"] = int((batch.get("verdict") or {}).get("revision", 0)) + 1
         folder = self.batch_dir(batch_id)
+        self._write_edits(batch, verdict)
         write_json(folder / "verdict.json", verdict)
         with open(folder / "verdicts.log.jsonl", "a", encoding="utf-8", newline="\n") as fh:
             fh.write(json.dumps(verdict, ensure_ascii=False) + "\n")  # the user's words are never lost
@@ -660,17 +703,26 @@ class Studio:
 
     def _todo_item(self, batch: dict) -> dict:
         verdict = batch["verdict"]
+        edits = self.edits(batch)
         by_call: dict[str, list] = {}
         for cand in batch["candidates"]:
             entry = verdict["candidates"].get(cand["id"]) or {}
             row = {"candidate": cand["id"], "title": cand.get("title", ""), "label": cand.get("label", ""),
                    "score": entry.get("score"), "note": entry.get("note", ""),
                    "files": [f["path"] for f in cand.get("files", [])]}
+            if cand["id"] in edits:
+                row["edited"] = edits[cand["id"]]
             by_call.setdefault(entry.get("call") or "unmarked", []).append(row)
         action = verdict["action"]
         me = "python tool/studio.py"
         winners = by_call.get("winner", []) + by_call.get("approve", [])
         steps = []
+        for cand in batch["candidates"]:
+            if cand["id"] in edits:
+                first = f"batches/{batch['id']}/{self.text_file(cand)['path']}"
+                steps.append(f"The user edited the text of {cand['id']} on the card. Their version is {edits[cand['id']]}; "
+                             f"it is the one that counts (import copies it). See what they changed, in the home: "
+                             f"git diff --no-index --word-diff \"{first}\" \"{edits[cand['id']]}\"")
         if batch["mode"] == "question":
             if action == "answer":
                 steps.append("The user's answer is a ruling. Apply it where it belongs (spec, content, TODO).")
@@ -726,6 +778,7 @@ class Studio:
             lines += ["## Hard targets", ""] + [f"- {k}: {v}" for k, v in batch["targets"].items()] + [""]
         if verdict.get("note"):
             lines += ["## The user's note on the whole batch", "", "> " + verdict["note"].replace("\n", "\n> "), ""]
+        edits = self.edits(batch)
         order = [("winner", "Winner"), ("approve", "Approved"), ("keep", "Keep: more in this direction"),
                  ("redo", "Redo: right idea, fix what the user says"), ("reject", "Rejected: do not go here again"),
                  (None, "Not marked")]
@@ -740,6 +793,9 @@ class Studio:
                 lines.append(f"### {cand['id']}: {cand.get('title', '')}{score}")
                 if entry.get("note"):
                     lines += ["", "> " + entry["note"].replace("\n", "\n> ")]
+                if cand["id"] in edits:
+                    lines += ["", "The user edited this text on the card. Their version, which the next round starts from: "
+                                  f"`{edits[cand['id']]}`"]
                 made = cand.get("made_with") or {}
                 if made:
                     lines += ["", "Made with: " + json.dumps(made, ensure_ascii=False)]
@@ -781,6 +837,11 @@ class Studio:
                 sources = [folder / f["path"] for f in cand.get("files", [])]
                 primary = next((folder / f["path"] for f in cand.get("files", []) if f.get("role") == "primary"),
                                sources[0] if sources else None)
+                mine = self.edited_path(batch_id, cand) if isinstance(entry.get("edited"), str) else None
+                if mine and mine.is_file():  # the user's own version of the text ships, under the draft's name
+                    sources = [mine if f is self.text_file(cand) else folder / f["path"] for f in cand.get("files", [])]
+                    primary = mine
+                    row["edited"] = True
                 if slot_id and sources:
                     # two winners for one slot share a version, each in a folder of its own
                     lib = self.library_dir / slot_id / f"v{version}"
@@ -795,7 +856,8 @@ class Studio:
                             "slot": slot_id, "version": version, "batch": batch_id, "candidate": cand["id"],
                             "title": cand.get("title", ""), "made_with": cand.get("made_with") or {},
                             "facts": cand.get("facts") or {}, "score": entry.get("score"),
-                            "his_note": entry.get("note", ""), "approved": verdict.get("submitted")})
+                            "his_note": entry.get("note", ""), "approved": verdict.get("submitted"),
+                            "edited_by_user": bool(row.get("edited"))})
                     picture = next((f["path"] for f in cand.get("files", []) if f.get("kind") in ("image", "texture")), None)
                     if picture and not thumb:
                         thumb = f"{row['library']}/{Path(picture).name}"

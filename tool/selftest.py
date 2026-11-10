@@ -658,6 +658,30 @@ def main() -> int:
             check("at rest" in str(err), "samples at the wrong scale are refused, with the reason")
         entry = studio.set_motion("test.puppet", src / "puppet_baked.glb")
         check(entry["clips"][0]["name"] == "sway" and (home / "motions/test.puppet.glb").exists(), "a baked model is kept with its clips")
+        # a script the user edits on the card: their version is the one that ships
+        (src / "script.md").write_text("# Take one\n\nHello there.\n", encoding="utf-8")
+        make_wav(src / "scratch.wav", -20.0, 0.2)
+        script = studio.new_batch("script", kind="text", mode="rate", slot="test.script", ask="Ready to record?",
+                                  look_at=["Say it out loud"], dest="content/scripts/one.md")
+        studio.add_candidate(script["id"], [src / "script.md"], title="Script")
+        studio.add_candidate(script["id"], [src / "scratch.wav"], title="Not text")
+        studio.publish(script["id"])
+        studio.save_draft(script["id"], {"candidates": {"a": {"edited": "# Take one\r\n\r\nHi.\r\n"}, "b": {"edited": "no"}}})
+        draft = json.loads((studio.batch_dir(script["id"]) / "draft.json").read_text(encoding="utf-8"))["candidates"]
+        check(draft == {"a": {"call": None, "score": None, "note": "", "edited": "# Take one\n\nHi.\n"}},
+              "an edit on a text card is kept in the draft, and only a text candidate takes one")
+        studio.submit(script["id"], {"action": "ship", "candidates": {"a": {"call": "approve", "edited": "# Take one\n\nHi.\n"}}})
+        item = next(i for i in studio.todo() if i["batch"] == script["id"])
+        mine = f"batches/{script['id']}/edited/a/script.md"
+        check(item["winners"][0].get("edited") == mine and (home / mine).read_text(encoding="utf-8") == "# Take one\n\nHi.\n"
+              and any(mine in s and "git diff" in s for s in item["steps"]),
+              "the submitted edit is a file Claude reads, and todo says so with how to see the change")
+        studio.import_batch(script["id"])
+        check((game / "content/scripts/one.md").read_text(encoding="utf-8") == "# Take one\n\nHi.\n"
+              and (home / "library/test.script/v1/script.md").read_text(encoding="utf-8") == "# Take one\n\nHi.\n"
+              and json.loads((home / "library/test.script/v1/provenance.json").read_text(encoding="utf-8"))["edited_by_user"] is True,
+              "import ships the user's version, not the first draft")
+        studio.mark_done(script["id"], ruling="test")
         feel = studio.new_batch("sway", kind="ingame", slot="test.sway", ask="Which sway?", look_at=["The hips"], launch="game.exe")
         studio.add_candidate(feel["id"], [], label="sway 1 wide", title="Wide", motion="test.puppet:sway")
         studio.add_candidate(feel["id"], [], label="sway 2 tight", title="Tight")
