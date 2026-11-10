@@ -251,6 +251,8 @@ class Studio:
             return "processed"
         if batch.get("verdict"):
             return "submitted"
+        if batch.get("withdrawn"):
+            return "withdrawn"
         if not batch.get("ready"):
             return "building"
         return "draft" if batch.get("draft") else "open"
@@ -425,8 +427,11 @@ class Studio:
             raise StudioError(f"{src}: no such file")
         folder = self.batch_dir(batch_id) / "files" / "_context"
         folder.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src, folder / src.name)
-        batch.setdefault("context", []).append({"path": f"files/_context/{src.name}",
+        name, n = src.name, 2
+        while (folder / name).exists():  # two pictures of one name never overwrite each other
+            name, n = f"{src.stem}_{n}{src.suffix}", n + 1
+        shutil.copy2(src, folder / name)
+        batch.setdefault("context", []).append({"path": f"files/_context/{name}",
                                                 "kind": file_kind(src.name), "label": label or src.stem})
         self.save_batch(batch)
 

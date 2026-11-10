@@ -181,13 +181,13 @@ def cmd_file(a):
 
 
 def cmd_withdraw(a):
-    """Take filed batches the user has not judged out of the Inbox, to be made again."""
+    """Take batches the user has not judged (filed or not) out of the Inbox and the to-file list, to be made again."""
     import datetime
     s = Studio(find_home(a.home))
     code = 0
     for bid in a.batch:
         batch = s.load_batch(bid)
-        if batch["status"] not in ("open", "draft") or (batch["status"] == "draft" and not a.started):
+        if batch["status"] not in ("open", "draft", "building") or (batch["status"] == "draft" and not a.started):
             print(f"{bid}: left as it is ({batch['status']}: the user has judged or started it)")
             code = 1
             continue
