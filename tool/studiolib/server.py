@@ -28,7 +28,7 @@ def split_q(path: str) -> dict:
     return parse_qs(urlsplit(path).query)
 
 
-LAUNCH_NAME = re.compile(r"[A-Za-z0-9._-]{1,48}")
+LAUNCH_NAME = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]| (?=[^ ])){0,47}")  # Ignition 0.7.0 takes single spaces inside
 
 
 def launch_info(studio: Studio, url: str) -> dict | None:
@@ -47,7 +47,7 @@ def launch_info(studio: Studio, url: str) -> dict | None:
         return None
     ok = bool(LAUNCH_NAME.fullmatch(name))
     return {"url": url if url.endswith("/") else url + "/", "folder": name, "repo": "p:" + name if ok else "",
-            "why": "" if ok else f"The launcher takes folder names of letters, digits, dots, dashes and underscores; “{name}” has something else in it."}
+            "why": "" if ok else f"The launcher takes folder names of letters, digits, dots, dashes, underscores and single spaces; “{name}” has something else in it."}
 
 
 def make_handler(home: Path, allowed_hosts: set[str], quiet: bool = False, hub: str = "", seen=None, launch: str = ""):

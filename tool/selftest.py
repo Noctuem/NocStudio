@@ -279,8 +279,11 @@ def main() -> int:
         spaced = Studio.init(tmp / "site-copy-2", "Spaced", str(tmp / "Two Words"))
         (spaced.home / "studio.local.toml").write_text('site = "p"\ngame_repo = ""\n', encoding="utf-8")
         spaced_info = server.launch_info(Studio(spaced.home), "/ignition/")
+        odd = Studio.init(tmp / "site-copy-3", "Odd", str(tmp / "Kite & Lab"))
+        (odd.home / "studio.local.toml").write_text('site = "p"\ngame_repo = ""\n', encoding="utf-8")
+        odd_info = server.launch_info(Studio(odd.home), "/ignition/")
         check(asked == {"url": "/ignition/", "folder": game.name, "repo": "p:" + game.name, "why": ""}
-              and spaced_info["repo"] == "" and "Two Words" in spaced_info["why"]
+              and spaced_info["repo"] == "p:Two Words" and odd_info["repo"] == "" and "Kite & Lab" in odd_info["why"]
               and server.launch_info(studio, "/ignition/") is None and server.launch_info(far_copy, "") is None,
               "a server copy's page is told where to start Claude for its project folder; never the PC's, and not a name the launcher refuses")
         try:
