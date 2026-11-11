@@ -85,7 +85,7 @@ def page_wrote(home, since_ns: int, path: str) -> None:
     if len(parts) == 4 and parts[:2] == ["api", "slot"]:  # a text edited in the Library: its new version and its slot
         found.add(f"slots/{parts[2]}.json")
         found.add(f"library/{parts[2]}")
-    for sub in ("notes", "overview", "playtests", "decisions"):
+    for sub in ("notes", "overview", "playtests", "decisions", "shares"):  # shares: a link made or stopped
         for f in (studio.home / sub).glob("*"):
             try:
                 if f.is_file() and f.stat().st_mtime_ns >= since_ns:

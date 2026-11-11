@@ -111,7 +111,9 @@ S share stop <id>
 `--for` takes 12h, 3d, 2w and so on, 90 days at most. Only library files can
 be shared. They can also make one with Share on an asset's page, and see or
 stop them all at the top of the Library. Make a link only when they ask for
-one, and give them the link it prints; never send it anywhere yourself.
+one, and give them the link it prints; never send it anywhere yourself. A link
+made with `S share` works once the server has it: commit `shares/<id>.json`
+and push (or `S save`), and it is live a minute later. Stopping one is the same.
 
 ## When the user says to process their verdicts
 
