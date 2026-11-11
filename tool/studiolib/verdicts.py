@@ -25,7 +25,8 @@ def waiting(home) -> list[dict]:
     submitted = [d for d in (home / "batches").glob("*")
                  if (d / "verdict.json").is_file() and not (d / "result.json").exists()]
     hands_file = home / "overview" / "hands.json"
-    if not submitted and not hands_file.exists():
+    edited = [p for p in (home / "slots").glob("*.json") if '"seen": false' in p.read_text(encoding="utf-8", errors="replace")]
+    if not submitted and not hands_file.exists() and not edited:
         return []
     try:
         studio = Studio(home)
@@ -38,6 +39,10 @@ def waiting(home) -> list[dict]:
                     "another_round": "wants another round", "park": "parked", "answer": "answered"}.get(item["action"], item["action"])
             out.append({"id": "batch:" + item["batch"], "key": str(item.get("submitted") or ""),
                         "what": f"{item['batch']} ({item.get('title') or item['kind']}): {what}"})
+    if edited:
+        for e in studio.library_edits():
+            out.append({"id": "edit:" + e["slot"], "key": e["at"],
+                        "what": f"{e['slot']} ({e['title']}): they edited {Path(e['file']).name} in the Library"})
     for x in studio.unseen_hands():
         said = {"done": "they say it is done", "parked": "they parked it", "open": "they opened it again"}.get(x.get("status"), x.get("status"))
         out.append({"id": "hand:" + x["id"], "key": str(x.get("answered") or ""), "what": f"{x['id']} ({x.get('title') or ''}): {said}"})
@@ -85,5 +90,5 @@ def wording(rows: list[dict], home, prompt: bool = False) -> str:
         f"S is: {s}",
         "Run `S todo`: it prints each verdict in full, with the user's words quoted exactly and the steps to take. Do "
         "each, then close it as `S todo` says (`S done <batch> --ruling ...` for a verdict, `S hand seen <id>` for an "
-        "answered item). Never paraphrase their words in what you record, and do not ask them about these in chat.",
+        "answered item, `S slot seen <slot>` for a text they edited in the Library). Never paraphrase their words in what you record, and do not ask them about these in chat.",
     ])

@@ -97,6 +97,22 @@ S slot set <motion slot> --motion <set>:<clip>           the Library loops it on
 
 Bake before you file a motion batch, never after.
 
+## Share links
+
+When the user wants someone outside to see an approved file, make a link that
+shows only those files, until it runs out:
+
+```
+S share make library/<slot>/v<n> [more library files] --title "<what it is>" --for 7d
+S share list [--all]
+S share stop <id>
+```
+
+`--for` takes 12h, 3d, 2w and so on, 90 days at most. Only library files can
+be shared. They can also make one with Share on an asset's page, and see or
+stop them all at the top of the Library. Make a link only when they ask for
+one, and give them the link it prints; never send it anywhere yourself.
+
 ## When the user says to process their verdicts
 
 ```
@@ -104,7 +120,8 @@ S todo
 ```
 
 It prints every submitted verdict, oldest first, with their words quoted and
-the steps for each, and what they answered about the things only they can do.
+the steps for each, what they answered about the things only they can do, and
+every text they edited in the Library (see Slots: working copies).
 For each verdict, in order:
 
 - **Ship** (`ship`, `ship_and_iterate`): `S import <batch>` copies the winner
@@ -215,6 +232,17 @@ and sound it matches is shown or played there (`assets/audio/*/step_*.wav`).
 `in_game` means they accepted it as it is; what a session made and they have
 not judged is `placeholder`. A master approved before the Studio existed comes
 in with `S adopt <slot> <file> --note "<their words>" --date <day> --source "<where from>"`.
+
+**Working copies in the Library.** When the user should be able to hear, watch or
+edit a piece apart from any batch (the parts of a video: script, voice-over,
+music, sound effects, the cut), give the piece its own slot, all of one thing's
+slots in one `--group` so it has its own place in the Library, and put what the
+project holds now there: `S put <slot> <files> --source "<command or commit>"`.
+That is not an approval; it leaves the status alone, and the same files again
+add nothing. A text file in the Library can be edited there: their save is a new
+version, and `S todo` lists it with their file and the diff line. Their version
+is the one that counts: bring the repo in line with it (re-record a script from
+it), then `S slot seen <slot>`.
 
 ## Keeping the Overview true
 

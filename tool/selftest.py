@@ -682,6 +682,90 @@ def main() -> int:
               and json.loads((home / "library/test.script/v1/provenance.json").read_text(encoding="utf-8"))["edited_by_user"] is True,
               "import ships the user's version, not the first draft")
         studio.mark_done(script["id"], ruling="test")
+
+        # share links: only the files named, only from the library, only until they run out or are stopped
+        from studiolib import share
+        (home / "library/test.script/v1/page.html").write_text("<script>alert(1)</script>", encoding="utf-8")
+        for bad in (["batches/" + script["id"] + "/files/a/script.md"], ["library/../studio.toml"], [str(src / "script.md")], []):
+            try:
+                share.make(studio, bad); check(False, f"sharing {bad} is refused")
+            except StudioError:
+                pass
+        check(True, "a share takes library files alone: never a batch file, a path out of the library, or nothing")
+        os.environ["STUDIO_SHARE_URL"] = "https://example.test/share"
+        rec = share.make(studio, ["library/test.script/v1"], title="Take one", hours="2d")
+        other = share.make(studio, ["/library/test.script/v1/script.md"], hours="1h")
+        names = sorted(f["name"] for f in rec["files"])
+        check(names == ["page.html", "script.md"] and rec["url"] == "https://example.test/share/" + rec["token"] + "/" and len(rec["token"]) >= 43
+              and rec["state"] == "live", "a folder shares its files, not its provenance, with a long random token in the link")
+        sh = ThreadingHTTPServer(("127.0.0.1", 0), share.make_share_handler([tmp]))
+        threading.Thread(target=sh.serve_forever, daemon=True).start()
+        sbase = f"http://127.0.0.1:{sh.server_address[1]}/"
+        def sget(path, method="GET", headers=None):
+            req = urllib.request.Request(sbase + path, method=method, headers=headers or {})
+            try:
+                with urllib.request.urlopen(req, timeout=10) as res:
+                    return res.status, dict(res.headers), res.read()
+            except urllib.error.HTTPError as err:
+                return err.code, dict(err.headers), err.read()
+        idx = {f["name"]: n for n, f in enumerate(rec["files"])}
+        st, hd, body = sget(rec["token"] + "/")
+        check(st == 200 and b"Take one" in body and b"script.md" in body and "default-src 'none'" in hd.get("Content-Security-Policy", "")
+              and hd.get("Cache-Control") == "no-store", "the link opens a page of just its files, with no script allowed")
+        st, hd, body = sget(f"share/{rec['token']}/{idx['script.md']}/script.md", headers={"Range": "bytes=2-5"})
+        check(st == 206 and body == b"Take" and hd.get("Content-Security-Policy", "").startswith("sandbox"),
+              "a shared file is served in parts (video seeks), sandboxed, with or without the /share prefix")
+        st, hd, _ = sget(f"{rec['token']}/{idx['page.html']}/page.html")
+        check(st == 200 and hd.get("Content-Type") == "application/octet-stream" and hd.get("Content-Disposition", "").startswith("attachment"),
+              "a file that could run in the browser is only ever a download")
+        refused = [sget(p)[0] for p in (f"{rec['token']}/9/x.md", f"{rec['token']}/{idx['script.md']}/other.md", "x" * 43 + "/",
+                                        f"{rec['token'][:-1]}/", "", f"{rec['token']}/../studio.toml")]
+        posted = sget(rec["token"] + "/", method="POST")[0]
+        check(set(refused) == {404} and posted == 405, "anything else, a near token, a file not named, or a write, gets nothing")
+        share.stop(studio, rec["id"])
+        rec_file = home / "shares" / f"{other['id']}.json"
+        old = json.loads(rec_file.read_text(encoding="utf-8")); old["expires"] = "2020-01-01T00:00:00Z"
+        rec_file.write_text(json.dumps(old), encoding="utf-8")
+        check(sget(rec["token"] + "/")[0] == 404 and sget(other["token"] + "/")[0] == 404
+              and sorted(x["state"] for x in share.listing(studio)) == ["expired", "stopped"],
+              "a stopped link and a run-out link both answer as if they never were")
+        try:
+            share.make(studio, ["library/test.script/v1"], hours="91d"); check(False, "a link longer than 90 days is refused")
+        except StudioError:
+            check(True, "every link ends: 90 days at most")
+        sh.shutdown(); sh.server_close(); del os.environ["STUDIO_SHARE_URL"]
+        (home / "library/test.script/v1/page.html").unlink()
+        # a video's parts in its own Library group: working copies the user hears, and a script they edit there
+        studio.set_slot("test.vid.script", title="Script", kind="text", group="Video: test", status="in_review")
+        (src / "vo.md").write_text("# Shot 1\n\nHello there.\n", encoding="utf-8")
+        studio.put("test.vid.script", [src / "vo.md", src / "scratch.wav"], source="selftest")
+        again = studio.put("test.vid.script", [src / "vo.md", src / "scratch.wav"])
+        check(again.get("unchanged") and studio.slot("test.vid.script")["current"]["version"] == 1
+              and studio.slot("test.vid.script")["current"]["working"] is True
+              and studio.slot("test.vid.script")["status"] == "in_review",
+              "a working copy goes in the Library once, keeps its status, and the same files again add nothing")
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), None)
+        port = httpd.server_address[1]
+        httpd.RequestHandlerClass = server.make_handler(studio.home, {f"127.0.0.1:{port}"}, quiet=True)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        base = f"http://127.0.0.1:{port}"
+        status, body = http("POST", base + "/api/slot/test.vid.script/text", {"file": "vo.md", "text": "# Shot 1\r\n\r\nHi.\r\n"})
+        lib = home / "library/test.vid.script"
+        check(status == 200 and body["version"] == 2 and (lib / "v2/vo.md").read_bytes() == b"# Shot 1\n\nHi.\n"
+              and (lib / "v2/scratch.wav").is_file() and (lib / "v1/vo.md").read_text(encoding="utf-8") == "# Shot 1\n\nHello there.\n",
+              "the user's edit in the Library is a new version with the other files carried over; the old one stays")
+        status, _ = http("POST", base + "/api/slot/test.vid.script/text", {"file": "scratch.wav", "text": "no"})
+        check(status == 400, "only a text file of the latest version can be edited")
+        http("POST", base + "/api/slot/test.vid.script/text", {"file": "vo.md", "text": "# Shot 1\n\nHi you.\n"})
+        rows = studio.library_edits()
+        from studiolib import verdicts
+        check(len(rows) == 1 and rows[0]["file"] == "library/test.vid.script/v3/vo.md" and rows[0]["before"] == "library/test.vid.script/v1/vo.md"
+              and rows[0]["times"] == 2 and any(r["id"] == "edit:test.vid.script" for r in verdicts.waiting(home)),
+              "sessions are told of the edit, from the last version they saw to the newest, and the hook hands it on")
+        httpd.shutdown()
+        studio.see_edits("test.vid.script")
+        check(studio.library_edits() == [] and not any(r["id"].startswith("edit:") for r in verdicts.waiting(home)),
+              "and it leaves the queue once a session marks it seen")
         feel = studio.new_batch("sway", kind="ingame", slot="test.sway", ask="Which sway?", look_at=["The hips"], launch="game.exe")
         studio.add_candidate(feel["id"], [], label="sway 1 wide", title="Wide", motion="test.puppet:sway")
         studio.add_candidate(feel["id"], [], label="sway 2 tight", title="Tight")

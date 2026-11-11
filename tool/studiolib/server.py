@@ -267,6 +267,9 @@ def make_handler(home: Path, allowed_hosts: set[str], quiet: bool = False, hub: 
                     studio = self.studio()
                     if parts[1:] == ["state"]:
                         return self.send_json(dict(studio.state(), hub=hub, launch=launch_info(studio, launch)))
+                    if parts[1:] == ["shares"]:
+                        from . import share
+                        return self.send_json({"shares": share.listing(studio), "public": bool(share.base_url(studio))})
                     if parts[1:] == ["pulse"]:
                         return self.send_json({"stamp": studio.stamp()})
                     if parts[1:] == ["live"]:
@@ -383,6 +386,10 @@ def make_handler(home: Path, allowed_hosts: set[str], quiet: bool = False, hub: 
                         if verb == "reset":
                             studio.reset_sample(batch_id)
                             return self.send_json({"ok": True})
+                    if len(parts) == 4 and parts[:2] == ["api", "slot"] and parts[3] == "text":  # the user's edit in the Library
+                        slot = studio.edit_text(parts[2], str(data.get("file") or ""), data.get("text"))
+                        return self.send_json({"ok": True, "unchanged": bool(slot.get("unchanged")),
+                                               "version": slot["current"]["version"]})
                     if parts == ["api", "decisions"]:
                         record = studio.add_decision(title=str(data.get("title") or ""),
                                                      his_words=str(data.get("his_words") or ""),
@@ -413,6 +420,16 @@ def make_handler(home: Path, allowed_hosts: set[str], quiet: bool = False, hub: 
                             from . import notefiles
                             notefiles.kick(studio)  # closed files go to the archive, reopened ones come back
                         return self.send_json({"ok": True, "note": note})
+                    if parts == ["api", "share"]:  # a link for someone outside: library files only, for a set time
+                        from . import share
+                        if data.get("action") == "stop":
+                            return self.send_json({"ok": True, "share": share.stop(studio, str(data.get("id") or ""))})
+                        files = data.get("files")
+                        if not isinstance(files, list) or not all(isinstance(f, str) for f in files):
+                            raise StudioError("name the files to share")
+                        rec = share.make(studio, files, title=str(data.get("title") or ""),
+                                         hours=str(data.get("time") or "7d"), by="the page")
+                        return self.send_json({"ok": True, "share": rec})
                     if parts == ["api", "hand"]:
                         row = studio.answer_hand(str(data.get("id") or ""), str(data.get("action") or ""),
                                                  str(data.get("note") or ""))

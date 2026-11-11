@@ -165,8 +165,11 @@
         Object.assign(x, { status: { done: 'done', park: 'parked', reopen: 'open' }[action], his_note: note, answered: new Date().toISOString() });
       }
     },
+    shares: async () => ({ shares: [], public: false }),
+    share: async () => { throw new Error('This is a sample page: nothing here can be shared'); },
     addNote: async () => { throw new Error('This is a sample page: notes are not kept here'); },
     putFile: async () => { throw new Error('This is a sample page: notes are not kept here'); },
+    editText: async () => { throw new Error('This is a sample page: edits are not kept here'); },
     note: async () => { throw new Error('This is a sample page: notes are not kept here'); },
     src: (url) => STATIC.files[url] || '',
     bytes: async (url) => { if (!STATIC.files[url]) throw new Error('missing'); return b64bytes(STATIC.files[url]); },
@@ -183,6 +186,8 @@
     addDecision: (d) => call('POST', '/api/decisions', d),
     confirm: (key, confirmed, note) => call('PUT', '/api/triage', { key, confirmed, confirm_note: note }),
     hand: (id, action, note) => call('POST', '/api/hand', { id, action, note }),
+    shares: () => call('GET', '/api/shares'),
+    share: (body) => call('POST', '/api/share', body),
     addNote: (text, kind, urgent) => call('POST', '/api/note', { text, kind, urgent }),
     putFile: async (id, file, name) => { // the file as it is, not JSON: any size; the header tells the server the page sent it
       const res = await fetch(rel('/api/note/' + encodeURIComponent(id) + '/file?name=' + encodeURIComponent(name || file.name)), { method: 'PUT', headers: { 'X-Studio-File': '1' }, body: file });
@@ -191,6 +196,7 @@
       return data;
     },
     note: (id, action, extra) => call('POST', '/api/note/' + encodeURIComponent(id), Object.assign({ action }, extra || {})),
+    editText: (slot, file, text) => call('POST', '/api/slot/' + encodeURIComponent(slot) + '/text', { file, text }),
     src: (url) => url,
     bytes: async (url) => { const r = await fetch(rel(url)); if (!r.ok) throw new Error('missing'); return r.arrayBuffer(); },
   };
@@ -1075,7 +1081,7 @@
         openBatch ? link('b.' + openBatch.id, { class: 'btn small on' }, openBatch.status === 'open' || openBatch.status === 'draft' ? 'Waiting for your verdict' : 'See its batch') : null,
         cur && cur.batch && S.state.batches.some((b) => b.id === cur.batch) ? link('b.' + cur.batch, { class: 'btn small' }, 'The batch it came from') : null),
       s.notes ? h('p', { class: 'muted', style: 'max-width:80ch' }, s.notes) : null,
-      cur ? h('div', { class: 'closed' }, h('h3', {}, 'Approved: v' + cur.version + (cur.title ? ' · ' + cur.title : '') + (cur.score ? ' · ' + cur.score + '/10' : '')),
+      cur ? h('div', { class: 'closed' }, h('h3', {}, (cur.working || cur.edited_by_user ? 'Latest: v' : 'Approved: v') + cur.version + (cur.title ? ' · ' + cur.title : '') + (cur.score ? ' · ' + cur.score + '/10' : '')),
         cur.note ? h('blockquote', {}, cur.note) : null,
         h('p', { class: 'sub muted' }, [cur.date ? String(cur.date).slice(0, 10) : '', cur.source || ''].filter(Boolean).join(' · '))) : null,
       s.game_path ? h('p', { class: 'mono muted' }, 'In the game at ' + s.game_path) : null));
@@ -1099,8 +1105,13 @@
         stage.append(p.el);
         return h('article', { class: 'tile' }, h('div', { class: 'thead' }, h('span', { class: 'mono muted', style: 'overflow-wrap:anywhere' }, f.label)), stage);
       }
-      if (f.kind === 'video') stage.append(h('video', { src: f.url, controls: true, loop: true, muted: true, playsinline: true, preload: 'auto', style: 'width:100%;display:block' }));
-      else if (f.kind === 'text') { const holder = h('div', { class: 'option' }, 'Loading'); API.bytes(f.url).then((buf) => holder.replaceChildren(md(new TextDecoder().decode(buf)))).catch(() => holder.replaceChildren('Could not read the file.')); stage.className = ''; stage.append(holder); }
+      if (f.kind === 'video') stage.append(h('video', { src: f.url, controls: true, playsinline: true, preload: 'metadata', style: 'width:100%;display:block' }));  // with its sound: a cut is judged heard
+      else if (f.kind === 'text') {
+        const holder = h('div', { class: 'option' }, 'Loading'), mine = f.from === 'library' && cur && !STATIC;
+        API.bytes(f.url).then((buf) => { const t = new TextDecoder().decode(buf); if (mine) holder.replaceWith(libText(s, f, t)); else holder.replaceChildren(md(t)); }).catch(() => holder.replaceChildren('Could not read the file.'));
+        stage.className = ''; stage.append(holder);
+        if (mine) return h('article', { class: 'tile' }, stage);
+      }
       else stage.append(h('img', { class: 'fit', src: f.url, alt: f.label, loading: 'lazy', onclick: (e) => shot(e.target.src) }));
       return h('article', { class: 'tile' }, stage, h('div', { class: 'thead' }, h('span', { class: 'mono muted', style: 'overflow-wrap:anywhere' }, f.label)));
     };
@@ -1108,11 +1119,13 @@
     if (mo) main.append(h('section', {}, h('h2', {}, 'The motion, looping in place'),
       h('p', { class: 'muted', style: 'max-width:80ch' }, 'Baked from the game\'s own drawing of it' + (mo.seconds ? ', ' + mo.seconds.toFixed(2) + ' s a loop' : '') + '. The light here is the page\'s, not the hall\'s.'),
       h('div', { class: 'grid', style: '--tile:760px' }, show({ kind: 'model', url: mo.url, label: mo.clip.replace(/_/g, ' '), clip: mo.clip }))));
-    for (const [from, title] of [['game', 'In the project today'], ['library', 'The approved master']]) {
+    for (const [from, title] of [['game', 'In the project today'], ['library', cur && (cur.working || cur.edited_by_user) ? 'In the Studio' : 'The approved master']]) {
       const rows = files.filter((f) => f.from === from).sort((a, b) => (b.kind === s.kind) - (a.kind === s.kind));
       if (!rows.length) continue;
       const wide = rows.some((f) => f.kind === 'model') || rows.length === 1;
-      main.append(h('section', {}, h('h2', {}, title + (rows.length > 1 ? ' · ' + rows.length + ' files' : '')),
+      const panel = from === 'library' && !STATIC ? sharePanel(rows, s.title + (cur && cur.version ? ' v' + cur.version : '')) : null;
+      main.append(h('section', {}, h('div', { class: 'sechead' }, h('h2', {}, title + (rows.length > 1 ? ' · ' + rows.length + ' files' : '')), panel ? panel.button : null),
+        panel ? panel.el : null,
         h('div', { class: 'grid', style: '--tile:' + (wide ? 760 : rows[0].kind === 'audio' ? 380 : 420) + 'px' }, rows.map(show))));
     }
     if (!files.length && !mo) main.append(h('div', { class: 'empty' }, s.status === 'needed' ? 'Nothing exists for this yet.' : 'This has no file you can open here: it lives in the game as numbers or motion data' + (s.kind === 'ingame' ? ', and is judged in the game.' : '.')));
@@ -1120,6 +1133,71 @@
     if (past.length) main.append(h('section', {}, h('h2', {}, 'Earlier versions'), h('div', { class: 'rows' }, past.map((v) => h('div', { class: 'row' },
       h('span', { class: 'mono muted' }, 'v' + v.version), h('div', { class: 'grow' }, v.title || v.candidate || ''), h('span', { class: 'sub' }, v.date ? String(v.date).slice(0, 10) : ''))))));
     return main;
+  }
+
+  // ------------------------------------------------------------ share links
+  const SHARE_TIMES = [['1h', '1 hour'], ['1d', '1 day'], ['3d', '3 days'], ['7d', '7 days'], ['30d', '30 days'], ['90d', '90 days']];
+  const whenEnds = (iso) => new Date(iso).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  function shareResult(rec, onStop) {
+    const box = h('div', { class: 'shareout' });
+    const draw = () => {
+      if (rec.state !== 'live') { box.replaceChildren(h('p', { class: 'muted' }, 'Stopped. The link no longer works (on the phone copy within a minute or two).')); return; }
+      const stopBtn = h('button', { class: 'btn small', type: 'button', onclick: async () => {
+        stopBtn.disabled = true;
+        try { rec = (await API.share({ action: 'stop', id: rec.id })).share; draw(); if (onStop) onStop(rec); } catch (e) { toast(e.message); stopBtn.disabled = false; }
+      } }, 'Stop sharing');
+      box.replaceChildren(
+        rec.url ? h('div', { class: 'shareline' }, h('input', { class: 'field mono', readonly: true, value: rec.url, 'aria-label': 'The link', onfocus: (e) => e.target.select() }), copyButton(rec.url, 'Copy link'))
+          : h('p', { class: 'muted' }, 'Made, but no public address is set yet, so there is no link to send. It is the [share] url setting.'),
+        h('p', { class: 'muted' }, 'Anyone with the link sees ' + (rec.files.length === 1 ? 'this one file' : 'these ' + rec.files.length + ' files') + ' and nothing else, until ' + whenEnds(rec.expires) + '. It works about a minute after it is made.'),
+        h('div', {}, stopBtn));
+    };
+    draw();
+    return box;
+  }
+  function sharePanel(files, title) {
+    const el = h('div', { class: 'sharepanel', hidden: true });
+    const button = h('button', { class: 'btn small', type: 'button', onclick: () => { el.hidden = !el.hidden; if (!el.hidden) draw(); } }, 'Share');
+    function draw() {
+      const ticks = files.map((f) => { const box = h('input', { type: 'checkbox', checked: true }); box.dataset.path = f.url.replace(/^\//, ''); return { box, f }; });
+      const name = h('input', { class: 'field', value: title, maxlength: 120, 'aria-label': 'What the page they open is called' });
+      const time = h('select', { 'aria-label': 'How long the link works' }, SHARE_TIMES.map(([v, label]) => h('option', { value: v, selected: v === '7d' }, label)));
+      const out = h('div', {});
+      const make = h('button', { class: 'btn small primary', type: 'button', onclick: async () => {
+        const chosen = ticks.filter((t) => t.box.checked).map((t) => t.box.dataset.path);
+        if (!chosen.length) { toast('Tick at least one file'); return; }
+        make.disabled = true;
+        try { const rec = (await API.share({ files: chosen, title: name.value, time: time.value })).share; out.replaceChildren(shareResult(rec)); make.textContent = 'Make another link'; }
+        catch (e) { toast(e.message); }
+        make.disabled = false;
+      } }, 'Make the link');
+      el.replaceChildren(...[
+        h('p', { class: 'muted' }, 'A link for someone outside: they see only the files ticked here, and only until it runs out.'),
+        files.length > 1 ? h('div', { class: 'sharefiles' }, ticks.map((t) => h('label', {}, t.box, ' ' + (t.f.label || t.f.url.split('/').pop())))) : null,
+        h('div', { class: 'shareline' }, h('label', {}, 'Called ', name), h('label', {}, 'Works for ', time), make),
+        out].filter(Boolean));
+    }
+    return { el, button };
+  }
+  function sharesSection() {
+    const sec = h('section', { hidden: true });
+    if (STATIC) return sec;
+    API.shares().then(({ shares }) => {
+      if (!shares.length) return;
+      const live = shares.filter((x) => x.state === 'live'), ended = shares.filter((x) => x.state !== 'live');
+      const row = (x) => h('div', { class: 'row' },
+        h('div', { class: 'grow' }, h('div', { class: 'title' }, x.title), h('div', { class: 'sub' }, (x.files.length === 1 ? '1 file' : x.files.length + ' files') + ' · ' + (x.state === 'live' ? 'until ' + whenEnds(x.expires) : x.state === 'expired' ? 'ran out ' + whenEnds(x.expires) : 'stopped'))),
+        x.state === 'live' && x.url ? copyButton(x.url, 'Copy link') : null,
+        x.state === 'live' ? h('button', { class: 'btn small', type: 'button', onclick: async (e) => {
+          e.target.disabled = true;
+          try { await API.share({ action: 'stop', id: x.id }); toast('Stopped'); render(); } catch (err) { toast(err.message); e.target.disabled = false; }
+        } }, 'Stop sharing') : null);
+      sec.replaceChildren(...[h('h2', {}, 'Shared links' + (live.length ? ' · ' + live.length + ' working' : '')),
+        live.length ? h('div', { class: 'rows' }, live.map(row)) : h('p', { class: 'muted' }, 'None working now.'),
+        ended.length ? h('details', {}, h('summary', {}, 'Ended · ' + ended.length), h('div', { class: 'rows' }, ended.slice(0, 40).map(row))) : null].filter(Boolean));
+      sec.hidden = false;
+    }).catch(() => {});
+    return sec;
   }
 
   // ------------------------------------------------------------------- inbox
@@ -1350,6 +1428,35 @@
     (S.ui[cid] = S.ui[cid] || []).push(upd);
     paint();
     return h('div', { class: 'mdcard' }, h('div', { class: 'mdbar' }, chip, h('span', { style: 'flex:1' }), firstBtn, backBtn, editBtn), view, area);
+  }
+
+  // a text in the Library the user edits in place; saving makes a new version, and the sessions are told of it
+  function libText(s, f, first) {
+    const name = f.url.split('/').pop();
+    let editing = false;
+    const view = h('div', { class: 'option' }, md(first));
+    const area = h('textarea', { class: 'field mdedit', spellcheck: 'true', 'aria-label': 'Edit ' + name, oninput: () => { fit(); save.disabled = area.value === first; } });
+    const fit = () => { area.style.height = 'auto'; area.style.height = Math.max(area.scrollHeight + 2, 240) + 'px'; };
+    const save = h('button', { class: 'btn small primary', type: 'button', onclick: async () => {
+      save.disabled = true;
+      try {
+        const res = await API.editText(s.id, name, area.value);
+        S.state = await API.state(); toast(res.unchanged ? 'No change' : 'Saved as v' + res.version); render();
+      } catch (e) { save.disabled = false; toast(e.message); }
+    } }, 'Save');
+    const cancel = h('button', { class: 'btn small', type: 'button', onclick: () => {
+      if (area.value !== first && !confirm('Throw away what you typed?')) return; editing = false; paint();
+    } }, 'Cancel');
+    const edit = h('button', { class: 'btn small primary', type: 'button', onclick: () => { editing = true; area.value = first; paint(); fit(); area.focus(); } }, 'Edit');
+    const seen = (s.edits || []).some((e) => !e.seen && e.version === (s.current || {}).version);
+    const chip = h('span', { class: 'chip redo' }, seen ? 'Your edit · not picked up yet' : 'Your edit');
+    function paint() {
+      chip.hidden = !(s.current || {}).edited_by_user;
+      edit.hidden = editing; save.hidden = cancel.hidden = !editing; save.disabled = true;
+      area.hidden = !editing; view.hidden = editing;
+    }
+    paint();
+    return h('div', { class: 'mdcard' }, h('div', { class: 'mdbar' }, h('span', { class: 'mono muted' }, name), chip, h('span', { style: 'flex:1' }), cancel, save, edit), view, area);
   }
 
   // -------------------------------------------------------------- batch page
@@ -1646,6 +1753,7 @@
           order.filter((s) => counts[s]).map((s) => h('i', { class: 'st-' + s, style: 'width:' + (100 * counts[s] / slots.length) + '%' }))),
         h('div', { class: 'legend' }, order.filter((s) => counts[s]).map((s) => h('span', {}, h('span', { class: 'dot st-' + s }), h('b', {}, String(counts[s])), ' ' + SLOT[s]))),
         h('div', { class: 'filters' }, chips, gsel, find)),
+      sharesSection(),
       list);
   }
 

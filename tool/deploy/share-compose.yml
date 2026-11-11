@@ -1,0 +1,43 @@
+# The public share server: it answers share links (studio.py share make, or Share on an asset's page) and
+# nothing else. It reads the Studio homes and never writes them; it answers GET and HEAD alone; a link shows only
+# the library files its share names, until it runs out or is stopped. From the home that holds the tool:
+#
+#   SHARE_CONTAINER=studio-share STUDIO_NETWORK=web STUDIO_HOMES_DIR=/srv/studios \
+#   docker compose -p studio-share -f tool/deploy/share-compose.yml up -d
+#
+# The proxy sends https://apps.example.com/share/<token>/... to the container at port 8780, with /share taken off,
+# and lets those paths through without a sign-in, while everything else stays behind it. With Authelia:
+#
+#   - domain: 'apps.example.com'
+#     resources: ['^/share/[A-Za-z0-9_-]{32,64}(/.*)?$']
+#     policy: bypass
+#
+# above the rule that asks for a sign-in. The page that makes the links learns the address from
+# STUDIO_SHARE_URL (the Studio's own container) or [share] url (studio.toml, or hub.toml on the PC).
+# The sync (sync.sh) restarts this container with the page's when the tool changes: name both, comma between.
+
+services:
+  share:
+    image: python:3.11-slim
+    container_name: ${SHARE_CONTAINER:-studio-share}
+    restart: unless-stopped
+    user: "1000:1000"            # any user that can read the clones; it writes nothing
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 256m
+    pids_limit: 64
+    working_dir: /studio
+    command: ["python", "tool/studio.py", "serve-shares", "/studio", "/homes", "--host", "0.0.0.0", "--port", "8780"]
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes:
+      - ../..:/studio:ro
+      - ${STUDIO_HOMES_DIR:-../..}:/homes:ro
+    networks:
+      - web
+
+networks:
+  web:
+    name: ${STUDIO_NETWORK:-web}
+    external: true

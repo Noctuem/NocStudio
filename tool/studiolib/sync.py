@@ -82,6 +82,9 @@ def page_wrote(home, since_ns: int, path: str) -> None:
     parts = [p for p in path.split("/") if p]
     if len(parts) >= 3 and parts[:2] == ["api", "batch"]:
         found.add(f"{studio.batch_dir(parts[2]).relative_to(studio.home).as_posix()}")  # a verdict made or taken back
+    if len(parts) == 4 and parts[:2] == ["api", "slot"]:  # a text edited in the Library: its new version and its slot
+        found.add(f"slots/{parts[2]}.json")
+        found.add(f"library/{parts[2]}")
     for sub in ("notes", "overview", "playtests", "decisions"):
         for f in (studio.home / sub).glob("*"):
             try:

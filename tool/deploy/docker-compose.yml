@@ -27,6 +27,7 @@ services:
     environment:
       PYTHONDONTWRITEBYTECODE: "1"
       STUDIO_MORE: ${STUDIO_MORE:-}
+      STUDIO_SHARE_URL: ${STUDIO_SHARE_URL:-}   # where share links point (share-compose.yml); empty: no links
     volumes:
       - ../..:/studio
       - ${STUDIO_HOMES_DIR:-../..}:/homes

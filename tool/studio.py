@@ -105,6 +105,33 @@ def cmd_serve_all(a):
     server.serve_all(a.homes, a.port, a.host, hosts=a.allow)
 
 
+def cmd_share(a):
+    from studiolib import share
+    s = Studio(find_home(a.home))
+    if a.action == "make":
+        rec = share.make(s, a.items, title=a.title, hours=a.time, by=os.environ.get("STUDIO_SESSION") or "claude-code")
+        print(f"{rec['id']}: {len(rec['files'])} file(s) until {rec['expires']}")
+        print(rec["url"] or f"(no public address set: [share] url in hub.toml or studio.toml) token {rec['token']}")
+        return
+    if a.action == "stop":
+        for sid in a.items:
+            print(f"{share.stop(s, sid)['id']}: stopped")
+        return
+    rows = share.listing(s)
+    for r in rows:
+        if a.all or r["state"] == "live":
+            print(f"{r['id']}  {r['state']:8} until {r['expires']}  {len(r['files'])} file(s)  {r['title']}")
+            if r["state"] == "live" and r["url"]:
+                print(f"            {r['url']}")
+    if not rows:
+        print("No share links.")
+
+
+def cmd_serve_shares(a):
+    from studiolib import share
+    share.serve(a.roots, a.host, a.port, quiet=not a.log)
+
+
 def cmd_sync(a):
     s = Studio(find_home(a.home))
     if a.setup:
@@ -301,9 +328,20 @@ def cmd_todo(a):
         if item["action"] in ("another_round", "ship_and_iterate"):
             s.brief(item["batch"])
     unseen = s.unseen_hands()
+    edits = s.library_edits()
     if a.json:
-        print(json.dumps({"verdicts": items, "hands": unseen} if unseen else items, indent=2, ensure_ascii=False))
+        extra = {k: v for k, v in (("hands", unseen), ("library_edits", edits)) if v}
+        print(json.dumps(dict(verdicts=items, **extra) if extra else items, indent=2, ensure_ascii=False))
         return
+    if edits:
+        print(f"{len(edits)} text{'s' if len(edits) != 1 else ''} the user edited in the Library. Their version is the "
+              "one that counts: use it where the text lives in the repo (re-record from it if it is a script), then: "
+              "studio.py slot seen <slot>\n")
+        for e in edits:
+            print(f"  {e['slot']}  {e['title']}" + (f"  [{e['group']}]" if e.get("group") else ""))
+            print(f"    their version: {e['file']}")
+            print(f"    what they changed, in the home: git diff --no-index --word-diff \"{e['before']}\" \"{e['file']}\"")
+        print()
     if unseen:
         print(f"{len(unseen)} thing{'s' if len(unseen) != 1 else ''} only the user could do, answered on the page. "
               "Act on each, then: studio.py hand seen <id>\n")
@@ -312,7 +350,7 @@ def cmd_todo(a):
             print(f"  {x['id']}  {x['title']}: {said}" + (f"  \"{x['his_note']}\"" if x.get("his_note") else ""))
         print()
     if not items:
-        print("Nothing to do: the user has no submitted verdict waiting.")
+        print("No verdict waiting." if edits or unseen else "Nothing to do: the user has no submitted verdict waiting.")
         note_line(s)
         reminders(s)
         return
@@ -381,6 +419,12 @@ def cmd_decide(a):
 
 def cmd_slot(a):
     s = Studio(find_home(a.home))
+    if a.action == "seen":
+        if not a.id:
+            raise StudioError("slot seen needs an id")
+        s.see_edits(a.id)
+        print(f"{a.id}: the user's edits are marked seen")
+        return
     if a.action == "list":
         for slot in sorted(s.slots(), key=lambda x: (x.get("group", ""), x["id"])):
             cur = slot.get("current") or {}
@@ -401,6 +445,15 @@ def cmd_adopt(a):
     slot = s.adopt(a.slot, a.files, title=a.title, note=text_arg(a.note, a.note_file), source=a.source,
                    date=a.date, score=a.score, status=a.status or "approved")
     print(f"{slot['id']}: v{slot['current']['version']} in {slot['current']['library']}")
+
+
+def cmd_put(a):
+    s = Studio(find_home(a.home))
+    slot = s.put(a.slot, a.files, title=a.title, source=a.source, status=a.status)
+    if slot.get("unchanged"):
+        print(f"{slot['id']}: the Library already has these files (v{slot['current']['version']})")
+    else:
+        print(f"{slot['id']}: v{slot['current']['version']} in {slot['current']['library']}")
 
 
 def cmd_motion(a):
@@ -708,6 +761,20 @@ def main(argv=None) -> int:
     c.add_argument("--open", action="store_true", help="open the browser")
     c.set_defaults(fn=cmd_serve)
 
+    c = sub.add_parser("serve-shares", help="the public share server: only the files each live share link names, read only")
+    c.add_argument("roots", nargs="+", help="Studio homes, or folders whose children are homes")
+    c.add_argument("--port", type=int, default=8780); c.add_argument("--host", default="127.0.0.1")
+    c.add_argument("--log", action="store_true", help="log each request (tokens are hidden)")
+    c.set_defaults(fn=cmd_serve_shares)
+
+    c = sub.add_parser("share", help="links that let someone outside see a few library files until a set time")
+    c.add_argument("action", choices=["make", "list", "stop"])
+    c.add_argument("items", nargs="*", help="make: library files or version folders; stop: share ids")
+    c.add_argument("--title", default="", help="what the page they open is called")
+    c.add_argument("--for", dest="time", default="7d", help="how long the link works: 12h, 7d, 2w (90 days at most)")
+    c.add_argument("--all", action="store_true", help="list: expired and stopped links too")
+    c.set_defaults(fn=cmd_share)
+
     c = sub.add_parser("serve-all", help="several Studios behind one address (a server's copy for a phone): a menu, and each at /<name>/")
     c.add_argument("homes", nargs="+", help="the Studio homes; the first one's [serve] settings are used")
     c.add_argument("--port", type=int, default=0); c.add_argument("--host", default="", help="default 127.0.0.1, or [serve] host")
@@ -801,7 +868,8 @@ def main(argv=None) -> int:
     c.set_defaults(fn=cmd_decide)
 
     c = sub.add_parser("slot", help="the things the game needs, and where each stands")
-    c.add_argument("action", choices=("set", "list")); c.add_argument("id", nargs="?", default="")
+    c.add_argument("action", choices=("set", "list", "seen"), help="seen <id>: you acted on the user's Library edit of it")
+    c.add_argument("id", nargs="?", default="")
     c.add_argument("--title", default=""); c.add_argument("--kind", default=""); c.add_argument("--group", default="")
     c.add_argument("--status", default="", choices=("",) + SLOT_STATUS)
     c.add_argument("--game-path", default=""); c.add_argument("--notes", default=""); c.add_argument("--needed-by", default="")
@@ -815,6 +883,12 @@ def main(argv=None) -> int:
     c.add_argument("--date", default="", help="when the user approved it"); c.add_argument("--score", type=int, default=None)
     c.add_argument("--status", default="", choices=("",) + SLOT_STATUS)
     c.set_defaults(fn=cmd_adopt)
+
+    c = sub.add_parser("put", help="a working copy of what the project holds now, for the user to look at, hear or edit in the Library (no verdict)")
+    c.add_argument("slot"); c.add_argument("files", nargs="+")
+    c.add_argument("--title", default=""); c.add_argument("--source", default="", help="where it came from (a commit, a command)")
+    c.add_argument("--status", default="", choices=("",) + SLOT_STATUS)
+    c.set_defaults(fn=cmd_put)
 
     c = sub.add_parser("motion", help="baked motions: a character's .glb with a clip per motion, looped on the page")
     c.add_argument("action", choices=("bake", "set", "list", "link"))

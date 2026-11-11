@@ -646,6 +646,117 @@ class Studio:
         self.save_slot(slot)
         return slot
 
+    def _lib_files(self, slot: dict) -> list[Path]:
+        cur = slot.get("current") or {}
+        lib = (self.home / cur["library"]) if cur.get("library") else None
+        if not lib or not lib.is_dir():
+            return []
+        return sorted(p for p in lib.iterdir() if p.is_file() and p.name != "provenance.json")
+
+    def put(self, slot_id: str, files: list, *, title: str = "", source: str = "", status: str = "") -> dict:
+        """A working copy of what the project holds now, for the user to look at, hear or edit in the Library.
+        Not a verdict and not an approval. The same files as the copy already there change nothing."""
+        slot = self.slot(slot_id)
+        if slot is None:
+            raise StudioError(f"no slot {slot_id!r}; make it first: studio.py slot set {slot_id} ...")
+        paths = [Path(f) for f in files]
+        for src in paths:
+            if not src.is_file():
+                raise StudioError(f"{src}: no such file")
+            if src.name == "provenance.json":
+                raise StudioError("provenance.json is the Studio's own name; rename the file")
+        if len({p.name for p in paths}) != len(paths):
+            raise StudioError("two files with the same name")
+        have = {p.name: p for p in self._lib_files(slot)}
+        if set(have) == {p.name for p in paths} and all(have[p.name].read_bytes() == p.read_bytes() for p in paths):
+            if status and slot.get("status") != status:
+                slot["status"] = status
+                self.save_slot(slot)
+            return dict(slot, unchanged=True)
+        version = int((slot.get("current") or {}).get("version", 0)) + 1
+        lib = self.library_dir / slot_id / f"v{version}"
+        lib.mkdir(parents=True, exist_ok=True)
+        for src in paths:
+            shutil.copy2(src, lib / src.name)
+        rel = lib.relative_to(self.home).as_posix()
+        when = iso_now()
+        write_json(lib / "provenance.json", {"slot": slot_id, "version": version, "batch": None, "working": True,
+                                             "source": source, "title": title or slot.get("title", ""), "put": when})
+        picture = next((p.name for p in paths if file_kind(p.name) == "image"), None)
+        current = {"version": version, "batch": None, "candidate": None, "title": title or "Working copy", "score": None,
+                   "date": when, "library": rel, "thumb": f"{rel}/{picture}" if picture else None,
+                   "source": source, "working": True}
+        slot.setdefault("history", []).append(current)
+        slot["current"] = current
+        if status:
+            slot["status"] = status
+        self.save_slot(slot)
+        return slot
+
+    def edit_text(self, slot_id: str, name: str, text: str) -> dict:
+        """The user's edit of a text file in the Library: a new version with their words, every other file
+        carried over. Sessions are told of it (`library_edits`) until one marks it seen."""
+        slot = self.slot(slot_id)
+        if slot is None:
+            raise StudioError(f"no slot {slot_id!r}")
+        if not isinstance(text, str):
+            raise StudioError("send the text")
+        if len(text) > EDIT_MAX:
+            raise StudioError(f"the text is over {EDIT_MAX // 1000} KB")
+        text = text.replace("\r\n", "\n")
+        have = {p.name: p for p in self._lib_files(slot)}
+        if name not in have or file_kind(name) != "text":
+            raise StudioError(f"{name!r} is not a text file of {slot_id}'s latest version")
+        if have[name].read_text(encoding="utf-8") == text:
+            return dict(slot, unchanged=True)
+        prev = int(slot["current"]["version"])
+        version = prev + 1
+        lib = self.library_dir / slot_id / f"v{version}"
+        lib.mkdir(parents=True, exist_ok=True)
+        for other, src in have.items():
+            if other != name:
+                shutil.copy2(src, lib / other)
+        (lib / name).write_text(text, encoding="utf-8", newline="\n")
+        rel = lib.relative_to(self.home).as_posix()
+        when = iso_now()
+        write_json(lib / "provenance.json", {"slot": slot_id, "version": version, "batch": None, "edited_by_user": True,
+                                             "from_version": prev, "file": name, "edited": when})
+        old = slot["current"]
+        current = {"version": version, "batch": None, "candidate": None, "title": "Your edit of v" + str(prev),
+                   "score": None, "date": when, "library": rel,
+                   "thumb": old.get("thumb", "").replace(old["library"], rel) if old.get("thumb") else None,
+                   "source": "edited by you in the Library", "edited_by_user": True, "working": bool(old.get("working"))}
+        slot.setdefault("history", []).append(current)
+        slot["current"] = current
+        slot.setdefault("edits", []).append({"version": version, "from_version": prev, "file": name, "at": when, "seen": False})
+        self.save_slot(slot)
+        return slot
+
+    def library_edits(self) -> list[dict]:
+        """Every text the user edited in the Library that no session has acted on: one row per slot, from the
+        last version a session saw to their newest."""
+        out = []
+        for slot in self.slots():
+            new = [e for e in slot.get("edits") or [] if not e.get("seen")]
+            if not new:
+                continue
+            first, last = min(new, key=lambda e: e["version"]), max(new, key=lambda e: e["version"])
+            lib = self.library_dir / slot["id"]
+            out.append({"slot": slot["id"], "title": slot.get("title", ""), "group": slot.get("group", ""),
+                        "file": (lib / f"v{last['version']}" / last["file"]).relative_to(self.home).as_posix(),
+                        "before": (lib / f"v{first['from_version']}" / first["file"]).relative_to(self.home).as_posix(),
+                        "version": last["version"], "at": last["at"], "times": len(new)})
+        return sorted(out, key=lambda r: r["at"])
+
+    def see_edits(self, slot_id: str) -> dict:
+        slot = self.slot(slot_id)
+        if slot is None:
+            raise StudioError(f"no slot {slot_id!r}")
+        for e in slot.get("edits") or []:
+            e["seen"] = True
+        self.save_slot(slot)
+        return slot
+
     # -------------------------------------------------------------- decisions
     def decisions(self) -> list[dict]:
         if not self.decisions_file.exists():
