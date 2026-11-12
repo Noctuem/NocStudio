@@ -262,6 +262,13 @@ class Studio:
         """Rewrite this home's files under today's names (in_use, project_path, in_app, project_repo,
         test_runs). The decisions log is left as it was written; it is read under the new names."""
         changed = []
+        # the two made-up samples whose words were about a game: made again rather than renamed
+        stale = [d for d in (self.samples_dir / (SAMPLE + "in-game"), self.samples_dir / (SAMPLE + "motions"))
+                 if (d / "batch.json").exists() and '"ingame"' in (d / "batch.json").read_text(encoding="utf-8")]
+        changed += stale
+        if not dry_run:
+            for d in stale:
+                shutil.rmtree(d)
         for path in sorted(self.slots_dir.glob("*.json")) if self.slots_dir.is_dir() else []:
             raw = read_json(path)
             if isinstance(raw, dict) and fresh_slot(json.loads(json.dumps(raw))) != raw:
@@ -270,6 +277,8 @@ class Studio:
                     write_json(path, fresh_slot(raw))
         for root in (self.batches_dir, self.samples_dir):
             for path in sorted(root.glob("*/batch.json")) if root.is_dir() else []:
+                if path.parent in stale:
+                    continue
                 raw = read_json(path)
                 if isinstance(raw, dict) and fresh_batch(json.loads(json.dumps(raw))) != raw:
                     changed.append(path)
@@ -306,6 +315,9 @@ class Studio:
                 self.triage_file = target / "triage.json"
         if not dry_run:
             self.config = self._load_config()
+            if stale:
+                from . import samples
+                samples.build(self)
         return [p.relative_to(self.home).as_posix() for p in changed]
 
     # ---------------------------------------------------------------- batches
