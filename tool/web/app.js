@@ -112,7 +112,7 @@
     });
     return btn;
   }
-  const KIND = { image: 'Pictures', texture: 'Textures', model: 'Models', audio: 'Sounds', video: 'Clips', text: 'Writing', ingame: 'In the game', question: 'Question', mixed: 'Mixed' };
+  const KIND = { image: 'Pictures', texture: 'Textures', model: 'Models', audio: 'Sounds', video: 'Clips', text: 'Writing', ingame: 'In the app', question: 'Question', mixed: 'Mixed' };
   const GLYPH = { model: '3D', audio: 'Sound', video: 'Clip', text: 'Text', ingame: 'In game', question: '?', mixed: 'Mixed' };
   const CALLS = { pick: [['winner', 'Winner', 'W'], ['keep', 'Keep', 'K'], ['redo', 'Redo', 'R'], ['reject', 'Reject', 'X']],
     rate: [['approve', 'Approve', 'A'], ['redo', 'Redo', 'R'], ['reject', 'Reject', 'X']], question: [['winner', 'Choose this', 'W']] };
@@ -120,7 +120,7 @@
     rate: [['ship', 'Ship the approved'], ['ship_and_iterate', 'Ship the approved, redo the rest'], ['another_round', 'Redo them all'], ['park', 'Park it']],
     question: [['answer', 'That is my answer'], ['park', 'Park it']] };
   const ACTION_SAID = { ship: 'ship the winner', ship_and_iterate: 'ship, and another round', another_round: 'another round', park: 'parked', answer: 'answered' };
-  const SLOT = { needed: 'Needed', placeholder: 'Placeholder', in_review: 'In review', approved: 'Approved', in_game: 'In the game', parked: 'Parked' };
+  const SLOT = { needed: 'Needed', placeholder: 'Placeholder', in_review: 'In review', approved: 'Approved', in_game: 'In use', parked: 'Parked' };
   const SAY = 'process my studio verdicts';
 
   // -------------------------------------------------------------------- api
@@ -1084,7 +1084,7 @@
       cur ? h('div', { class: 'closed' }, h('h3', {}, (cur.working || cur.edited_by_user ? 'Latest: v' : 'Approved: v') + cur.version + (cur.title ? ' · ' + cur.title : '') + (cur.score ? ' · ' + cur.score + '/10' : '')),
         cur.note ? h('blockquote', {}, cur.note) : null,
         h('p', { class: 'sub muted' }, [cur.date ? String(cur.date).slice(0, 10) : '', cur.source || ''].filter(Boolean).join(' · '))) : null,
-      s.game_path ? h('p', { class: 'mono muted' }, 'In the game at ' + s.game_path) : null));
+      s.game_path ? h('p', { class: 'mono muted' }, 'Used at ' + s.game_path) : null));
 
     S.opts.clip = ''; S.opts.rotate = false; S.opts.wire = false; S.opts.loop = false; S.opts.rate = 1;
     const show = (f) => {

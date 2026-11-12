@@ -1810,7 +1810,7 @@ class Studio:
         lines += [f"- `{b['id']}`: {b['title']} ({b['kind']}, {b['count']} candidates)" for b in waiting] or ["- nothing"]
         lines += ["", f"## Waiting on Claude ({len(pending)})", ""]
         lines += [f"- `{b['id']}`: {b['title']}: {b['action']}" for b in pending] or ["- nothing"]
-        lines += ["", "## Slots", "", "| Slot | Kind | Status | Current | In the game at |", "|---|---|---|---|---|"]
+        lines += ["", "## Slots", "", "| Slot | Kind | Status | Current | Used at |", "|---|---|---|---|---|"]
         for s in sorted(state["slots"], key=lambda s: (s.get("group", ""), s["id"])):
             cur = s.get("current") or {}
             lines.append(f"| `{s['id']}` | {s.get('kind', '')} | {s.get('status', '')} | "

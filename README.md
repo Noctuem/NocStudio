@@ -169,7 +169,7 @@ and the agent is told why, so you never spend a minute on something a script cou
 
 ### A library of everything the project holds or needs
 
-Every asset has a status: needed, placeholder, in review, approved, in the game, parked. Open one to
+Every asset has a status: needed, placeholder, in review, approved, in use, parked. Open one to
 see or hear the approved master, what the project uses today, and the history of how it got
 there, with where each file came from (tool, prompt, seed, script).
 
@@ -303,7 +303,7 @@ edges, and expect it to change.
 - **Windows first.** The Start menu app and the launchers are Windows only. The page and the
   command are plain Python and may run elsewhere with `python3 tool/studio.py serve`, but that
   is untested.
-- **Game-shaped.** The vocabulary (models, textures, motions, playtests, "in the game") comes
+- **Game-shaped.** The vocabulary (models, textures, motions, playtests) comes
   from game development. Pictures, sounds, writing and questions work for any project.
 - **One person.** A Studio is for one person judging. There are no accounts and no sharing. A
   second copy on a server (Linux, Docker, a sign-in proxy in front) is for that same person's phone.
