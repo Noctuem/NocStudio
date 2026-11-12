@@ -35,8 +35,8 @@ No new key, no new container, nothing new on the server or the desktop. The butt
 
 ## Traps already known
 
-- The page must work out the folder name from the Studio's project folder (`game_repo` in `studio.toml`, the
-  PC's path), since the server copy's own `game_repo` is empty.
+- The page must work out the folder name from the Studio's project folder (`project_repo` in `studio.toml`, the
+  PC's path), since the server copy's own `project_repo` is empty.
 - Ignition allows one launch in flight at a time; a 202 means a launch is already running, so poll that id.
 - Ignition's API answers only behind the sign-in (`Remote-User`); a page opened another way gets 401.
 

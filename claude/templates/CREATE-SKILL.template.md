@@ -106,8 +106,8 @@ Studio with holes in it is not a finished setup.
 - **Needs you:** `S ask set` for each thing only they can do and each open
   question, every decision with the `--default` you will use.
 - **The asset list:** one `S slot set` per thing the project holds or needs,
-  as the user would name it, with `--game-path` (a file, folder or glob) so
-  they can open or hear it in the Library. `in_game` only where the documents
+  as the user would name it, with `--project-path` (a file, folder or glob) so
+  they can open or hear it in the Library. `in_use` only where the documents
   show they accepted it; otherwise `placeholder`; `needed` only for what a
   named milestone calls for. Previously approved masters come in with
   `S adopt`, with their exact words where a record has them.
@@ -117,8 +117,8 @@ Studio with holes in it is not a finished setup.
   or paraphrase into `--words`.
 - **Loose candidates** they have not judged yet become batches (`S new`,
   `add`, `file`), one decision each.
-- **Playtests:** only if the project writes session folders of notes; set
-  `[playtests] dirs` in `<home>\studio.toml`.
+- **Test runs:** only if the project writes session folders of notes; set
+  `[test_runs] dirs` in `<home>\studio.toml`.
 - **Checks:** set `[checks.*]` in `studio.toml` to the project's own limits
   (they start loose).
 

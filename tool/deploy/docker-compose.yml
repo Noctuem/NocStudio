@@ -4,7 +4,7 @@
 # tool/deploy/sync.sh keeps them in step. From the home that holds the tool:
 #
 #   STUDIO_CONTAINER=studio-app STUDIO_NETWORK=web \
-#   STUDIO_HOMES_DIR=/srv/studios STUDIO_MORE="/homes/game-two-studio" \
+#   STUDIO_HOMES_DIR=/srv/studios STUDIO_MORE="/homes/project-two-studio" \
 #   docker compose -p studio -f tool/deploy/docker-compose.yml up -d
 #
 # STUDIO_HOMES_DIR is a folder of the other Studio homes, seen in the container as /homes, and STUDIO_MORE

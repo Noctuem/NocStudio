@@ -27,8 +27,22 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from studiolib import bake, board, checks, notes as notebox, server, setup, sync  # noqa: E402
-from studiolib.store import (HAND_KINDS, HAND_STATUS, KINDS, MILESTONE_STATUS, MODES, NOTE_KINDS, SLOT_STATUS,  # noqa: E402
-                             TRIAGE_STATUS, Studio, StudioError)
+from studiolib.store import (HAND_KINDS, HAND_STATUS, KINDS, MILESTONE_STATUS, MODES, NOTE_KINDS, OLD_KIND,  # noqa: E402
+                             OLD_SOURCE, OLD_STATUS, SLOT_STATUS, TRIAGE_STATUS, Studio, StudioError)
+
+
+def today_names(argv: list[str]) -> list[str]:
+    """Old values in a command line (a skill written before the rename): --kind ingame, --status in_game,
+    --type playtest. Each is passed on under its name today."""
+    old = {"--kind": OLD_KIND, "--status": OLD_STATUS, "--type": OLD_SOURCE}
+    out = list(argv)
+    for i, arg in enumerate(out):
+        flag, eq, value = arg.partition("=")
+        if eq and flag in old:
+            out[i] = flag + "=" + old[flag].get(value, value)
+        elif i and out[i - 1] in old:
+            out[i] = old[out[i - 1]].get(arg, arg)
+    return out
 
 
 def find_home(arg: str) -> Path:
@@ -73,7 +87,7 @@ def print_report(report: dict) -> None:
 
 # ------------------------------------------------------------------ commands
 def cmd_init(a):
-    studio = Studio.init(a.folder, a.project, a.game)
+    studio = Studio.init(a.folder, a.project, a.repo)
     print(f"studio home ready: {studio.home}")
     print(f"next: edit {studio.home / 'studio.toml'}, then: python {Path(__file__).name} serve --open")
 
@@ -262,9 +276,9 @@ def cmd_status(a):
         counts[slot["status"]] = counts.get(slot["status"], 0) + 1
     if counts:
         print("\nSlots: " + ", ".join(f"{counts[k]} {k.replace('_', ' ')}" for k in SLOT_STATUS if k in counts))
-    open_notes = sum(1 for p in state["playtests"] for r in p["reports"] if r["triage"].get("status") == "open")
-    if state["playtests"]:
-        print(f"Playtest notes not yet answered: {open_notes}")
+    open_notes = sum(1 for p in state["test_runs"] for r in p["reports"] if r["triage"].get("status") == "open")
+    if state["test_runs"]:
+        print(f"Test-run notes not yet answered: {open_notes}")
     print(f"Closed batches: {len(groups['processed'])}   Decisions on record: {len(state['decisions'])}")
     note_line(s)
     reminders(s)
@@ -288,7 +302,7 @@ def reminders(s: Studio) -> None:
     if n:
         print(f"\nThe Studio has {n} unsaved change{'s' if n != 1 else ''} (the user's verdicts and answers on the page count). "
               f"Before this session ends: studio.py save")
-    root = s.game_root()
+    root = s.repo_root()
     copy = root / ".claude" / "skills" / "studio" / "SKILL.md" if root else None
     if copy is None or not copy.is_file():
         return
@@ -316,7 +330,7 @@ def cmd_install_skill(a):
 def cmd_skill(a):
     s = Studio(find_home(a.home))
     own = s.home / "claude" / "skills" / "studio" / "SKILL.md"
-    root = s.game_root()
+    root = s.repo_root()
     sys.stdout.write(own.read_text(encoding="utf-8") if own.is_file()
                      else setup.skill_text(s.config.get("project") or (root.name if root else s.home.name), s.home, root or s.home))
 
@@ -384,7 +398,7 @@ def cmd_brief(a):
 
 def cmd_import(a):
     s = Studio(find_home(a.home))
-    rows = s.import_batch(a.batch, game=a.game, dry_run=a.dry_run, again=a.again)
+    rows = s.import_batch(a.batch, repo=a.repo, dry_run=a.dry_run, again=a.again)
     if not rows:
         print("nothing marked winner or approve")
         return 1
@@ -394,16 +408,16 @@ def cmd_import(a):
         if row["library"]:
             print(f"  library  {row['library']}")
         for dest in row["dest"]:
-            print(f"  game     {dest}")
+            print(f"  project  {dest}")
         if row.get("dest_skipped"):
-            print(f"  game     SKIPPED: {row['dest_skipped']}")
+            print(f"  project  SKIPPED: {row['dest_skipped']}")
     return 0
 
 
 def cmd_done(a):
     s = Studio(find_home(a.home))
     result = s.mark_done(a.batch, ruling=a.ruling, commit=a.commit, next_batch=a.next, note=a.note,
-                         in_game=a.in_game, by=a.by)
+                         in_use=a.in_use, by=a.by)
     s.write_index()
     print(f"{a.batch}: closed. Logged as {result['decision']}.")
 
@@ -436,7 +450,7 @@ def cmd_slot(a):
     if a.motion:
         s.motion_ref(a.motion)
     slot = s.set_slot(a.id, title=a.title, kind=a.kind, group=a.group, status=a.status,
-                      game_path=a.game_path, notes=a.notes, needed_by=a.needed_by, motion=a.motion)
+                      project_path=a.project_path, notes=a.notes, needed_by=a.needed_by, motion=a.motion)
     print(f"{slot['id']}: {slot['status']}")
 
 
@@ -460,7 +474,7 @@ def cmd_motion(a):
     s = Studio(find_home(a.home))
     if a.action == "list":
         for mid, entry in sorted(s.motions().items()):
-            print(f"{mid}  ({entry.get('updated', '')})" + ("   made-up motion for the samples; not the game's" if entry.get("sample") else ""))
+            print(f"{mid}  ({entry.get('updated', '')})" + ("   made-up motion for the samples; not the project's" if entry.get("sample") else ""))
             for clip in entry["clips"]:
                 print(f"  {mid}:{clip['name']:28} {clip.get('seconds', 0):.2f} s")
         return
@@ -480,7 +494,7 @@ def cmd_motion(a):
             raise StudioError(f"{path}: {err}") from err
         model = Path(a.model) if a.model else None
         if model is None:
-            root = s.game_root()
+            root = s.repo_root()
             if not samples.get("model") or root is None:
                 raise StudioError("say which model: --model <file.glb>, or \"model\" in the samples")
             model = root / samples["model"]
@@ -524,6 +538,16 @@ def cmd_samples(a):
         print(f"  {row['id']:26} {row['note']}")
     print(f"{len(s.sample_ids())} samples under {s.samples_dir}. The user opens them from the Inbox: Samples. "
           f"Nothing in them is counted, recorded or acted on.")
+
+
+def cmd_migrate(a):
+    s = Studio(find_home(a.home))
+    changed = s.migrate(dry_run=a.dry_run)
+    print(f"{len(changed)} file(s) {'would be' if a.dry_run else 'were'} rewritten under the new names"
+          + (":" if changed and a.dry_run else "."))
+    if a.dry_run:
+        for path in changed:
+            print("  " + path)
 
 
 def cmd_triage(a):
@@ -742,7 +766,8 @@ def main(argv=None) -> int:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     c = sub.add_parser("init", help="make a new studio home")
-    c.add_argument("folder"); c.add_argument("--project", default=""); c.add_argument("--game", default="")
+    c.add_argument("folder"); c.add_argument("--project", default="")
+    c.add_argument("--repo", "--game", default="", help="the project folder this Studio serves")
     c.set_defaults(fn=cmd_init)
 
     c = sub.add_parser("create", help="make a Studio for another project: a home, a launcher, the skill in its repo")
@@ -799,9 +824,9 @@ def main(argv=None) -> int:
     c.add_argument("--parent", default="", help="the batch this is the next round of")
     c.add_argument("--max-winners", type=int, default=None)
     c.add_argument("--target", action="append", default=[], help="hard target, e.g. height_m=1.8; repeat")
-    c.add_argument("--dest", default="", help="where the winner goes in the game repo")
+    c.add_argument("--dest", default="", help="where the winner goes in the project folder")
     c.add_argument("--step", action="append", default=[], help="a step to do after the copy; repeat")
-    c.add_argument("--launch", default="", help="for in-game batches: the line that starts the game")
+    c.add_argument("--launch", default="", help="for in-app batches: the line that starts the project")
     c.add_argument("--date", default=""); c.add_argument("--by", default="")
     c.add_argument("--round", type=int, default=0, help="only to record a round judged before the Studio existed")
     c.set_defaults(fn=cmd_new)
@@ -809,7 +834,7 @@ def main(argv=None) -> int:
     c = sub.add_parser("add", help="add a candidate to a batch")
     c.add_argument("batch"); c.add_argument("files", nargs="*")
     c.add_argument("--id", default=""); c.add_argument("--title", default=""); c.add_argument("--summary", default="")
-    c.add_argument("--label", default="", help="the words the user sees over it in the game")
+    c.add_argument("--label", default="", help="the words the user sees over it in the running project")
     c.add_argument("--body", default=""); c.add_argument("--body-file", default="")
     c.add_argument("--recommended", action="store_true")
     c.add_argument("--tool", default=""); c.add_argument("--model", default="")
@@ -848,31 +873,31 @@ def main(argv=None) -> int:
     c = sub.add_parser("brief", help="write and print the next round's brief from the user's verdict")
     c.add_argument("batch"); c.set_defaults(fn=cmd_brief)
 
-    c = sub.add_parser("import", help="copy the winner to the library and the game")
-    c.add_argument("batch"); c.add_argument("--game", default=""); c.add_argument("--dry-run", action="store_true")
+    c = sub.add_parser("import", help="copy the winner to the library and the project")
+    c.add_argument("batch"); c.add_argument("--repo", "--game", default=""); c.add_argument("--dry-run", action="store_true")
     c.add_argument("--again", action="store_true", help="copy again after an earlier import")
     c.set_defaults(fn=cmd_import)
 
     c = sub.add_parser("done", help="close a verdict once it has been acted on")
     c.add_argument("batch"); c.add_argument("--ruling", default="", help="what this settles, one sentence")
     c.add_argument("--commit", default=""); c.add_argument("--next", default="", help="the next round's batch id")
-    c.add_argument("--note", default=""); c.add_argument("--in-game", action="store_true")
+    c.add_argument("--note", default=""); c.add_argument("--in-use", "--in-game", action="store_true")
     c.add_argument("--by", default="claude-code")
     c.set_defaults(fn=cmd_done)
 
-    c = sub.add_parser("decide", help="record a ruling the user made somewhere else (chat, a playtest)")
+    c = sub.add_parser("decide", help="record a ruling the user made somewhere else (chat, a test run)")
     c.add_argument("--title", required=True); c.add_argument("--words", default=""); c.add_argument("--words-file", default="")
     c.add_argument("--ruling", default=""); c.add_argument("--type", default="chat"); c.add_argument("--ref", default="")
     c.add_argument("--tag", action="append", default=[]); c.add_argument("--supersedes", action="append", default=[])
     c.add_argument("--legacy", default=""); c.add_argument("--date", default="")
     c.set_defaults(fn=cmd_decide)
 
-    c = sub.add_parser("slot", help="the things the game needs, and where each stands")
+    c = sub.add_parser("slot", help="the things the project needs, and where each stands")
     c.add_argument("action", choices=("set", "list", "seen"), help="seen <id>: you acted on the user's Library edit of it")
     c.add_argument("id", nargs="?", default="")
     c.add_argument("--title", default=""); c.add_argument("--kind", default=""); c.add_argument("--group", default="")
     c.add_argument("--status", default="", choices=("",) + SLOT_STATUS)
-    c.add_argument("--game-path", default=""); c.add_argument("--notes", default=""); c.add_argument("--needed-by", default="")
+    c.add_argument("--project-path", "--game-path", default=""); c.add_argument("--notes", default=""); c.add_argument("--needed-by", default="")
     c.add_argument("--motion", default="", help="<motion set>:<clip>: the baked motion the Library loops for it")
     c.set_defaults(fn=cmd_slot)
 
@@ -893,7 +918,7 @@ def main(argv=None) -> int:
     c = sub.add_parser("motion", help="baked motions: a character's .glb with a clip per motion, looped on the page")
     c.add_argument("action", choices=("bake", "set", "list", "link"))
     c.add_argument("args", nargs="*", help="bake <id> <samples.json> | set <id> <file.glb> | link <batch> <candidate>=<id>:<clip> ...")
-    c.add_argument("--model", default="", help="bake: the model the samples are of (default: \"model\" in the samples, in the game repo)")
+    c.add_argument("--model", default="", help="bake: the model the samples are of (default: \"model\" in the samples, in the project folder)")
     c.set_defaults(fn=cmd_motion)
 
     c = sub.add_parser("save", help="commit everything in the studio home and push it; end every session that touched the Studio with this")
@@ -915,13 +940,17 @@ def main(argv=None) -> int:
     c.add_argument("--model", default="", help="a rigged .glb to move with made-up motion (else [samples] model in studio.toml, else the kit's own)")
     c.set_defaults(fn=cmd_samples)
 
-    c = sub.add_parser("triage", help="say what happened to a playtest note")
+    c = sub.add_parser("triage", help="say what happened to a test-run note")
     c.add_argument("key", help="<session folder>/f8-<n>")
     c.add_argument("--status", required=True, choices=TRIAGE_STATUS)
     c.add_argument("--build", default=None, help="the build that answers it")
     c.add_argument("--ref", default=None, help="a commit, a spec item or a decision id")
     c.add_argument("--note", default=None, help="what was done, one or two sentences")
     c.set_defaults(fn=cmd_triage)
+
+    c = sub.add_parser("migrate", help="rewrite this Studio's files under today's names (in_use, project_path, in_app, test_runs)")
+    c.add_argument("--dry-run", action="store_true", help="list what would change, change nothing")
+    c.set_defaults(fn=cmd_migrate)
 
     c = sub.add_parser("milestone", help="the road to release: where each milestone stands")
     c.add_argument("action", choices=("set", "list")); c.add_argument("id", nargs="?", default="")
@@ -967,7 +996,7 @@ def main(argv=None) -> int:
     c.set_defaults(fn=cmd_hooks)
 
     c = sub.add_parser("now", help="the current build for the overview; with no flag, prints it")
-    c.add_argument("--headline", default="", help="one sentence: where the game stands today")
+    c.add_argument("--headline", default="", help="one sentence: where the project stands today")
     c.add_argument("--build", default="", help="the build the user can play, e.g. 0.0.1+3b4e833f7643")
     c.add_argument("--spec", default="", help="the plan of record")
     c.add_argument("--gate", default="", help="the last gate run, e.g. '2869 of 2869, laptop, 2026-10-08'")
@@ -993,7 +1022,7 @@ def main(argv=None) -> int:
     c.add_argument("--button", default="", help="the words on a button that runs --run, or opens --open, when the user presses it")
     c.add_argument("--open", default="", help="with --button: a file or folder the button opens in its default app")
     c.add_argument("--cwd", default="", help="with --button and --run: the folder it runs in (default: the one you are in)")
-    c.add_argument("--group", default="", help="Playtest, Machines, Steam, ...")
+    c.add_argument("--group", default="", help="Testing, Machines, Release, ...")
     c.add_argument("--status", default="", choices=("",) + HAND_STATUS)
     c.set_defaults(fn=cmd_hand)
 
@@ -1013,7 +1042,7 @@ def main(argv=None) -> int:
 
     c = sub.add_parser("index", help="rewrite INDEX.md and decisions/DECISIONS.md"); c.set_defaults(fn=cmd_index)
 
-    args = p.parse_args(argv)
+    args = p.parse_args(today_names(sys.argv[1:] if argv is None else argv))
     try:
         return int(args.fn(args) or 0)
     except StudioError as err:

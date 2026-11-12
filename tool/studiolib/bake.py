@@ -1,7 +1,7 @@
 """Bake motions into a model: the project's own samples of what it draws, written as glTF clips.
 
-The game knows how each motion really looks (its keys, its eased timelines, the hose it hangs each
-frame). So the game samples itself and writes plain numbers; this module only turns those numbers
+The project knows how each motion really looks (its keys, its eased timelines, the hose it hangs each
+frame). So the project samples itself and writes plain numbers; this module only turns those numbers
 into animation clips inside a copy of the model, which the page's 3D view loops.
 
 The samples file (JSON), format "studio-motion-samples-1":
@@ -9,8 +9,8 @@ The samples file (JSON), format "studio-motion-samples-1":
     {
       "format": "studio-motion-samples-1",
       "rig": "enemy.creature",
-      "model": "content/rigs/creature.glb",        the model the samples are of, in the game repo
-      "scale": 0.7906,                              what the game multiplies the model's metres by
+      "model": "content/rigs/creature.glb",        the model the samples are of, in the project folder
+      "scale": 0.7906,                              what the project multiplies the model's metres by
       "ticks_per_second": 60,
       "bones": ["root", "body", ...],               the model's joints by name, in the order used below
       "rest": [M, M, ...],                          one matrix a bone, standing at rest
@@ -20,7 +20,7 @@ The samples file (JSON), format "studio-motion-samples-1":
       ]
     }
 
-M is a bone's posed model matrix as the game draws its piece with: 16 numbers, column by column
+M is a bone's posed model matrix as the project draws its piece with: 16 numbers, column by column
 (glam's `Mat4::to_cols_array()`), taking a point of the bone's own rest space to the character's own
 space in real metres (+y up, -z ahead, +x to its right, the origin between its feet). The
 character's place and facing in the world are left out, so a walk is sampled in place.
@@ -132,7 +132,7 @@ def _inverse_binds(doc: dict, blob: bytes, skin: dict) -> list:
 
 
 def bake(model: Path, samples: dict, out: Path) -> dict:
-    """Write `out`: the model, standing at the game's size, with one clip for each sampled motion."""
+    """Write `out`: the model, standing at the project's size, with one clip for each sampled motion."""
     if samples.get("format") != FORMAT:
         raise StudioError(f"the samples file must say \"format\": \"{FORMAT}\"")
     doc, blob = _read_glb(Path(model))
@@ -150,7 +150,7 @@ def bake(model: Path, samples: dict, out: Path) -> dict:
     fps = float(samples.get("ticks_per_second") or 60)
     binds = [_inverse(ib) for ib in _inverse_binds(doc, blob, skin)]  # each joint's rest, in the file's space
     grow = [scale if i % 5 == 0 and i < 15 else (1.0 if i == 15 else 0.0) for i in range(16)]
-    stand = [_mul(grow, j0) for j0 in binds]  # at rest, at the game's size
+    stand = [_mul(grow, j0) for j0 in binds]  # at rest, at the project's size
 
     rest = samples.get("rest")
     if rest is None or len(rest) != len(bones):
@@ -166,7 +166,7 @@ def bake(model: Path, samples: dict, out: Path) -> dict:
         unrest.append(_inverse(m))
 
     # every joint becomes a child of one node and carries its whole place, so no parent's motion
-    # is applied twice: the game's numbers are already each bone's place in the character's space
+    # is applied twice: the project's numbers are already each bone's place in the character's space
     joint_nodes = set(joints)
     for node in doc["nodes"]:
         if "children" in node:

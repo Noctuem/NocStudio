@@ -113,9 +113,9 @@ def main() -> int:
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         tmp = Path(tmp)
         os.environ["STUDIO_CLAUDE_SETTINGS"] = str(tmp / "claude" / "settings.json")  # never the user's own
-        home, game, src = tmp / "studio", tmp / "game", tmp / "src"
-        game.mkdir(); src.mkdir()
-        studio = Studio.init(home, "Self-test", str(game))
+        home, proj, src = tmp / "studio", tmp / "proj", tmp / "src"
+        proj.mkdir(); src.mkdir()
+        studio = Studio.init(home, "Self-test", str(proj))
         studio.set_slot("test.shot", title="Shot", kind="audio", group="Test", status="placeholder")
         check(studio.slot("test.shot")["status"] == "placeholder", "a slot is recorded")
 
@@ -201,12 +201,12 @@ def main() -> int:
             return subprocess.run([sys.executable, str(tool), "--home", str(home), "hand", "set", *args], capture_output=True,
                                   text=True, encoding="utf-8", env=dict(os.environ, **(env or {})))
         made = ask_cli("build", "--title", "Build it", "--button", "Build", "--run", "echo built-it > here.txt; echo built-it; exit 3",
-                       "--cwd", str(game), env={"STUDIO_SESSION": "s-btn"})
+                       "--cwd", str(proj), env={"STUDIO_SESSION": "s-btn"})
         row = next((x for x in studio.hands() if x["id"] == "build"), {})
-        check(made.returncode == 0 and row.get("button") == "Build" and Path(row.get("cwd", "")) == game.resolve() and row.get("session") == "s-btn",
+        check(made.returncode == 0 and row.get("button") == "Build" and Path(row.get("cwd", "")) == proj.resolve() and row.get("session") == "s-btn",
               "a session files a button with one command: its words, the line, the folder, and which session filed it")
-        bad = ask_cli("both", "--title", "Both", "--button", "X", "--run", "echo x", "--open", str(game))
-        loose = ask_cli("loose", "--title", "Loose", "--open", str(game))
+        bad = ask_cli("both", "--title", "Both", "--button", "X", "--run", "echo x", "--open", str(proj))
+        loose = ask_cli("loose", "--title", "Loose", "--open", str(proj))
         check(bad.returncode == 2 and loose.returncode == 2 and not any(x["id"] in ("both", "loose") for x in studio.hands()),
               "a button runs a line or opens a file, not both, and a file to open needs a button")
         status, state = http("GET", base + "/api/state")
@@ -224,7 +224,7 @@ def main() -> int:
         refused.append(status)
         status, _ = http("GET", base + "/api/button/..%2F..%2Fstudio")
         refused.append(status)
-        check(refused == [403, 415, 400, 404] and "no button" in said.get("error", "") and not (game / "hacked.txt").exists()
+        check(refused == [403, 415, 400, 404] and "no button" in said.get("error", "") and not (proj / "hacked.txt").exists()
               and not (home / "hacked.txt").exists(), "only a button a session filed runs: another site, a plain form, a line sent from the page are all refused")
         clock = time.time()
         status, pressed = http("POST", base + "/api/button", {"id": "build"})
@@ -236,9 +236,9 @@ def main() -> int:
                 break
             time.sleep(0.1)
         check(status == 200 and pressed["ran"]["state"] == "running" and quick < 3 and ran.get("state") == "done" and ran.get("code") == 3
-              and "built-it" in ran.get("tail", []) and (game / "here.txt").exists(),
+              and "built-it" in ran.get("tail", []) and (proj / "here.txt").exists(),
               "pressing it runs the line in its folder, and the page reads its exit code and its last lines")
-        ask_cli("wait", "--title", "A long build", "--button", "Build slowly", "--run", "sleep 20", "--cwd", str(game))
+        ask_cli("wait", "--title", "A long build", "--button", "Build slowly", "--run", "sleep 20", "--cwd", str(proj))
         clock = time.time()
         status, _ = http("POST", base + "/api/button", {"id": "wait"})
         quick, again = time.time() - clock, http("POST", base + "/api/button", {"id": "wait"})
@@ -254,19 +254,19 @@ def main() -> int:
               "a long run leaves the page free, is not started twice, and stops when the user says")
         opened = []
         buttons.OPENER = opened.append
-        (game / "notes.txt").write_text("read me", encoding="utf-8")
-        ask_cli("look", "--title", "Read the notes", "--button", "Open the notes", "--open", str(game / "notes.txt"))
+        (proj / "notes.txt").write_text("read me", encoding="utf-8")
+        ask_cli("look", "--title", "Read the notes", "--button", "Open the notes", "--open", str(proj / "notes.txt"))
         status, pressed = http("POST", base + "/api/button", {"id": "look"})
-        check(status == 200 and opened == [game.resolve() / "notes.txt"] and pressed["ran"]["state"] == "opened",
+        check(status == 200 and opened == [proj.resolve() / "notes.txt"] and pressed["ran"]["state"] == "opened",
               "a button that opens a file opens it in its default app")
         studio.answer_hand("look", "done")
         status, said = http("POST", base + "/api/button", {"id": "look"})
         studio.see_hand("look")
         check(status == 400 and len(opened) == 1, "a button on an ask that is done does nothing")
-        far_copy = Studio.init(tmp / "site-copy", "Site copy", str(game))
+        far_copy = Studio.init(tmp / "site-copy", "Site copy", str(proj))
         (far_copy.home / "studio.local.toml").write_text('site = "p"\n', encoding="utf-8")
         far_copy = Studio(far_copy.home)
-        far_copy.set_hand("build", title="Build it", button="Build", run="echo built > far.txt", cwd=str(game))
+        far_copy.set_hand("build", title="Build it", button="Build", run="echo built > far.txt", cwd=str(proj))
         far = ThreadingHTTPServer(("127.0.0.1", 0), None)
         far.RequestHandlerClass = server.make_handler(far_copy.home, {f"127.0.0.1:{far.server_address[1]}"}, quiet=True)
         threading.Thread(target=far.serve_forever, daemon=True).start()
@@ -277,12 +277,12 @@ def main() -> int:
         asked = http("GET", fbase + "/api/state")[1]["launch"]
         far.shutdown(); far.server_close()
         spaced = Studio.init(tmp / "site-copy-2", "Spaced", str(tmp / "Two Words"))
-        (spaced.home / "studio.local.toml").write_text('site = "p"\ngame_repo = ""\n', encoding="utf-8")
+        (spaced.home / "studio.local.toml").write_text('site = "p"\ngame_repo = ""\n', encoding="utf-8")  # the old key name, still read
         spaced_info = server.launch_info(Studio(spaced.home), "/ignition/")
         odd = Studio.init(tmp / "site-copy-3", "Odd", str(tmp / "Kite & Lab"))
-        (odd.home / "studio.local.toml").write_text('site = "p"\ngame_repo = ""\n', encoding="utf-8")
+        (odd.home / "studio.local.toml").write_text('site = "p"\nproject_repo = ""\n', encoding="utf-8")
         odd_info = server.launch_info(Studio(odd.home), "/ignition/")
-        check(asked == {"url": "/ignition/", "folder": game.name, "repo": "p:" + game.name, "why": ""}
+        check(asked == {"url": "/ignition/", "folder": proj.name, "repo": "p:" + proj.name, "why": ""}
               and spaced_info["repo"] == "p:Two Words" and odd_info["repo"] == "" and "Kite & Lab" in odd_info["why"]
               and server.launch_info(studio, "/ignition/") is None and server.launch_info(far_copy, "") is None,
               "a server copy's page is told where to start Claude for its project folder; never the PC's, and not a name the launcher refuses")
@@ -291,7 +291,7 @@ def main() -> int:
         except StudioError:
             direct = False
         time.sleep(0.5)
-        check(status == 403 and shown["can_run"] is False and not direct and not (game / "far.txt").exists(),
+        check(status == 403 and shown["can_run"] is False and not direct and not (proj / "far.txt").exists(),
               "the server's copy for the phone runs nothing: it is not the PC")
 
         # the board: progress counted from steps, work in progress, the log, a snapshot a day
@@ -334,7 +334,7 @@ def main() -> int:
 
         # the sessions, as Claude Code's hooks report them
         hooks = tmp / "hooks.json"
-        setup.register("Self-test", home, game, 1, hooks)
+        setup.register("Self-test", home, proj, 1, hooks)
         hook_env = dict(os.environ, STUDIO_REGISTRY=str(hooks), LOCALAPPDATA=str(tmp / "local"))
 
         def hook(**event) -> None:
@@ -342,7 +342,7 @@ def main() -> int:
                                  capture_output=True, env=hook_env)
             assert run.returncode == 0 and not run.stdout and not run.stderr, run
 
-        deep = game / "content"
+        deep = proj / "content"
         deep.mkdir(exist_ok=True)
         hook(session_id="s-1", cwd=str(deep), hook_event_name="SessionStart", source="startup")
         run = subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "hook.py")], capture_output=True, env=hook_env,
@@ -527,8 +527,8 @@ def main() -> int:
         said = [e["text"] for e in seen["events"] if e["kind"] == "claude"]
         check(status == 200 and said == ["made it: make the thing"] and seen["id"] and seen["key"] == seen["id"],
               "allowed on the page, the session goes on and its answer shows, under the session's own id")
-        studio.set_hand("talk-btn", title="Try it", button="Run it", run="echo hi", cwd=str(game), session=seen["id"])
-        studio.set_hand("other-btn", title="Not this one", button="Run that", run="echo no", cwd=str(game), session="s-other")
+        studio.set_hand("talk-btn", title="Try it", button="Run it", run="echo hi", cwd=str(proj), session=seen["id"])
+        studio.set_hand("other-btn", title="Not this one", button="Run that", run="echo no", cwd=str(proj), session="s-other")
         shown = [b["id"] for b in http("GET", base + f"/api/talk/{key}")[1].get("buttons", [])]
         check(shown == ["talk-btn"], "the Talk page shows the buttons its own session filed, beside the talk")
         waits = lambda: [t["waits"] for t in http("GET", base + "/api/talk")[1]["talks"]]
@@ -573,7 +573,7 @@ def main() -> int:
         check(talk_until(key, lambda v: v["state"] == "ended")["state"] == "ended", "a conversation can be stopped, and says it stopped")
         moved = talk_until(key, lambda v: True)["id"]
         status, _ = http("POST", base + "/api/talk/desktop", {"id": moved})
-        repo_dir = Path(studio.game_root())
+        repo_dir = Path(studio.repo_root())
         check(status == 200 and (repo_dir / ".desktop-opened").read_text(encoding="utf-8") == moved,
               "a session moves to the Claude desktop app: claude --desktop --resume <its id>, in the project's folder")
         (repo_dir / ".desktop-opened").unlink()
@@ -581,26 +581,56 @@ def main() -> int:
         check(status == 400, "only a session id is passed on to Claude Code")
         del os.environ["STUDIO_CLAUDE"]
 
-        # an asset the user can open: what the game holds, by file, folder or glob
-        (game / "content/audio/core").mkdir(parents=True); (game / "content/audio/tape").mkdir(parents=True)
-        make_wav(game / "content/audio/core/step_1.wav", -24.0, 0.2); make_wav(game / "content/audio/tape/step_1.wav", -24.0, 0.2)
-        (game / "content/audio/core/step.toml").write_text("kind = 'audio.sfx'", encoding="utf-8")
-        studio.set_slot("test.step", title="Step", kind="audio", group="Test", status="placeholder", game_path="content/audio/*/step_*.wav")
+        # an asset the user can open: what the project holds, by file, folder or glob
+        (proj / "content/audio/core").mkdir(parents=True); (proj / "content/audio/tape").mkdir(parents=True)
+        make_wav(proj / "content/audio/core/step_1.wav", -24.0, 0.2); make_wav(proj / "content/audio/tape/step_1.wav", -24.0, 0.2)
+        (proj / "content/audio/core/step.toml").write_text("kind = 'audio.sfx'", encoding="utf-8")
+        studio.set_slot("test.step", title="Step", kind="audio", group="Test", status="placeholder", project_path="content/audio/*/step_*.wav")
         status, state = http("GET", base + "/api/state")
         files = next(x for x in state["slots"] if x["id"] == "test.step")["files"]
-        check([f["url"] for f in files] == ["/game/content/audio/core/step_1.wav", "/game/content/audio/tape/step_1.wav"],
-              "a slot lists the game's own files for it")
+        check([f["url"] for f in files] == ["/repo/content/audio/core/step_1.wav", "/repo/content/audio/tape/step_1.wav"],
+              "a slot lists the project's own files for it")
         with urllib.request.urlopen(base + files[0]["url"]) as res:
-            check(res.headers["Content-Type"] == "audio/wav", "a game file is served to the Library")
-        status, _ = http("GET", base + "/game/content/audio/core/step.toml")
-        check(status == 404, "a game file that is not a picture, model or sound is refused")
+            check(res.headers["Content-Type"] == "audio/wav", "a project file is served to the Library")
+        status, _ = http("GET", base + "/repo/content/audio/core/step.toml")
+        check(status == 404, "a project file that is not a picture, model or sound is refused")
+
+        # a home saved under the names from when the tool served one game: read as today's, then rewritten
+        old = Studio.init(tmp / "old-home", "Old", str(proj))
+        (old.home / "studio.toml").write_text(f'project = "Old"\ngame_repo = "{proj.as_posix()}"\n\n[playtests]\ndirs = ["pt"]\n\n'
+                                              '[recipes.ingame]\ntool = "by hand"\n', encoding="utf-8")
+        (old.home / "slots" / "old.thing.json").write_text(json.dumps({"schema": 1, "id": "old.thing", "title": "Thing", "kind": "ingame",
+            "group": "Old", "status": "in_game", "previous_status": "in_game", "game_path": "content/audio/core/"}), encoding="utf-8")
+        old = Studio(old.home)
+        feel_old = old.new_batch("feel", kind="in_app", ask="Which?", look_at=["It"], launch="app.exe")["id"]
+        bj = old.batch_dir(feel_old) / "batch.json"
+        bj.write_text(bj.read_text(encoding="utf-8").replace('"in_app"', '"ingame"'), encoding="utf-8")
+        (old.home / "playtests").mkdir()
+        (old.home / "playtests" / "triage.json").write_text('{"s/f8-1": {"status": "fixed"}}', encoding="utf-8")
+        old = Studio(old.home)
+        thing = old.slot("old.thing")
+        check(thing["status"] == "in_use" and thing["kind"] == "in_app" and thing["previous_status"] == "in_use" and thing["project_path"] == "content/audio/core/"
+              and "game_path" not in thing and old.load_batch(feel_old)["kind"] == "in_app" and old.repo_root() == proj.resolve()
+              and old.test_run_dirs() == [(old.home / "pt").resolve()] and old.triage()["s/f8-1"]["status"] == "fixed"
+              and old.config["recipes"]["in_app"]["tool"] == "by hand",
+              "a home saved under the old names (in_game, game_path, ingame, game_repo, playtests) reads under today's")
+        planned = old.migrate(dry_run=True)
+        moved = old.migrate()
+        again = Studio(old.home)
+        raw_slot = json.loads((old.home / "slots" / "old.thing.json").read_text(encoding="utf-8"))
+        toml = (old.home / "studio.toml").read_text(encoding="utf-8")
+        check(planned == moved and len(moved) == 4 and raw_slot["status"] == "in_use" and "game_path" not in raw_slot and raw_slot["kind"] == "in_app"
+              and '"ingame"' not in bj.read_text(encoding="utf-8") and "project_repo =" in toml and "[test_runs]" in toml
+              and "[recipes.in_app]" in toml and not (old.home / "playtests").exists()
+              and again.triage()["s/f8-1"]["status"] == "fixed" and again.migrate() == [],
+              "migrate rewrites a home under today's names once, and finds nothing the second time")
         make_png(src / "old.png", 64, 40)
         studio.set_slot("test.concept", title="Concept", kind="image", group="Test", status="needed")
         adopted = studio.adopt("test.concept", [src / "old.png"], note="Perfect 10/10", score=10, date="2026-10-04")
         check(adopted["status"] == "approved" and (home / adopted["current"]["library"] / "old.png").exists(),
               "a master approved before the Studio is adopted with its provenance")
 
-        # a playtest folder in the shape the game writes
+        # a test-run folder in the shape one project writes
         pt = tmp / "pt" / "2026-10-08-0.0.1+abc-cs-desktop"
         (pt / "f8-1").mkdir(parents=True)
         (pt / "results.json").write_text(json.dumps({"items": [{"id": "a.b", "feature": "Labels", "state": "pass"}]}), encoding="utf-8")
@@ -608,11 +638,11 @@ def main() -> int:
         (pt / "f8-1" / "note.txt").write_text("the hose breaks", encoding="utf-8")
         (pt / "f8-1" / "stats.json").write_text(json.dumps({"checklist_item": {"id": "a.b", "feature": "Labels"}}), encoding="utf-8")
         make_png(pt / "f8-1" / "screenshot.png", 8, 10)
-        studio.config["playtests"] = {"dirs": [str(tmp / "pt")]}
-        sess = studio.playtests()[0]
+        studio.config["test_runs"] = {"dirs": [str(tmp / "pt")]}
+        sess = studio.test_runs()[0]
         check(sess["checklist"][0]["result"] == "pass" and sess["sliders"] == {"Movement": 3} and sess["end_note"] == "feels goofy"
               and sess["reports"][0]["screenshot"] == "screenshot.png" and sess["machine"] == "cs-desktop",
-              "a playtest folder as the game writes it is read whole")
+              "a test-run folder as the project writes it is read whole")
         httpd.shutdown()
 
         todo = studio.todo()
@@ -620,7 +650,7 @@ def main() -> int:
         brief = studio.brief(batch["id"])
         check("> too soft" in brief and "> closer, but drier" in brief, "the next round's brief quotes the user exactly")
         rows = studio.import_batch(batch["id"])
-        check((game / "content/audio/shot.wav").read_bytes() == (src / "quiet_a.wav").read_bytes(), "the winner is copied into the game repo")
+        check((proj / "content/audio/shot.wav").read_bytes() == (src / "quiet_a.wav").read_bytes(), "the winner is copied into the project folder")
         check((home / rows[0]["library"] / "provenance.json").exists(), "the master and where it came from are in the library")
         try:
             studio.import_batch(batch["id"]); check(False, "a second import is refused")
@@ -629,14 +659,14 @@ def main() -> int:
         nxt = studio.new_batch("shot", parent=batch["id"])
         studio.carry(nxt["id"], batch["id"], "a")
         check(nxt["round"] == 2 and nxt["slot"] == "test.shot" and studio.load_batch(nxt["id"])["candidates"][0]["carried_from"].endswith("/a"), "the next round inherits the ask and carries the user's pick")
-        result = studio.mark_done(batch["id"], ruling="Shot A ships; one more round for a drier one.", next_batch=nxt["id"], in_game=True)
+        result = studio.mark_done(batch["id"], ruling="Shot A ships; one more round for a drier one.", next_batch=nxt["id"], in_use=True)
         decisions = studio.decisions()
         check(decisions[-1]["id"] == result["decision"] and "closer, but drier" in decisions[-1]["his_words"] and "this one" in decisions[-1]["his_words"], "the ruling is logged in the user's words")
-        check(studio.slot("test.shot")["status"] == "in_game" and studio.slot("test.shot")["current"]["version"] == 1, "the slot shows the shipped version")
+        check(studio.slot("test.shot")["status"] == "in_use" and studio.slot("test.shot")["current"]["version"] == 1, "the slot shows the shipped version")
         check(studio.todo() == [] and studio.load_batch(batch["id"])["status"] == "processed", "the queue is empty again")
         check(all(p.exists() for p in studio.write_index()), "the plain-text index is written")
 
-        # motions baked from the game's own samples, looped beside a label and on an asset
+        # motions baked from the project's own samples, looped beside a label and on an asset
         def at(x, y, z):  # a bone's posed model matrix, column by column, with no turn
             return [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, x, y, z, 1]
         make_skinned_glb(src / "puppet.glb")
@@ -651,7 +681,7 @@ def main() -> int:
         moved = struct.unpack_from("<3f", blob, doc["bufferViews"][acc["bufferView"]]["byteOffset"] + 12)
         check(made["clips"][0]["seconds"] == 0.05 and acc["count"] == 4 and doc["nodes"][1]["scale"] == [0.5] * 3
               and all(abs(a - b) < 1e-6 for a, b in zip(moved, (-0.1, 0.5, -0.2))),
-              "the game's samples become a clip: at the game's size, in the file's axes, the loop closed")
+              "the project's samples become a clip: at the project's size, in the file's axes, the loop closed")
         try:
             bake.bake(src / "puppet.glb", dict(samples, scale=1.0), src / "wrong.glb"); check(False, "samples at the wrong scale are refused")
         except StudioError as err:
@@ -677,7 +707,7 @@ def main() -> int:
               and any(mine in s and "git diff" in s for s in item["steps"]),
               "the submitted edit is a file Claude reads, and todo says so with how to see the change")
         studio.import_batch(script["id"])
-        check((game / "content/scripts/one.md").read_text(encoding="utf-8") == "# Take one\n\nHi.\n"
+        check((proj / "content/scripts/one.md").read_text(encoding="utf-8") == "# Take one\n\nHi.\n"
               and (home / "library/test.script/v1/script.md").read_text(encoding="utf-8") == "# Take one\n\nHi.\n"
               and json.loads((home / "library/test.script/v1/provenance.json").read_text(encoding="utf-8"))["edited_by_user"] is True,
               "import ships the user's version, not the first draft")
@@ -766,11 +796,11 @@ def main() -> int:
         studio.see_edits("test.vid.script")
         check(studio.library_edits() == [] and not any(r["id"].startswith("edit:") for r in verdicts.waiting(home)),
               "and it leaves the queue once a session marks it seen")
-        feel = studio.new_batch("sway", kind="ingame", slot="test.sway", ask="Which sway?", look_at=["The hips"], launch="game.exe")
+        feel = studio.new_batch("sway", kind="in_app", slot="test.sway", ask="Which sway?", look_at=["The hips"], launch="app.exe")
         studio.add_candidate(feel["id"], [], label="sway 1 wide", title="Wide", motion="test.puppet:sway")
         studio.add_candidate(feel["id"], [], label="sway 2 tight", title="Tight")
         studio.link_motion(feel["id"], "b", "test.puppet:sway")
-        studio.set_slot("test.sway", title="Sway", kind="ingame", group="Test", status="placeholder", motion="test.puppet:sway")
+        studio.set_slot("test.sway", title="Sway", kind="in_app", group="Test", status="placeholder", motion="test.puppet:sway")
         check(all(c["motion"] == "test.puppet:sway" for c in studio.load_batch(feel["id"])["candidates"])
               and studio.state()["motions"]["test.puppet"]["clips"][0]["name"] == "sway", "a motion is shown beside a candidate and on a slot")
         try:
@@ -784,7 +814,7 @@ def main() -> int:
         made = samples.build(studio, model=str(src / "puppet.glb"))
         state = studio.state()
         kinds = {b["kind"] for b in state["samples"]}
-        check(len(made) == 10 and {"image", "texture", "model", "audio", "video", "text", "ingame", "question"} <= kinds
+        check(len(made) == 10 and {"image", "texture", "model", "audio", "video", "text", "in_app", "question"} <= kinds
               and all(b["sample"] and b["status"] == "open" for b in state["samples"])
               and [b["id"] for b in state["samples"]][:2] == ["sample-motions", "sample-models"],
               "the samples are made, one for each thing the user can be asked to judge")
@@ -1027,16 +1057,16 @@ def main() -> int:
         check(app._get(url + "api/state") is None and app._get(hub.url + "api/hub") is None, "closing the app stops every Studio it started")
 
         # a Studio for another project: a home of its own, a free port, the skill in its repo
-        other = tmp / "Other Game"
+        other = tmp / "Other Project"
         other.mkdir()
         reg = tmp / "studios.json"
         setup.register("First", tmp / "first", tmp / "first-repo", setup.FIRST_PORT, reg)
         made = setup.create(other, registry=reg, git=False)
         new = Studio(made["home"])
         skill = (other / ".claude/skills/studio/SKILL.md").read_text(encoding="utf-8")
-        check(new.config["project"] == "Other Game" and new.game_root() == other.resolve() and made["port"] == setup.FIRST_PORT + 1
+        check(new.config["project"] == "Other Project" and new.repo_root() == other.resolve() and made["port"] == setup.FIRST_PORT + 1
               and made["home"] in skill and "{{" not in skill and (Path(made["home"]) / "studio.cmd").exists()
-              and new.state()["has_playtests"] is False and len(setup.studios(reg)) == 2
+              and new.state()["has_test_runs"] is False and len(setup.studios(reg)) == 2
               and len(new.state()["samples"]) == 9 and not new.state()["batches"],
               "a Studio is made for another project, with its own home, port, launcher and skill")
         made_skill = setup.install_create_skill(tmp / "skills").read_text(encoding="utf-8")

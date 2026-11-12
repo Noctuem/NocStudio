@@ -80,7 +80,7 @@ def check_audio(path: Path, rules: dict):
             channels, width, rate, frames = wav.getnchannels(), wav.getsampwidth(), wav.getframerate(), wav.getnframes()
             raw = wav.readframes(frames)
     except (wave.Error, EOFError) as err:
-        return facts, [_chk("error", "audio.read", f"not a PCM WAV the game can load ({err})")]
+        return facts, [_chk("error", "audio.read", f"not a PCM WAV the project can load ({err})")]
     seconds = frames / rate if rate else 0.0
     peak = 0.0
     if width == 2:
@@ -106,7 +106,7 @@ def check_audio(path: Path, rules: dict):
     facts.update(seconds=round(seconds, 3), peak_dbfs=round(dbfs, 1), sample_rate=rate,
                  channels=channels, bits=width * 8)
     if r.get("sample_width_bits") and width * 8 != r["sample_width_bits"]:
-        out.append(_chk("error", "audio.bits", f"{width * 8}-bit; the game loads {r['sample_width_bits']}-bit PCM"))
+        out.append(_chk("error", "audio.bits", f"{width * 8}-bit; the project loads {r['sample_width_bits']}-bit PCM"))
     if r.get("max_peak_dbfs") is not None and dbfs > r["max_peak_dbfs"] + 0.05:
         out.append(_chk("error", "audio.peak", f"peaks at {dbfs:.1f} dBFS; the limit is {r['max_peak_dbfs']:g}"))
     if r.get("max_seconds") and seconds > r["max_seconds"] + 0.005:
@@ -240,8 +240,8 @@ def check_batch(studio, batch: dict) -> dict:
             top.append(_chk("warn", "batch.slot", "no slot: the winner has nowhere to go (--slot)"))
     elif batch.get("slot") and studio.slot(batch["slot"]) is None:
         top.append(_chk("warn", "batch.slot_new", f"slot {batch['slot']!r} does not exist yet; import will create it"))
-    if kind == "ingame" and not batch.get("launch"):
-        top.append(_chk("warn", "batch.launch", "no launch line: tell the user how to start the game to look (--launch)"))
+    if kind == "in_app" and not batch.get("launch"):
+        top.append(_chk("warn", "batch.launch", "no launch line: tell the user how to start the project to look (--launch)"))
     open_now = 0
     for other in studio.batch_ids():
         if other != batch["id"] and studio.load_batch(other)["status"] in ("open", "draft"):
@@ -253,9 +253,9 @@ def check_batch(studio, batch: dict) -> dict:
     for cand in batch.get("candidates", []):
         facts, out = {}, []
         files = cand.get("files", [])
-        if kind == "ingame":
+        if kind == "in_app":
             if not cand.get("label"):
-                out.append(_chk("error", "cand.label", "an in-game candidate needs the label the user will see over it"))
+                out.append(_chk("error", "cand.label", "an in-app candidate needs the label the user will see over it"))
         elif kind == "question":
             if not (cand.get("body") or cand.get("summary")):
                 out.append(_chk("error", "cand.body", "an option needs a description"))

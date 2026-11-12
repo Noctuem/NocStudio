@@ -112,15 +112,15 @@
     });
     return btn;
   }
-  const KIND = { image: 'Pictures', texture: 'Textures', model: 'Models', audio: 'Sounds', video: 'Clips', text: 'Writing', ingame: 'In the app', question: 'Question', mixed: 'Mixed' };
-  const GLYPH = { model: '3D', audio: 'Sound', video: 'Clip', text: 'Text', ingame: 'In game', question: '?', mixed: 'Mixed' };
+  const KIND = { image: 'Pictures', texture: 'Textures', model: 'Models', audio: 'Sounds', video: 'Clips', text: 'Writing', in_app: 'In the app', question: 'Question', mixed: 'Mixed' };
+  const GLYPH = { model: '3D', audio: 'Sound', video: 'Clip', text: 'Text', in_app: 'In app', question: '?', mixed: 'Mixed' };
   const CALLS = { pick: [['winner', 'Winner', 'W'], ['keep', 'Keep', 'K'], ['redo', 'Redo', 'R'], ['reject', 'Reject', 'X']],
     rate: [['approve', 'Approve', 'A'], ['redo', 'Redo', 'R'], ['reject', 'Reject', 'X']], question: [['winner', 'Choose this', 'W']] };
   const ACTIONS = { pick: [['ship', 'Ship the winner'], ['ship_and_iterate', 'Ship it, and try for better'], ['another_round', 'Another round'], ['park', 'Park it']],
     rate: [['ship', 'Ship the approved'], ['ship_and_iterate', 'Ship the approved, redo the rest'], ['another_round', 'Redo them all'], ['park', 'Park it']],
     question: [['answer', 'That is my answer'], ['park', 'Park it']] };
   const ACTION_SAID = { ship: 'ship the winner', ship_and_iterate: 'ship, and another round', another_round: 'another round', park: 'parked', answer: 'answered' };
-  const SLOT = { needed: 'Needed', placeholder: 'Placeholder', in_review: 'In review', approved: 'Approved', in_game: 'In use', parked: 'Parked' };
+  const SLOT = { needed: 'Needed', placeholder: 'Placeholder', in_review: 'In review', approved: 'Approved', in_use: 'In use', parked: 'Parked' };
   const SAY = 'process my studio verdicts';
 
   // -------------------------------------------------------------------- api
@@ -156,7 +156,7 @@
       STATIC.state.decisions.push(rec); return { decision: rec };
     },
     confirm: async (key, confirmed, note) => {
-      for (const p of STATIC.state.playtests) for (const r of p.reports) if (r.key === key) Object.assign(r.triage, { confirmed, confirm_note: note });
+      for (const p of STATIC.state.test_runs) for (const r of p.reports) if (r.key === key) Object.assign(r.triage, { confirmed, confirm_note: note });
     },
     hand: async (id, action, note) => {
       for (const x of ((STATIC.state.overview || {}).hands || [])) if (x.id === id) {
@@ -174,7 +174,11 @@
     src: (url) => STATIC.files[url] || '',
     bytes: async (url) => { if (!STATIC.files[url]) throw new Error('missing'); return b64bytes(STATIC.files[url]); },
   } : {
-    state: () => call('GET', '/api/state'),
+    state: () => call('GET', '/api/state').then((st) => {  // a page server started before the rename sends the old names
+      if (!st.test_runs) Object.assign(st, { test_runs: st.playtests || [], has_test_runs: st.has_playtests });
+      for (const s of st.slots || []) for (const f of s.files || []) if (f.from === 'game') f.from = 'repo';
+      return st;
+    }),
     pulse: () => call('GET', '/api/pulse'),
     live: () => call('GET', '/api/live'),
     batch: (id) => call('GET', '/api/batch/' + encodeURIComponent(id)),
@@ -591,7 +595,7 @@
   // ------------------------------------------------------------------- shell
   function top(r) {
     const st = S.state, mine = st.batches.filter((b) => b.status === 'open' || b.status === 'draft').length;
-    const confirmQ = st.playtests.reduce((n, p) => n + p.reports.filter((x) => x.triage.status === 'fixed' && x.triage.confirmed == null).length, 0);
+    const confirmQ = st.test_runs.reduce((n, p) => n + p.reports.filter((x) => x.triage.status === 'fixed' && x.triage.confirmed == null).length, 0);
     const noteQ = notesOf().filter((n) => n.waits === 'you').length;
     const tab = (id, label, count, hot) => link(id, { class: (r === id || (id === 'inbox' && (r.startsWith('b.') || r === 'samples')) || (id === 'library' && r.startsWith('s.'))) ? 'on' : '' }, label,
       count ? h('span', { class: 'count' + (hot ? ' hot' : '') }, String(count)) : null);
@@ -599,7 +603,7 @@
       h('div', { class: 'brand' }, link('overview', { class: 'name' }, h('b', {}, 'Noc'), 'Studio'),
         st.hub ? h('a', { class: 'proj', href: st.hub, title: 'Your other projects' }, st.project || '', h('span', { 'aria-hidden': 'true' }, ' ▾'))
           : h('small', {}, st.project || '')),
-      h('nav', { class: 'nav', 'aria-label': 'Sections' }, tab('overview', 'Overview'), tab('inbox', 'Inbox', mine, true), tab('notes', 'Notes', noteQ, true), st.static || st.site ? null : tab('talk', 'Talk'), tab('library', 'Library'), tab('decisions', 'Decisions', st.decisions.length), tab('build', 'Build'), st.has_playtests === false ? null : tab('playtests', 'Playtests', confirmQ, true)),
+      h('nav', { class: 'nav', 'aria-label': 'Sections' }, tab('overview', 'Overview'), tab('inbox', 'Inbox', mine, true), tab('notes', 'Notes', noteQ, true), st.static || st.site ? null : tab('talk', 'Talk'), tab('library', 'Library'), tab('decisions', 'Decisions', st.decisions.length), tab('build', 'Build'), st.has_test_runs === false ? null : tab('test_runs', 'Test runs', confirmQ, true)),
       h('span', { class: 'spacer' }),
       syncChip(st.sync),
       usageChip(),
@@ -731,7 +735,7 @@
       else if (r === 'samples') page = samplesPage();
       else if (r === 'library') page = libraryPage();
       else if (r === 'decisions') page = decisionsPage();
-      else if (r === 'playtests') page = playtestsPage();
+      else if (r === 'test_runs') page = testRunsPage();
       else if (r === 'notes') page = notesPage();
       else if (r === 'talk') page = talkPage();
       else if (r === 'build') page = buildPage();
@@ -746,7 +750,7 @@
 
   // ---------------------------------------------------------------- overview
   const MSTONE = { done: 'Done', current: 'In hand', next: 'Next', later: 'Later', parked: 'Parked' };
-  const ORDER = ['needed', 'placeholder', 'in_review', 'approved', 'in_game', 'parked'];
+  const ORDER = ['needed', 'placeholder', 'in_review', 'approved', 'in_use', 'parked'];
   const STEP = { planned: 'Planned', building: 'Being built', built: 'Built', tested: 'Tested', done: 'Done', parked: 'Parked', dropped: 'Dropped' };
   const BAR = ['done', 'tested', 'built', 'building'];
   const ASK = { action: 'To do', decision: 'Decide', play: 'Try it', info: 'To know' };
@@ -922,12 +926,12 @@
   }
 
   function overviewPage() {
-    const st = S.state, ov = st.overview || {}, now = ov.now || {}, game = ov.game || {}, hands = ov.hands || [];
+    const st = S.state, ov = st.overview || {}, now = ov.now || {}, game = ov.repo || ov.game || {}, hands = ov.hands || [];
     const board = ov.board || { pct: 0, share: {}, counts: {}, milestones: ov.milestones || [], days: [], pace: {}, events: [], lanes: [] };
     const ms = board.milestones || [], cur = ms.find((m) => m.status === 'current');
     const mine = st.batches.filter((b) => b.status === 'open' || b.status === 'draft');
     const sent = st.batches.filter((b) => b.status === 'submitted');
-    const confirms = st.playtests.reduce((n, p) => n + p.reports.filter((x) => x.triage.status === 'fixed' && x.triage.confirmed == null).length, 0);
+    const confirms = st.test_runs.reduce((n, p) => n + p.reports.filter((x) => x.triage.status === 'fixed' && x.triage.confirmed == null).length, 0);
     const openHands = hands.filter((x) => x.status === 'open').sort((a, b) => (b.urgent ? 1 : 0) - (a.urgent ? 1 : 0));
     const laterHands = hands.filter((x) => x.status === 'later'), oldHands = hands.filter((x) => x.status === 'done' || x.status === 'parked')
       .sort((a, b) => String(b.answered || b.updated || '').localeCompare(String(a.answered || a.updated || '')));  // the last one answered first
@@ -1012,7 +1016,7 @@
     const asks = h('div', { class: 'asks' });
     for (const b of mine) asks.append(link('b.' + b.id, { class: 'need go' },
       h('span', { class: 'chip accent' }, b.status === 'draft' ? 'Started' : (b.mode === 'question' ? 'Answer' : 'Judge ' + b.count)), h('span', { class: 'grow' }, b.title), h('span', { class: 'chip' }, KIND[b.kind] || b.kind)));
-    if (confirms) asks.append(link('playtests', { class: 'need go' }, h('span', { class: 'chip accent' }, 'Confirm'), h('span', { class: 'grow' }, confirms === 1 ? 'One fix to confirm in the build' : confirms + ' fixes to confirm in the build')));
+    if (confirms) asks.append(link('test_runs', { class: 'need go' }, h('span', { class: 'chip accent' }, 'Confirm'), h('span', { class: 'grow' }, confirms === 1 ? 'One fix to confirm in the build' : confirms + ' fixes to confirm in the build')));
     for (const n of myNotes) asks.append(link('notes', { class: 'need go' },
       h('span', { class: 'chip accent' }, n.status === 'confirm' ? 'Confirm' : 'Reply'), h('span', { class: 'grow', html: inline(clip(n.status === 'confirm' ? n.reading || n.text : n.text, 110)) }), h('span', { class: 'chip' }, 'Note')));
     for (const x of openHands) asks.append(askRow(x));
@@ -1031,7 +1035,7 @@
 
   // ------------------------------------------------------------ the build in hand
   function buildPage() {
-    const st = S.state, ov = st.overview || {}, now = ov.now || {}, game = ov.game || {}, main = h('main', {});
+    const st = S.state, ov = st.overview || {}, now = ov.now || {}, game = ov.repo || ov.game || {}, main = h('main', {});
     const list = (title, items, cls) => ((items || []).length ? h('div', { class: 'ovcol' }, h('h3', {}, title), h('ul', { class: cls || 'look' }, items.map((x) => h('li', { html: inline(split(x)[0]) })))) : null);
     const commits = game.commits || [];
     main.append(h('section', {},
@@ -1084,7 +1088,7 @@
       cur ? h('div', { class: 'closed' }, h('h3', {}, (cur.working || cur.edited_by_user ? 'Latest: v' : 'Approved: v') + cur.version + (cur.title ? ' · ' + cur.title : '') + (cur.score ? ' · ' + cur.score + '/10' : '')),
         cur.note ? h('blockquote', {}, cur.note) : null,
         h('p', { class: 'sub muted' }, [cur.date ? String(cur.date).slice(0, 10) : '', cur.source || ''].filter(Boolean).join(' · '))) : null,
-      s.game_path ? h('p', { class: 'mono muted' }, 'Used at ' + s.game_path) : null));
+      s.project_path ? h('p', { class: 'mono muted' }, 'Used at ' + s.project_path) : null));
 
     S.opts.clip = ''; S.opts.rotate = false; S.opts.wire = false; S.opts.loop = false; S.opts.rate = 1;
     const show = (f) => {
@@ -1117,9 +1121,9 @@
     };
     const mo = motionOf(s.motion);
     if (mo) main.append(h('section', {}, h('h2', {}, 'The motion, looping in place'),
-      h('p', { class: 'muted', style: 'max-width:80ch' }, 'Baked from the game\'s own drawing of it' + (mo.seconds ? ', ' + mo.seconds.toFixed(2) + ' s a loop' : '') + '. The light here is the page\'s, not the hall\'s.'),
+      h('p', { class: 'muted', style: 'max-width:80ch' }, 'Baked from the project\'s own drawing of it' + (mo.seconds ? ', ' + mo.seconds.toFixed(2) + ' s a loop' : '') + '. The light here is the page\'s, not the hall\'s.'),
       h('div', { class: 'grid', style: '--tile:760px' }, show({ kind: 'model', url: mo.url, label: mo.clip.replace(/_/g, ' '), clip: mo.clip }))));
-    for (const [from, title] of [['game', 'In the project today'], ['library', cur && (cur.working || cur.edited_by_user) ? 'In the Studio' : 'The approved master']]) {
+    for (const [from, title] of [['repo', 'In the project today'], ['library', cur && (cur.working || cur.edited_by_user) ? 'In the Studio' : 'The approved master']]) {
       const rows = files.filter((f) => f.from === from).sort((a, b) => (b.kind === s.kind) - (a.kind === s.kind));
       if (!rows.length) continue;
       const wide = rows.some((f) => f.kind === 'model') || rows.length === 1;
@@ -1128,7 +1132,7 @@
         panel ? panel.el : null,
         h('div', { class: 'grid', style: '--tile:' + (wide ? 760 : rows[0].kind === 'audio' ? 380 : 420) + 'px' }, rows.map(show))));
     }
-    if (!files.length && !mo) main.append(h('div', { class: 'empty' }, s.status === 'needed' ? 'Nothing exists for this yet.' : 'This has no file you can open here: it lives in the game as numbers or motion data' + (s.kind === 'ingame' ? ', and is judged in the game.' : '.')));
+    if (!files.length && !mo) main.append(h('div', { class: 'empty' }, s.status === 'needed' ? 'Nothing exists for this yet.' : 'This has no file you can open here: it lives in the project as numbers or motion data' + (s.kind === 'in_app' ? ', and is judged in the game.' : '.')));
     const past = (s.history || []).slice(0, -1).reverse();
     if (past.length) main.append(h('section', {}, h('h2', {}, 'Earlier versions'), h('div', { class: 'rows' }, past.map((v) => h('div', { class: 'row' },
       h('span', { class: 'mono muted' }, 'v' + v.version), h('div', { class: 'grow' }, v.title || v.candidate || ''), h('span', { class: 'sub' }, v.date ? String(v.date).slice(0, 10) : ''))))));
@@ -1348,14 +1352,14 @@
     const paint = () => { stage.classList.toggle('checker', S.opts.stage === 'checker'); stage.style.background = { dark: '', grey: '#777', white: '#f4f4f4', checker: '' }[S.opts.stage]; };
     paint();
     const api = { el: stage, set() { paint(); views.forEach((v) => v.set && v.set(S.opts)); }, destroy() { views.forEach((v) => v.destroy && v.destroy()); }, play: null, view: null };
-    const mo = b.kind === 'ingame' ? motionOf(cand.motion) : null;
+    const mo = b.kind === 'in_app' ? motionOf(cand.motion) : null;
     if (mo) {
       const v = modelView(mo.url, { zoom: big, group: group && group.cam, clip: mo.clip });
       if (group && group.cam && v.copyCam) group.cam.views.push(v);
       views.push(v); api.view = v; stage.append(v.el);
-      if (!big) stage.append(h('div', { class: 'word under' }, h('b', {}, cand.label || cand.title), h('span', {}, b.sample ? 'Made-up motion, to show the viewer' : 'Baked from the game. Confirm it in the game, under these words')));
-    } else if (b.kind === 'ingame') {
-      stage.append(h('div', { class: 'word' }, h('b', {}, cand.label || cand.title), h('span', {}, 'Look for these words over it in the game')));
+      if (!big) stage.append(h('div', { class: 'word under' }, h('b', {}, cand.label || cand.title), h('span', {}, b.sample ? 'Made-up motion, to show the viewer' : 'Baked from the project. Confirm it in the running project, under these words')));
+    } else if (b.kind === 'in_app') {
+      stage.append(h('div', { class: 'word' }, h('b', {}, cand.label || cand.title), h('span', {}, 'Look for these words over it in the running project')));
     } else if (b.kind === 'question' || (!file && cand.body)) {
       stage.classList.remove('stage'); stage.className = 'option'; stage.append(md(cand.body || cand.summary || ''));
     } else if (!file) {
@@ -1467,7 +1471,7 @@
     S.verdict = { action: from.action || null, note: from.note || '', answer: from.answer || '', candidates: JSON.parse(JSON.stringify(from.candidates || {})) };
     if (from.action) S.touched = true;
     Object.assign(S.opts, { clip: (b.candidates.map((c) => (c.facts || {}).clips).find((c) => c && c.length) || [{ name: '' }])[0].name, tile: false, rotate: false, wire: false, playing: true, rate: 1 });
-    const moving = b.kind === 'ingame' && b.candidates.some((c) => motionOf(c.motion));
+    const moving = b.kind === 'in_app' && b.candidates.some((c) => motionOf(c.motion));
     const visual = S.visual = ['image', 'texture', 'model'].includes(b.kind) || moving;
     const main = h('main', {});
     const medias = {};
@@ -1507,7 +1511,7 @@
       main.append(h('section', {}, h('div', { class: 'closed' },
         h('h3', {}, 'Closed: ' + (ACTION_SAID[res.action] || res.action || '')),
         (res.imported || []).length ? h('p', { class: 'muted' }, 'In the library: ' + res.imported.map((r) => r.candidate.toUpperCase() + (r.slot ? ' as ' + r.slot + ' v' + r.version : '')).join(', ')) : null,
-        (res.imported || []).some((r) => (r.dest || []).length) ? h('p', { class: 'muted mono' }, 'game: ' + res.imported.flatMap((r) => r.dest || []).join(', ')) : null,
+        (res.imported || []).some((r) => (r.dest || []).length) ? h('p', { class: 'muted mono' }, 'project: ' + res.imported.flatMap((r) => r.dest || []).join(', ')) : null,
         h('div', { class: 'line', style: 'display:flex;gap:10px;flex-wrap:wrap' },
           res.decision ? link('decisions', { class: 'btn small' }, 'Decision ' + res.decision) : null,
           res.next_batch ? link('b.' + res.next_batch, { class: 'btn small' }, 'Go to the next round') : null))));
@@ -1559,7 +1563,7 @@
       } }, 'Play them in turn');
       tools.append(h('div', { class: 'grp' }, turn, toggle('Loop', 'loop')));
     }
-    if (b.kind === 'ingame' && b.launch) tools.append(h('div', { class: 'grp' }, h('label', {}, 'Start the game with'), h('code', { class: 'i' }, b.launch), copyButton(b.launch)));
+    if (b.kind === 'in_app' && b.launch) tools.append(h('div', { class: 'grp' }, h('label', {}, 'Start it with'), h('code', { class: 'i' }, b.launch), copyButton(b.launch)));
     const cmpBtn = h('button', { class: 'btn small', type: 'button', hidden: true, onclick: () => openOver([...S.cmp]) }, 'Compare');
     const canCompare = visual && b.candidates.length > 1;
     if (canCompare) tools.append(h('span', { style: 'flex:1' }), h('div', { class: 'grp' }, cmpBtn,
@@ -1567,7 +1571,7 @@
     const refreshCmp = () => { cmpBtn.hidden = S.cmp.size < 2; cmpBtn.textContent = 'Compare the ' + S.cmp.size + ' ticked'; };
 
     // grid
-    const tileW = moving ? 340 : ({ image: 440, texture: 300, model: 340, audio: 380, ingame: 300, question: 380, text: 560 }[b.kind] || 380);
+    const tileW = moving ? 340 : ({ image: 440, texture: 300, model: 340, audio: 380, in_app: 300, question: 380, text: 560 }[b.kind] || 380);
     const grid = h('div', { class: 'grid', style: '--tile:' + tileW + 'px' });
     const tiles = {};
     for (const cand of b.candidates) {
@@ -1718,7 +1722,7 @@
 
   // ----------------------------------------------------------------- library
   function libraryPage() {
-    const slots = S.state.slots, order = ['needed', 'placeholder', 'in_review', 'approved', 'in_game', 'parked'];
+    const slots = S.state.slots, order = ['needed', 'placeholder', 'in_review', 'approved', 'in_use', 'parked'];
     const counts = {}; slots.forEach((s) => { counts[s.status] = (counts[s.status] || 0) + 1; });
     let filter = '', group = S.libGroup || '';
     S.libGroup = '';
@@ -1734,11 +1738,11 @@
       const q = find.value.trim().toLowerCase();
       slots.filter((s) => (!filter || s.status === filter) && (!group || (s.group || 'Other') === group) && (!q || (s.title + ' ' + s.id + ' ' + (s.notes || '')).toLowerCase().includes(q)))
         .forEach((s) => { (groups[s.group || 'Other'] = groups[s.group || 'Other'] || []).push(s); });
-      const art = (g) => g.startsWith('Concept art');  // what the game runs on first, the reference art after
+      const art = (g) => g.startsWith('Concept art');  // what the project runs on first, the reference art after
       list.replaceChildren(...Object.keys(groups).sort((a, b) => art(a) - art(b) || a.localeCompare(b)).map((g) => h('section', {}, h('h2', {}, g), h('div', { class: 'rows' }, groups[g].map((s) => {
         const cur = s.current, target = 's.' + s.id;
         const kids = [
-          cur && cur.thumb && !S.state.static ? h('img', { class: 'thumb', src: '/' + cur.thumb, alt: '', loading: 'lazy' }) : h('span', { class: 'thumb' }, { model: '3D', audio: 'SFX', texture: 'TEX', image: 'IMG', ingame: 'GAME', video: 'CLIP', text: 'TXT' }[s.kind] || ''),
+          cur && cur.thumb && !S.state.static ? h('img', { class: 'thumb', src: '/' + cur.thumb, alt: '', loading: 'lazy' }) : h('span', { class: 'thumb' }, { model: '3D', audio: 'SFX', texture: 'TEX', image: 'IMG', in_app: 'APP', video: 'CLIP', text: 'TXT' }[s.kind] || ''),
           h('div', { class: 'grow' }, h('div', { class: 'title' }, s.title), h('div', { class: 'sub mono' }, s.id)),
           h('div', { class: 'sub', style: 'flex:1 1 200px' }, cur ? 'v' + cur.version + ': ' + (cur.title || cur.candidate) + (cur.score ? ' · ' + cur.score + '/10' : '') : (s.needed_by ? 'For ' + s.needed_by : (s.files || []).length ? (s.files.length === 1 ? '1 file' : s.files.length + ' files') : '')),
           h('div', { class: 'status' }, h('span', { class: 'dot st-' + s.status }), SLOT[s.status] || s.status)];
@@ -2198,13 +2202,13 @@
     return h('main', { class: 'talk' }, h('section', { class: 'tgrid' }, side, h('div', { class: 'tmain' }, head, ideaBox, log, btns, asks, box)));
   }
 
-  // --------------------------------------------------------------- playtests
-  function playtestsPage() {
-    const sessions = S.state.playtests;
+  // --------------------------------------------------------------- test_runs
+  function testRunsPage() {
+    const sessions = S.state.test_runs;
     const main = h('main', {});
-    main.append(h('section', {}, h('h1', {}, 'What you said in playtests, and what became of it'),
-      h('p', { class: 'muted', style: 'max-width:70ch' }, 'Each F8 report is listed with what was done about it. When a note is marked fixed, play the build and say whether it is.')));
-    if (!sessions.length) main.append(h('div', { class: 'empty' }, 'No playtest folder is set yet (studio.toml, [playtests] dirs), or it holds no session.'));
+    main.append(h('section', {}, h('h1', {}, 'What you said in test runs, and what became of it'),
+      h('p', { class: 'muted', style: 'max-width:70ch' }, 'Each F8 report is listed with what was done about it. When a note is marked fixed, try the build and say whether it is.')));
+    if (!sessions.length) main.append(h('div', { class: 'empty' }, 'No test-run folder is set yet (studio.toml, [test_runs] dirs), or it holds no session.'));
     for (const p of sessions) {
       const tot = { pass: 0, fail: 0, untested: 0 }; p.checklist.forEach((c) => { tot[c.result] = (tot[c.result] || 0) + 1; });
       const ptUrl = (rep, name) => S.state.static ? API.src('/pt/' + p.root + '/' + p.name + '/' + rep + '/' + name) : '/pt/' + p.root + '/' + encodeURIComponent(p.name) + '/' + rep + '/' + name;

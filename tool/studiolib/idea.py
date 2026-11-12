@@ -72,7 +72,7 @@ def set_state(studio: Studio, **values) -> dict:
 
 def view(studio: Studio) -> dict:
     """Where the loop stands, and docs/idea.md as it is now."""
-    repo = studio.game_root()
+    repo = studio.repo_root()
     text = ""
     if repo is not None:
         try:

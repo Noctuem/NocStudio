@@ -8,8 +8,8 @@ attached even where the bytes are not. While a note is open its files live here.
 to the archive and leave this copy; when it opens again they come back. Settings, in studio.local.toml:
 
     [files]
-    archive = "user@host:/srv/studio-homes/_archive/MyGame-studio"   # or a folder: "../_archive/MyGame-studio"
-    peer = "user@host:/srv/studio-homes/MyGame-studio"              # the other copy of this Studio, if any
+    archive = "user@host:/srv/studio-homes/_archive/MyProject-studio"   # or a folder: "../_archive/MyProject-studio"
+    peer = "user@host:/srv/studio-homes/MyProject-studio"              # the other copy of this Studio, if any
 
 `archive` is where closed notes' files go. `peer` is the other copy (the server's, for the phone): files
 attached on one copy are carried to the other while the note is open. Remote places are reached with ssh and

@@ -289,7 +289,7 @@ details.brief summary { cursor: pointer; font-weight: 600; }
 .legend b { color: var(--fg); font-variant-numeric: tabular-nums; }
 .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; }
 .st-needed { background: var(--accent); } .st-placeholder { background: var(--faint); } .st-in_review { background: var(--wait); }
-.st-approved { background: var(--fg); } .st-in_game { background: var(--ok); } .st-parked { background: var(--line); }
+.st-approved { background: var(--fg); } .st-in_use { background: var(--ok); } .st-parked { background: var(--line); }
 .filters { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .thumb { width: 54px; height: 40px; border-radius: 3px; background: var(--stage); object-fit: cover; flex: none; display: grid; place-items: center; font: 600 10px/1 var(--font-mono); color: var(--faint); text-transform: uppercase; }
 .status { width: 112px; flex: none; font-size: 13px; white-space: nowrap; }
@@ -306,7 +306,7 @@ details.brief summary { cursor: pointer; font-weight: 600; }
 .dec .src { font-size: 12px; color: var(--faint); overflow-wrap: anywhere; }
 .form { display: flex; flex-direction: column; gap: 8px; max-width: 720px; }
 
-/* playtests */
+/* test_runs */
 .pt-head { display: flex; gap: 8px 16px; flex-wrap: wrap; align-items: baseline; }
 .marks { display: flex; flex-direction: column; gap: 4px; }
 .mark { display: flex; gap: 10px; align-items: baseline; }

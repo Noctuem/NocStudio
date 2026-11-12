@@ -1,13 +1,13 @@
 ---
 name: studio
-description: The Studio is where the user sees where {{PROJECT}} stands, judges everything its makers produce, and where their rulings are kept. Use this skill whenever work produces something the user must judge (concept art, textures, models, animations, sounds, tuning or feel options, design questions with options), whenever they say anything like "process my verdicts", "process my studio verdicts", "act on my reviews", "what did I pick", "what is waiting on me" or "plan this project in its Studio", whenever they rule on something in chat or in a playtest note, whenever a hook hands you notes or verdicts they left in the Studio or they say "process my notes", before asking them to look at any file, folder or in-app option, to run a command or a build on this PC, or to do something only they can do, whenever you have a question for them, and whenever work starts, lands, merges, is published or hits a setback, a build is delivered, a milestone moves or the plan changes (the Overview must stay true).
+description: The Studio is where the user sees where {{PROJECT}} stands, judges everything its makers produce, and where their rulings are kept. Use this skill whenever work produces something the user must judge (concept art, textures, models, animations, sounds, tuning or feel options, design questions with options), whenever they say anything like "process my verdicts", "process my studio verdicts", "act on my reviews", "what did I pick", "what is waiting on me" or "plan this project in its Studio", whenever they rule on something in chat or in a test-run note, whenever a hook hands you notes or verdicts they left in the Studio or they say "process my notes", before asking them to look at any file, folder or in-app option, to run a command or a build on this PC, or to do something only they can do, whenever you have a question for them, and whenever work starts, lands, merges, is published or hits a setback, a build is delivered, a milestone moves or the plan changes (the Overview must stay true).
 ---
 
 # The Studio for {{PROJECT}}
 
 One folder outside this repo: `{{HOME}}`. The user reads and judges in a local
-web page (Overview, Inbox, Notes, Library, Decisions, Build, and Playtests when
-a playtest folder is set); you work through one command. Below, `S` is
+web page (Overview, Inbox, Notes, Library, Decisions, Build, and Test runs when
+a test-run folder is set); you work through one command. Below, `S` is
 
     {{S}}
 
@@ -35,7 +35,7 @@ under the studio home; the commands keep slots, the log and the batches in step.
 ## Filing a batch
 
 ```
-S new <slug> --kind <image|texture|model|audio|video|ingame|question|text> \
+S new <slug> --kind <image|texture|model|audio|video|in_app|question|text> \
       --slot <slot id> --title "<what it is>" \
       --ask "<one sentence: what they are choosing>" \
       --look "<where to put the eye>" [--look "..."] \
@@ -73,7 +73,7 @@ What makes a batch worth their time:
   that says how ("Dry crack", "Hall report"), not "Option 3".
 - **Provenance on every generated file**: tool, seed, prompt, the script.
 - **Hard targets** go in `--target`, so the checks hold the makers to them.
-- For something that must be judged **in the running app** (`--kind ingame`),
+- For something that must be judged **in the running app** (`--kind in_app`),
   add no file: give each candidate `--label` with the exact words shown over
   it in the app, and the batch `--launch` with the line that starts the app.
 
@@ -142,18 +142,18 @@ For each verdict, in order:
 Close each one when its work is done, not before:
 
 ```
-S done <batch> --ruling "<what this settles, one sentence>" [--commit <sha>] [--next <new batch>] [--in-game]
+S done <batch> --ruling "<what this settles, one sentence>" [--commit <sha>] [--next <new batch>] [--in-use]
 ```
 
 `done` writes the decision (their notes, exact) and moves the slot's status.
-Pass `--in-game` only when the project now runs on the winner. If a verdict
+Pass `--in-use` only when the project now runs on the winner. If a verdict
 cannot be carried out, do not guess: file a question batch that says so.
 
 ## Rulings made outside a batch
 
 ```
 S decide --title "<what it settles>" --words "<their words, exact>" \
-         --ruling "<what follows from them>" --type chat|playtest --ref "<date or build>" \
+         --ruling "<what follows from them>" --type chat|test_run --ref "<date or build>" \
          [--tag <topic>] [--supersedes D-0041]
 ```
 
@@ -226,12 +226,12 @@ a new need, and whenever the project gains an asset:
 
 ```
 S slot set <id> --title "<name>" --kind <kind> --group <a small fixed set of groups> \
-      --status needed|placeholder [--game-path <file, folder or glob in the repo>] [--needed-by <milestone>]
+      --status needed|placeholder [--project-path <file, folder or glob in the repo>] [--needed-by <milestone>]
 ```
 
-`--game-path` is what the user opens from the Library: every picture, model
+`--project-path` is what the user opens from the Library: every picture, model
 and sound it matches is shown or played there (`assets/audio/*/step_*.wav`).
-`in_game` means they accepted it as it is; what a session made and they have
+`in_use` means they accepted it as it is; what a session made and they have
 not judged is `placeholder`. A master approved before the Studio existed comes
 in with `S adopt <slot> <file> --note "<their words>" --date <day> --source "<where from>"`.
 
@@ -362,7 +362,7 @@ They answer on the page. `S todo` prints what they said; act on it, then
 
 ### Buttons: a command to run, a file to open
 
-When the user has to run something on this PC (a build, a script, a game to
+When the user has to run something on this PC (a build, a script, an app to
 launch, a setting to change) or look at a file or folder, give them a button
 instead of a line to paste into a terminal. A button is an ask with
 `--button`; their click on the page does it.
@@ -377,7 +377,7 @@ S ask set <id> --title "<what it is for>" --button "<the words on the button>" \
 - The line runs in Windows PowerShell, in that folder, with no window and
   nothing to type into. The page shows that it is running, then its exit code
   and its last lines. Write a line that finishes on its own; one that waits
-  for input never ends. Start a game or an app the same way: it shows as
+  for input never ends. Start an app the same way: it shows as
   running until it is closed.
 - It shows in Needs you, and beside you on the Talk page when you run there.
   Add `--detail`, `--time` and `--kind play` as for any ask. `--status later`
@@ -411,9 +411,9 @@ no flag prints what stands. Counters are what the user counts the project by
 (`Levels=2/9`). The page shows how many commits the repo has made since this
 was written, so staleness is visible.
 
-## Playtest notes
+## Test-run notes
 
-Only when `studio.toml` names a playtest folder (`[playtests] dirs`, each
+Only when `studio.toml` names a test-run folder (`[test_runs] dirs`, each
 session a folder holding `f8-<n>/note.txt` and a screenshot). When a fix
 lands, say what became of each note; the user confirms after playing:
 

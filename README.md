@@ -47,7 +47,7 @@ The first page is a live board:
 - **Needs you.** A rail of everything that waits on you: batches to judge, builds to try, chores
   only you can do, and questions only you can answer. Each ask says what it blocks and **what
   the agent will do if you say nothing**, so work does not stop while you are away. When you have
-  to run something on your PC (a build, a script, the game) or open a file, the ask carries a
+  to run something on your PC (a build, a script, the app) or open a file, the ask carries a
   **button**: press it and the page shows it running, then its exit code and its last lines.
   Only a line the agent filed runs, and the server's copy for a phone runs nothing.
 
@@ -80,8 +80,8 @@ back if the note opens again. Set that in `studio.local.toml`:
 
 ```toml
 [files]
-archive = "you@server:/srv/studio-homes/_archive/MyGame-studio"   # or a folder on this machine
-peer = "you@server:/srv/studio-homes/MyGame-studio"              # the phone copy, if there is one
+archive = "you@server:/srv/studio-homes/_archive/MyProject-studio"   # or a folder on this machine
+peer = "you@server:/srv/studio-homes/MyProject-studio"              # the phone copy, if there is one
 ```
 
 Remote places are reached with `ssh` and `tar`, so ssh must work without a password prompt.
@@ -178,7 +178,7 @@ there, with where each file came from (tool, prompt, seed, script).
 ### A record of every ruling
 
 Each verdict becomes a numbered decision with your notes quoted exactly. Rulings you make in
-chat or in a playtest go on the same log. A new decision can supersede an old one; nothing is
+chat or in a test run go on the same log. A new decision can supersede an old one; nothing is
 erased. The next session can read what you already settled instead of asking again.
 
 ![The decisions log](docs/screenshots/decisions.png)
@@ -297,14 +297,14 @@ docs/             the quick start and the screenshots
 
 ## Status
 
-NocStudio was built for one game project and is in daily use there. It is young. Expect rough
+NocStudio started with one game project and is now in daily use across several kinds of project. It is young. Expect rough
 edges, and expect it to change.
 
 - **Windows first.** The Start menu app and the launchers are Windows only. The page and the
   command are plain Python and may run elsewhere with `python3 tool/studio.py serve`, but that
   is untested.
-- **Game-shaped.** The vocabulary (models, textures, motions, playtests) comes
-  from game development. Pictures, sounds, writing and questions work for any project.
+- **Started in a game.** A few kinds (models, textures, baked motions) came from making one.
+  Pictures, sounds, clips, writing, questions and in-app options work for any project.
 - **One person.** A Studio is for one person judging. There are no accounts and no sharing. A
   second copy on a server (Linux, Docker, a sign-in proxy in front) is for that same person's phone.
 - **Notes need a session that is working.** A session that has finished its turn and sits at

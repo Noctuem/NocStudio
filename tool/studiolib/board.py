@@ -309,7 +309,7 @@ def apply_plan(studio: Studio, data: dict) -> dict:
                                                                          "status", "kind", "default", "urgent")})
         count["asks"] += 1
     for s in data.get("slots") or []:
-        studio.set_slot(str(s.get("id") or ""), **{k: s.get(k) for k in ("title", "kind", "group", "status", "game_path",
+        studio.set_slot(str(s.get("id") or ""), **{k: s.get(k) for k in ("title", "kind", "group", "status", "project_path",
                                                                          "notes", "needed_by") if s.get(k)})
         count["slots"] += 1
     snapshot(studio)
@@ -423,7 +423,7 @@ def checklist(studio: Studio, hooks: bool) -> list:
     """What a project needs before the Overview can be trusted. Each line is done or it is not."""
     now, rows = studio.now(), studio.roadmap()
     current = next((m for m in rows if m.get("status") == "current"), None)
-    root = studio.game_root()
+    root = studio.repo_root()
     skill = bool(root and (root / ".claude" / "skills" / "studio" / "SKILL.md").is_file())
     return [
         {"id": "goal", "title": "A goal: what the project is and what done looks like", "done": bool(now.get("goal"))},

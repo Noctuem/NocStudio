@@ -11,17 +11,17 @@ needs a database, a network or a package outside the standard library.
       batches/<id>/draft.json     the user's verdict while they are still judging
       batches/<id>/verdict.json   the user's verdict, once they press Submit
       batches/<id>/result.json    what was done with the verdict
-      slots/<slot>.json           one per thing the game needs (a model, a sound...)
+      slots/<slot>.json           one per thing the project needs (a model, a sound...)
       library/<slot>/v<n>/...     the approved masters, with where they came from
       decisions/decisions.jsonl   every ruling, in the user's words, append only
-      playtests/triage.json       what happened to each playtest note
+      test_runs/triage.json       what happened to each test-run note
       overview/roadmap.json       the milestones, each with its steps
       overview/now.json           the goal, the current build, what is next
       overview/hands.json         what waits on the user: things to do and questions to answer
       notes/N-<n>.json            what the user typed into the notes box, and what became of each (notes.py)
       overview/lanes.json, events.jsonl, days.json    work in progress, the log, a snapshot a day (board.py)
       live/<session>.json         what each Claude Code session is doing now (tool/hook.py); not history
-      motions/<id>.glb            a character with its motions baked in as clips, by the game itself
+      motions/<id>.glb            a character with its motions baked in as clips, by the project itself
 """
 from __future__ import annotations
 
@@ -41,7 +41,7 @@ except ModuleNotFoundError:  # pragma: no cover
     tomllib = None
 
 SCHEMA = 1
-KINDS = ("image", "texture", "model", "audio", "video", "text", "ingame", "question", "mixed")
+KINDS = ("image", "texture", "model", "audio", "video", "text", "in_app", "question", "mixed")
 MODES = ("pick", "rate", "question")
 CALLS = {
     "pick": ("winner", "keep", "redo", "reject"),
@@ -53,7 +53,12 @@ ACTIONS = {
     "rate": ("ship", "ship_and_iterate", "another_round", "park"),
     "question": ("answer", "park"),
 }
-SLOT_STATUS = ("needed", "placeholder", "in_review", "approved", "in_game", "parked")
+SLOT_STATUS = ("needed", "placeholder", "in_review", "approved", "in_use", "parked")
+# Names from when the tool was built for one game. Still read, never written; `studio.py migrate` rewrites a home.
+OLD_STATUS = {"in_game": "in_use"}
+OLD_KIND = {"ingame": "in_app"}
+OLD_CONFIG = {"game_repo": "project_repo", "playtests": "test_runs"}
+OLD_SOURCE = {"playtest": "test_run"}
 TRIAGE_STATUS = ("open", "planned", "fixed", "wontfix", "question")
 MILESTONE_STATUS = ("done", "current", "next", "later", "parked")
 EDIT_MAX = 400_000  # characters of the user's own version of a text candidate
@@ -73,8 +78,8 @@ EXT_KIND = {
 }
 
 DEFAULT_CONFIG = {
-    "project": "Untitled game",
-    "game_repo": "",
+    "project": "Untitled project",
+    "project_repo": "",
     "port": 8770,
     "review": {"max_candidates": 6, "max_open_batches": 8},
     "checks": {
@@ -85,13 +90,38 @@ DEFAULT_CONFIG = {
         "file": {"max_mb": 64},
     },
     "recipes": {},
-    "playtests": {"dirs": []},
+    "test_runs": {"dirs": []},
     "notes": {"after_minutes": 10},
 }
 
 
 class StudioError(Exception):
     """A problem the person at the keyboard can fix; the message says how."""
+
+
+def fresh_slot(slot):
+    """A slot under today's names, whatever names it was saved with."""
+    if not isinstance(slot, dict):
+        return slot
+    for key in ("status", "previous_status"):
+        if slot.get(key) in OLD_STATUS:
+            slot[key] = OLD_STATUS[slot[key]]
+    if slot.get("kind") in OLD_KIND:
+        slot["kind"] = OLD_KIND[slot["kind"]]
+    if "game_path" in slot:
+        old = slot.pop("game_path")
+        slot["project_path"] = slot.get("project_path") or old
+    return slot
+
+
+def fresh_batch(batch):
+    """A batch under today's names, whatever names it was saved with."""
+    if not isinstance(batch, dict):
+        return batch
+    for item in [batch] + [c for c in batch.get("candidates") or [] if isinstance(c, dict)]:
+        if item.get("kind") in OLD_KIND:
+            item["kind"] = OLD_KIND[item["kind"]]
+    return batch
 
 
 def iso_now() -> str:
@@ -160,7 +190,9 @@ class Studio:
         self.slots_dir = self.home / "slots"
         self.library_dir = self.home / "library"
         self.decisions_file = self.home / "decisions" / "decisions.jsonl"
-        self.triage_file = self.home / "playtests" / "triage.json"
+        self.triage_file = self.home / "test_runs" / "triage.json"
+        if not self.triage_file.exists() and (self.home / "playtests" / "triage.json").exists():
+            self.triage_file = self.home / "playtests" / "triage.json"  # a home not yet migrated
         self.overview_dir = self.home / "overview"
         self.notes_dir = self.home / "notes"
         self.motions_dir = self.home / "motions"
@@ -169,14 +201,14 @@ class Studio:
 
     # ------------------------------------------------------------------ setup
     @staticmethod
-    def init(home, project: str = "", game_repo: str = "") -> "Studio":
+    def init(home, project: str = "", project_repo: str = "") -> "Studio":
         home = Path(home).resolve()
-        for sub in ("batches", "slots", "library", "decisions", "playtests", "overview", "motions"):
+        for sub in ("batches", "slots", "library", "decisions", "test_runs", "overview", "motions"):
             (home / sub).mkdir(parents=True, exist_ok=True)
         cfg = home / "studio.toml"
         if not cfg.exists():
-            cfg.write_text(DEFAULT_TOML.format(project=project or "Untitled game",
-                                               game_repo=game_repo.replace("\\", "/")),
+            cfg.write_text(DEFAULT_TOML.format(project=project or "Untitled project",
+                                               project_repo=project_repo.replace("\\", "/")),
                            encoding="utf-8", newline="\n")
         ignore = home / ".gitignore"
         if not ignore.exists():
@@ -199,7 +231,15 @@ class Studio:
                 raise StudioError("Python 3.11 or newer is needed to read studio.toml")
             try:
                 with open(path, "rb") as fh:
-                    config = merge(config, tomllib.load(fh))
+                    raw = tomllib.load(fh)
+                for old, new in OLD_CONFIG.items():
+                    if old in raw:
+                        raw.setdefault(new, raw.pop(old))
+                recipes = raw.get("recipes")
+                for old, new in OLD_KIND.items():
+                    if isinstance(recipes, dict) and old in recipes:
+                        recipes.setdefault(new, recipes.pop(old))
+                config = merge(config, raw)
             except tomllib.TOMLDecodeError as err:
                 raise StudioError(f"{path}: {err}") from err
         if not re.fullmatch(r"[a-z]{0,3}", str(config.get("site") or "")):
@@ -211,12 +251,62 @@ class Studio:
         numbers = [int(m.group(1)) for i in ids if (m := re.fullmatch(prefix + r"-(\d+)[a-z]*", i or ""))]
         return f"{prefix}-{(max(numbers) if numbers else 0) + 1:04d}{self.config.get('site') or ''}"
 
-    def game_root(self, override: str = "") -> Path | None:
-        root = override or self.config.get("game_repo") or ""
+    def repo_root(self, override: str = "") -> Path | None:
+        root = override or self.config.get("project_repo") or ""
         if not root:
             return None
         path = Path(root)
         return path if path.is_absolute() else (self.home / path).resolve()
+
+    def migrate(self, dry_run: bool = False) -> list[str]:
+        """Rewrite this home's files under today's names (in_use, project_path, in_app, project_repo,
+        test_runs). The decisions log is left as it was written; it is read under the new names."""
+        changed = []
+        for path in sorted(self.slots_dir.glob("*.json")) if self.slots_dir.is_dir() else []:
+            raw = read_json(path)
+            if isinstance(raw, dict) and fresh_slot(json.loads(json.dumps(raw))) != raw:
+                changed.append(path)
+                if not dry_run:
+                    write_json(path, fresh_slot(raw))
+        for root in (self.batches_dir, self.samples_dir):
+            for path in sorted(root.glob("*/batch.json")) if root.is_dir() else []:
+                raw = read_json(path)
+                if isinstance(raw, dict) and fresh_batch(json.loads(json.dumps(raw))) != raw:
+                    changed.append(path)
+                    if not dry_run:
+                        write_json(path, fresh_batch(raw))
+        lines = [(re.compile(r"^game_repo(\s*=)", re.M), r"project_repo\1"),
+                 (re.compile(r"^\[playtests\]", re.M), "[test_runs]"),
+                 (re.compile(r"^\[recipes\.ingame\]", re.M), "[recipes.in_app]"),
+                 (re.compile(r"^# Folders the (?:game|project) writes playtest sessions into", re.M),
+                  "# Folders the project writes test-run sessions into"),
+                 (re.compile(r"Playtests tab"), "Test runs tab")]
+        for path in (self.home / "studio.toml", self.home / "studio.local.toml"):
+            if not path.exists():
+                continue
+            text = path.read_text(encoding="utf-8")
+            new = text
+            for pattern, to in lines:
+                new = pattern.sub(to, new)
+            if new != text:
+                changed.append(path)
+                if not dry_run:
+                    path.write_text(new, encoding="utf-8", newline="\n")
+        old = self.home / "playtests"
+        if old.is_dir():
+            changed.append(old)
+            if not dry_run:
+                target = self.home / "test_runs"
+                target.mkdir(exist_ok=True)
+                for item in old.iterdir():
+                    if not (target / item.name).exists():
+                        shutil.move(str(item), str(target / item.name))
+                if not any(old.iterdir()):
+                    old.rmdir()
+                self.triage_file = target / "triage.json"
+        if not dry_run:
+            self.config = self._load_config()
+        return [p.relative_to(self.home).as_posix() for p in changed]
 
     # ---------------------------------------------------------------- batches
     def batch_dir(self, batch_id: str) -> Path:
@@ -237,7 +327,7 @@ class Studio:
 
     def load_batch(self, batch_id: str) -> dict:
         folder = self.batch_dir(batch_id)
-        batch = read_json(folder / "batch.json")
+        batch = fresh_batch(read_json(folder / "batch.json"))
         if batch is None:
             raise StudioError(f"no batch {batch_id!r}; see: studio.py status")
         batch["verdict"] = read_json(folder / "verdict.json")
@@ -448,7 +538,7 @@ class Studio:
         if batch["ready"]:
             for slot_id in {batch.get("slot")} | {c.get("slot") for c in batch["candidates"]}:
                 slot = self.slot(slot_id) if slot_id else None
-                if slot and slot.get("status") in ("needed", "placeholder", "approved", "in_game"):
+                if slot and slot.get("status") in ("needed", "placeholder", "approved", "in_use"):
                     slot["previous_status"] = slot["status"]
                     slot["status"] = "in_review"
                     slot["open_batch"] = batch_id
@@ -595,11 +685,11 @@ class Studio:
     def slots(self) -> list[dict]:
         if not self.slots_dir.is_dir():
             return []
-        out = [read_json(p) for p in sorted(self.slots_dir.glob("*.json"))]
+        out = [fresh_slot(read_json(p)) for p in sorted(self.slots_dir.glob("*.json"))]
         return [s for s in out if s]
 
     def slot(self, slot_id: str) -> dict | None:
-        return read_json(self.slots_dir / (safe_id(slot_id, "slot") + ".json"))
+        return fresh_slot(read_json(self.slots_dir / (safe_id(slot_id, "slot") + ".json")))
 
     def save_slot(self, slot: dict) -> None:
         if slot.get("status") not in SLOT_STATUS:
@@ -608,7 +698,7 @@ class Studio:
 
     def set_slot(self, slot_id: str, **fields) -> dict:
         slot = self.slot(slot_id) or {"schema": SCHEMA, "id": slot_id, "title": slot_id, "kind": "",
-                                      "group": "", "status": "needed", "game_path": "", "notes": "",
+                                      "group": "", "status": "needed", "project_path": "", "notes": "",
                                       "current": None, "history": []}
         for key, value in fields.items():
             if value not in (None, ""):
@@ -768,9 +858,13 @@ class Studio:
                 if not line:
                     continue
                 try:
-                    out.append(json.loads(line))
+                    record = json.loads(line)
                 except json.JSONDecodeError as err:
                     raise StudioError(f"{self.decisions_file}:{n}: {err}") from err
+                source = record.get("source") if isinstance(record, dict) else None
+                if isinstance(source, dict) and source.get("type") in OLD_SOURCE:  # the log is never rewritten
+                    source["type"] = OLD_SOURCE[source["type"]]
+                out.append(record)
         # the log is append only: a later ruling retires an earlier one by naming it
         by_name = {}
         for record in out:
@@ -842,16 +936,16 @@ class Studio:
         else:
             if action in ("ship", "ship_and_iterate"):
                 names = ", ".join(w["candidate"] for w in winners)
-                if batch["kind"] == "ingame":
+                if batch["kind"] == "in_app":
                     steps.append(f"Record the user's pick ({names}) on its slot; there is no file to copy: "
                                  f"{me} import {batch['id']}")
                 else:
-                    steps.append(f"Copy the winner ({names}) into the library and the game: "
+                    steps.append(f"Copy the winner ({names}) into the library and the project: "
                                  f"{me} import {batch['id']}")
                 recipe = (self.config.get("recipes") or {}).get(batch["kind"]) or {}
                 steps += list(recipe.get("steps") or [])
                 steps += list((batch.get("import") or {}).get("steps") or [])
-                steps.append("Build, run the fast tier, and commit the game change.")
+                steps.append("Build, run the fast tier, and commit the project change.")
             if action in ("another_round", "ship_and_iterate"):
                 steps.append(f"Read batches/{batch['id']}/next-round-brief.md "
                              f"({me} brief {batch['id']} writes it), make the next candidates from it, "
@@ -863,7 +957,7 @@ class Studio:
             if action == "park":
                 steps.append("The user parked it: make nothing more for this slot until they say so.")
         steps.append(f"Close it: {me} done {batch['id']} --ruling \"<what this settles, one sentence>\" "
-                     f"[--commit <sha>] [--next <new batch id>] [--in-game]")
+                     f"[--commit <sha>] [--next <new batch id>] [--in-use]")
         return {
             "batch": batch["id"], "title": batch.get("title", ""), "kind": batch["kind"], "mode": batch["mode"],
             "slot": batch.get("slot", ""), "action": action, "submitted": verdict.get("submitted"),
@@ -917,8 +1011,8 @@ class Studio:
         (self.batch_dir(batch_id) / "next-round-brief.md").write_text(text, encoding="utf-8", newline="\n")
         return text
 
-    def import_batch(self, batch_id: str, game: str = "", dry_run: bool = False, again: bool = False) -> list[dict]:
-        """Copy each winner to the library (the master) and into the game repo."""
+    def import_batch(self, batch_id: str, repo: str = "", dry_run: bool = False, again: bool = False) -> list[dict]:
+        """Copy each winner to the library (the master) and into the project folder."""
         batch = self.load_batch(batch_id)
         if batch.get("sample"):
             raise StudioError(f"{batch_id} is a sample: nothing in it is imported, recorded or acted on")
@@ -930,7 +1024,7 @@ class Studio:
             raise StudioError(f"the user's verdict on {batch_id} is {verdict.get('action')!r}: there is nothing to import")
         if (folder / "import.json").exists() and not (again or dry_run):
             raise StudioError(f"batch {batch_id} was imported already; pass --again to copy it a second time")
-        game_root = self.game_root(game)
+        repo_root = self.repo_root(repo)
         winners: dict[str, list] = {}
         for cand in batch["candidates"]:
             entry = verdict["candidates"].get(cand["id"]) or {}
@@ -974,13 +1068,13 @@ class Studio:
                         thumb = f"{row['library']}/{Path(picture).name}"
                 dest = cand.get("dest") or (batch.get("import") or {}).get("dest") or ""
                 if dest and primary is not None:
-                    if game_root is None:
-                        row["dest_skipped"] = "no game_repo in studio.toml and no --game given"
+                    if repo_root is None:
+                        row["dest_skipped"] = "no project_repo in studio.toml and no --repo given"
                     else:
-                        root = game_root.resolve()
+                        root = repo_root.resolve()
                         target = (root / dest).resolve()
                         if not target.is_relative_to(root):
-                            raise StudioError(f"import dest {dest!r} leaves the game repo")
+                            raise StudioError(f"import dest {dest!r} leaves the project folder")
                         as_dir = dest.endswith("/") or (len(sources) > 1 and not Path(dest).suffix)
                         for src in (sources if as_dir else [primary]):
                             out = target / src.name if as_dir else target
@@ -1005,15 +1099,15 @@ class Studio:
                 slot["status"] = "approved"
                 slot.pop("open_batch", None)
                 dests = [d for r in rows for d in r["dest"]]
-                if dests and not slot.get("game_path"):
-                    slot["game_path"] = dests[0]
+                if dests and not slot.get("project_path"):
+                    slot["project_path"] = dests[0]
                 self.save_slot(slot)
         if not dry_run:
             write_json(folder / "import.json", {"imported": done, "at": iso_now()})
         return done
 
     def mark_done(self, batch_id: str, *, ruling: str = "", commit: str = "", next_batch: str = "",
-                  note: str = "", in_game: bool = False, by: str = "claude-code") -> dict:
+                  note: str = "", in_use: bool = False, by: str = "claude-code") -> dict:
         batch = self.load_batch(batch_id)
         if batch.get("sample"):
             raise StudioError(f"{batch_id} is a sample: nothing in it is imported, recorded or acted on")
@@ -1075,7 +1169,7 @@ class Studio:
             elif action == "park":
                 slot["status"] = "parked"
             elif action in ("ship", "ship_and_iterate"):
-                slot["status"] = "in_game" if in_game else "approved"
+                slot["status"] = "in_use" if in_use else "approved"
             elif action == "another_round":
                 slot["status"] = "in_review" if next_batch else slot.get("previous_status", "placeholder")
             if next_batch:
@@ -1085,10 +1179,10 @@ class Studio:
             self.save_slot(slot)
         return result
 
-    # -------------------------------------------------------------- playtests
-    def playtest_dirs(self) -> list[Path]:
+    # -------------------------------------------------------------- test_runs
+    def test_run_dirs(self) -> list[Path]:
         out = []
-        for raw in (self.config.get("playtests") or {}).get("dirs") or []:
+        for raw in (self.config.get("test_runs") or {}).get("dirs") or []:
             path = Path(os.path.expandvars(os.path.expanduser(raw)))
             out.append(path if path.is_absolute() else (self.home / path).resolve())
         return out
@@ -1109,10 +1203,10 @@ class Studio:
         write_json(self.triage_file, data)
         return entry
 
-    def playtests(self) -> list[dict]:
+    def test_runs(self) -> list[dict]:
         triage = self.triage()
         sessions = []
-        for index, root in enumerate(self.playtest_dirs()):
+        for index, root in enumerate(self.test_run_dirs()):
             if not root.is_dir():
                 continue
             for folder in sorted(root.iterdir(), reverse=True):
@@ -1163,7 +1257,7 @@ class Studio:
         try:
             sliders = read_json(folder / "sliders.json", {}) or {}
             if isinstance(sliders, dict) and isinstance(sliders.get("sliders"), list):
-                # the game's own shape: the end screen's ratings as a list, and what the player wrote there
+                # one project's own shape: the end screen's ratings as a list, and what the tester wrote there
                 session["sliders"] = {str(row.get("label")): row.get("value") for row in sliders["sliders"]
                                       if isinstance(row, dict) and row.get("label")}
                 session["end_note"] = str(sliders.get("text") or "").strip()
@@ -1188,10 +1282,10 @@ class Studio:
                                        "triage": triage.get(key) or {"status": "open"}})
         return session
 
-    def playtest_file(self, root_index: int, rel: str) -> Path:
-        roots = self.playtest_dirs()
+    def test_run_file(self, root_index: int, rel: str) -> Path:
+        roots = self.test_run_dirs()
         if not 0 <= root_index < len(roots):
-            raise StudioError("no such playtest folder")
+            raise StudioError("no such test-run folder")
         root = roots[root_index].resolve()
         path = (root / rel).resolve()
         if not path.is_relative_to(root) or not path.is_file():
@@ -1204,7 +1298,7 @@ class Studio:
 
     def set_motion(self, mid: str, src, sample: bool = False) -> dict:
         """Keep a character's baked motions: one .glb, the model with a clip for each motion,
-        written by the game's own code so the page shows what the game draws."""
+        written by the project's own code so the page shows what the project draws."""
         from .checks import model_facts
         src = Path(src)
         if not src.is_file() or src.suffix.lower() != ".glb":
@@ -1230,7 +1324,7 @@ class Studio:
         mid, _, clip = (ref or "").partition(":")
         entry = self.motions().get(mid)
         if entry is not None and entry.get("sample") and not sample:
-            raise StudioError(f"{mid} is made-up motion for the samples, not the game's: it goes on no real batch or slot")
+            raise StudioError(f"{mid} is made-up motion for the samples, not the project's: it goes on no real batch or slot")
         if entry is None:
             raise StudioError(f"no baked motions {mid!r}; bake them and run: studio.py motion set {mid or '<id>'} <file.glb>")
         names = [c["name"] for c in entry["clips"]]
@@ -1575,9 +1669,9 @@ class Studio:
 
     _GIT_CACHE: dict = {}
 
-    def game_git(self) -> dict:
-        """The game repo as git sees it: branch, version, the last commits. Read only."""
-        root = self.game_root()
+    def repo_git(self) -> dict:
+        """The project folder as git sees it: branch, version, the last commits. Read only."""
+        root = self.repo_root()
         if root is None or not (root / ".git").exists():
             return {}
         updated = self.now().get("updated") or ""
@@ -1614,16 +1708,16 @@ class Studio:
     def overview(self) -> dict:
         from . import board, setup
         hooks = bool(setup.hooks_installed())
-        return {"now": self.now(), "game": self.game_git(), "milestones": self.roadmap(), "hands": self._hands_shown(),
+        return {"now": self.now(), "repo": self.repo_git(), "milestones": self.roadmap(), "hands": self._hands_shown(),
                 "board": board.view(self), "live": board.live(self), "hooks": hooks, "hooks_notes": setup.hooks_hand_over(),
                 "setup": board.checklist(self, hooks)}
 
     # ------------------------------------------------- the files behind a slot
-    def game_file(self, rel: str) -> Path:
-        """A file of the game repo the user may look at or hear from the Library. Media only."""
-        root = self.game_root()
+    def repo_file(self, rel: str) -> Path:
+        """A file of the project folder the user may look at or hear from the Library. Media only."""
+        root = self.repo_root()
         if root is None:
-            raise StudioError("no game_repo in studio.toml")
+            raise StudioError("no project_repo in studio.toml")
         root = root.resolve()
         path = (root / rel).resolve()
         if not path.is_relative_to(root) or not path.is_file() or path.suffix.lower() not in EXT_KIND:
@@ -1631,8 +1725,8 @@ class Studio:
         return path
 
     def slot_files(self, slot: dict) -> list[dict]:
-        """What the user can open for a slot: the approved master, and what the game holds today.
-        `game_path` is a file, a folder or a glob (content/audio/*/step_*.wav)."""
+        """What the user can open for a slot: the approved master, and what the project holds today.
+        `project_path` is a file, a folder or a glob (content/audio/*/step_*.wav)."""
         out = []
         kind = slot.get("kind", "")
         cur = slot.get("current") or {}
@@ -1642,8 +1736,8 @@ class Studio:
                 if p.is_file() and p.suffix.lower() in EXT_KIND:
                     out.append({"url": "/" + p.relative_to(self.home).as_posix(), "kind": file_kind(p.name, kind),
                                 "label": p.stem.replace("_", " "), "from": "library"})
-        root = self.game_root()
-        pattern = slot.get("game_path") or ""
+        root = self.repo_root()
+        pattern = slot.get("project_path") or ""
         if root is not None and pattern and ".." not in pattern and not Path(pattern).is_absolute():
             root = root.resolve()
             hits = sorted(root.glob(pattern)) if any(ch in pattern for ch in "*?[") else [root / pattern]
@@ -1655,7 +1749,7 @@ class Studio:
                     break
                 if p.is_file() and p.suffix.lower() in EXT_KIND:
                     rel = p.relative_to(root).as_posix()
-                    out.append({"url": "/game/" + rel, "kind": file_kind(p.name, kind), "label": rel, "from": "game"})
+                    out.append({"url": "/repo/" + rel, "kind": file_kind(p.name, kind), "label": rel, "from": "repo"})
         return out
 
     # ------------------------------------------------- the record, kept in git
@@ -1762,8 +1856,8 @@ class Studio:
                 "limits": self.config.get("review"), "batches": batches, "held": held,
                 "samples": samples, "samples_held": samples_held, "ui": self.ui(),
                 "slots": [dict(s, files=self.slot_files(s)) for s in self.slots()],
-                "decisions": self.decisions(), "playtests": self.playtests(), "overview": self.overview(),
-                "has_playtests": bool(self.playtest_dirs()), "motions": self.motions(),
+                "decisions": self.decisions(), "test_runs": self.test_runs(), "overview": self.overview(),
+                "has_test_runs": bool(self.test_run_dirs()), "motions": self.motions(),
                 "notes": self.notes_view(), "sync": read_json(self.home / "live" / "sync.json", None), "stamp": self.stamp()}
 
     def stamp(self) -> str:
@@ -1780,7 +1874,7 @@ class Studio:
                         parts.append(f"{p.name}:{st.st_mtime_ns}:{st.st_size}")
             except OSError:
                 continue
-        for root in self.playtest_dirs():
+        for root in self.test_run_dirs():
             try:
                 parts.append(f"{root}:{root.stat().st_mtime_ns}:{sum(1 for _ in root.iterdir())}")
             except OSError:
@@ -1790,11 +1884,11 @@ class Studio:
             parts.append(f"told:{st.st_mtime_ns}:{st.st_size}")
         except OSError:
             pass
-        root = self.game_root()
-        if root is not None:  # a commit in the game repo moves the overview
+        root = self.repo_root()
+        if root is not None:  # a commit in the project folder moves the overview
             try:
                 st = (root / ".git" / "logs" / "HEAD").stat()
-                parts.append(f"game:{st.st_mtime_ns}:{st.st_size}")
+                parts.append(f"repo:{st.st_mtime_ns}:{st.st_size}")
             except OSError:
                 pass
         import hashlib
@@ -1815,7 +1909,7 @@ class Studio:
             cur = s.get("current") or {}
             lines.append(f"| `{s['id']}` | {s.get('kind', '')} | {s.get('status', '')} | "
                          f"{('v' + str(cur.get('version')) + ' from ' + str(cur.get('batch'))) if cur else ''} | "
-                         f"{s.get('game_path', '')} |")
+                         f"{s.get('project_path', '')} |")
         index = self.home / "INDEX.md"
         index.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
         dl = [f"# {state['project']}: decisions", "",
@@ -1840,7 +1934,7 @@ DEFAULT_TOML = '''# Studio settings. Edit freely; the tool reads this file on ev
 project = "{project}"
 
 # Where approved assets are copied to. Forward slashes work on Windows.
-game_repo = "{game_repo}"
+project_repo = "{project_repo}"
 
 port = 8770
 
@@ -1867,8 +1961,8 @@ min_width = 512
 [checks.file]
 max_mb = 64
 
-# Folders the game writes playtest sessions into (each holds f8-<n>/ reports).
-[playtests]
+# Folders the project writes test-run sessions into (each holds f8-<n>/ reports).
+[test_runs]
 dirs = []
 
 # The notes box: how long a note you typed waits before it is handed to a session in the middle
@@ -1886,6 +1980,6 @@ steps = []
 steps = []
 [recipes.image]
 steps = []
-[recipes.ingame]
+[recipes.in_app]
 steps = []
 '''

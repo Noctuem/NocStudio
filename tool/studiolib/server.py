@@ -34,12 +34,13 @@ LAUNCH_NAME = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]| (?=[^ ])){0,47}")  # Ig
 def launch_info(studio: Studio, url: str) -> dict | None:
     """Where the page asks for a remote Claude session on the PC (an Ignition launcher, `[serve] launch` on a
     server copy), and the project folder it names. The folder is the PC's, from studio.toml itself: a server
-    copy's own studio.local.toml clears game_repo."""
+    copy's own studio.local.toml clears project_repo."""
     if not url or not studio.config.get("site"):
         return None
     try:
         with open(studio.home / "studio.toml", "rb") as fh:
-            repo = str((tomllib.load(fh) if tomllib else {}).get("game_repo") or "")
+            raw = tomllib.load(fh) if tomllib else {}
+            repo = str(raw.get("project_repo") or raw.get("game_repo") or "")  # game_repo: a home not yet migrated
     except (OSError, ValueError):
         repo = ""
     name = PureWindowsPath(repo.replace("/", "\\")).name if repo else ""
@@ -162,9 +163,9 @@ def make_handler(home: Path, allowed_hosts: set[str], quiet: bool = False, hub: 
         def talk_repo(self, studio: Studio) -> Path:
             if studio.config.get("site"):
                 raise StudioError("sessions run on the PC; talking to them from this copy comes later")
-            repo = studio.game_root()
+            repo = studio.repo_root()
             if repo is None or not repo.is_dir():
-                raise StudioError("this Studio names no project folder (game_repo in studio.toml)")
+                raise StudioError("this Studio names no project folder (project_repo in studio.toml)")
             return repo
 
         def talk_get(self, studio: Studio, rest: list, query: dict):
@@ -308,10 +309,10 @@ def make_handler(home: Path, allowed_hosts: set[str], quiet: bool = False, hub: 
                 if head == "motions" and len(parts) == 2:
                     path = self.under(self.studio().motions_dir, parts[1])
                     return self.send_file(path) if path else self.fail(404, "no such file")
-                if head == "game" and len(parts) > 1:
-                    return self.send_file(self.studio().game_file("/".join(parts[1:])))
+                if head in ("repo", "game") and len(parts) > 1:  # game: links from a page served before the rename
+                    return self.send_file(self.studio().repo_file("/".join(parts[1:])))
                 if head == "pt" and len(parts) > 2 and parts[1].isdigit():
-                    return self.send_file(self.studio().playtest_file(int(parts[1]), "/".join(parts[2:])))
+                    return self.send_file(self.studio().test_run_file(int(parts[1]), "/".join(parts[2:])))
                 return self.fail(404, "no such page")
             except StudioError as err:
                 return self.fail(404, str(err))
@@ -400,7 +401,7 @@ def make_handler(home: Path, allowed_hosts: set[str], quiet: bool = False, hub: 
                     if parts == ["api", "triage"]:
                         key = str(data.get("key") or "")
                         if not re.fullmatch(r"[^/\\]+/f8-\d+", key):
-                            raise StudioError("bad playtest note key")
+                            raise StudioError("bad test-run note key")
                         confirmed = data.get("confirmed")
                         entry = studio.set_triage(key, confirmed=confirmed if isinstance(confirmed, bool) else None,
                                                   confirm_note=str(data.get("confirm_note") or ""))

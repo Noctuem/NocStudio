@@ -93,7 +93,7 @@ def press(studio: Studio, hid: str) -> dict:
         proc = PROCS.get(key)
         if proc is not None and proc.poll() is None:
             raise StudioError("it is still running")
-        cwd = Path(row.get("cwd") or studio.game_root() or studio.home)
+        cwd = Path(row.get("cwd") or studio.repo_root() or studio.home)
         if not cwd.is_dir():
             raise StudioError(f"the folder {cwd} is not there")
         log_path = folder / f"{hid}.log"

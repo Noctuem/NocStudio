@@ -20,7 +20,7 @@ GENERIC_TOML = '''# Studio settings for {project}. Edit freely; the tool reads t
 project = "{project}"
 
 # The project's repo: where approved assets are copied to, and what the Library and the Overview read.
-game_repo = "{repo}"
+project_repo = "{repo}"
 
 port = {port}
 
@@ -48,9 +48,9 @@ min_width = 0
 [checks.file]
 max_mb = 256
 
-# Folders the project writes playtest sessions into (each holds f8-<n>/ reports). Leave empty
-# and the Playtests tab stays hidden.
-[playtests]
+# Folders the project writes test-run sessions into (each holds f8-<n>/ reports). Leave empty
+# and the Test runs tab stays hidden.
+[test_runs]
 dirs = []
 
 # The notes box: how long a note you typed waits before it is handed to a session in the middle
@@ -67,7 +67,7 @@ steps = []
 steps = []
 [recipes.image]
 steps = []
-[recipes.ingame]
+[recipes.in_app]
 steps = []
 '''
 

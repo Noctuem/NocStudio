@@ -71,7 +71,7 @@ NEEDS = {"body", "chest", "neck", "leg_l", "leg_r", "shin_l", "shin_r", "arm_l",
 
 
 def made_up_samples(model: Path, scale: float = 1.0) -> dict:
-    """A samples file as the game would write one (see bake.py), but the motion is invented here:
+    """A samples file as a project would write one (see bake.py), but the motion is invented here:
     each named bone turned about its own joint. For a rig whose bones rest unturned."""
     doc, _ = bake._read_glb(model)
     nodes = doc.get("nodes", [])
@@ -115,7 +115,7 @@ def _figure(studio, model: str) -> tuple[list, str]:
     """Keep the samples' moving figure; returns its clips as candidates, and what it was made from."""
     conf = studio.config.get("samples") or {}
     path = Path(model or conf.get("model") or "")
-    root = studio.game_root()
+    root = studio.repo_root()
     if path.parts and not path.is_absolute() and root is not None:
         path = root / path
     why = ""
@@ -127,7 +127,7 @@ def _figure(studio, model: str) -> tuple[list, str]:
                 studio.set_motion(MOTION_SET, out, sample=True)
             return ([(name, label, title, summary) for name, label, title, summary, _, _ in CLIPS],
                     f"{path.name}, moved by motion made up in the Studio (nothing is solved: a hose or a cloth only "
-                    f"follows the bone it hangs on, so it pulls where the game would not)")
+                    f"follows the bone it hangs on, so it pulls where the project would not)")
         except (StudioError, KeyError, ValueError) as err:
             why = f" ({path.name} could not be used: {err})"
     elif path.parts:
@@ -168,7 +168,7 @@ WRITING = [
     ("Long", "long.md", "# Notice to all hands\n\nThis door is locked from the other side by order of the watch.\n\n"
                         "1. Do not knock.\n2. Do not wait.\n3. Report anything you hear behind it.\n"),
 ]
-INGAME = [("Light", "sample 1 light", "A few drops"), ("Heavy", "sample 2 heavy", "Twice as much, stains for a minute"),
+IN_APP = [("Light", "sample 1 light", "A few drops"), ("Heavy", "sample 2 heavy", "Twice as much, stains for a minute"),
           ("Soaked", "sample 3 soaked", "Three times as much, stains for three minutes")]
 VIDEO = [("Bars", "clip_bars.mp4", "A moving test card"), ("Zoom", "clip_zoom.mp4", "A slow zoom into a fractal"),
          ("Cells", "clip_cells.mp4", "Dots that grow and die")]
@@ -227,12 +227,12 @@ def _held(studio, _):
 
 def _motions(studio, model):
     clips, source = _figure(studio, model)
-    bid = studio.new_batch("motions", sample=True, filed_by=BY, kind="ingame", title="Motions: looping in place",
+    bid = studio.new_batch("motions", sample=True, filed_by=BY, kind="in_app", title="Motions: looping in place",
                            ask="Which motion would you keep?", launch="echo a sample has no build to start",
-                           brief=SAY + f" The figure is {source}; a real motion batch shows what the game itself draws.",
+                           brief=SAY + f" The figure is {source}; a real motion batch shows what the project itself draws.",
                            look_at=["Each loops in place over its label; Play, Half and Quarter slow them together",
                                     "Turntable and the 1.8 m figure; drag to turn one, Compare to turn them together",
-                                    "The line under Start the game with is what you would copy for a real batch"])["id"]
+                                    "The line under Start it with is what you would copy for a real batch"])["id"]
     for i, (name, label, title, summary) in enumerate(clips, 1):
         studio.add_candidate(bid, [], cid=str(i), label=label, title=title, summary=summary,
                              motion=f"{MOTION_SET}:{name}", made_with={"tool": "made-up motion", "source": "studio.py samples"})
@@ -249,11 +249,11 @@ def _video(studio, _):
     return bid
 
 
-def _ingame(studio, _):
-    bid = studio.new_batch("in-game", sample=True, filed_by=BY, kind="ingame", title="In the game: labels only",
+def _in_app(studio, _):
+    bid = studio.new_batch("in-app", sample=True, filed_by=BY, kind="in_app", title="In the app: labels only",
                            ask="Which amount would you keep?", launch="echo a sample has no build to start", brief=SAY,
-                           look_at=["Nothing is drawn here: you would look for each label in the game, then mark it here"])["id"]
-    for i, (title, label, summary) in enumerate(INGAME, 1):
+                           look_at=["Nothing is drawn here: you would look for each label in the running app, then mark it here"])["id"]
+    for i, (title, label, summary) in enumerate(IN_APP, 1):
         studio.add_candidate(bid, [], cid=str(i), label=label, title=title, summary=summary,
                              made_with={"tool": "tuning", "source": "studio.py samples"})
     return bid
@@ -281,7 +281,7 @@ def _writing(studio, _):
 
 
 SAMPLES = [("motions", _motions), ("models", _models), ("pictures", _pictures), ("textures", _textures),
-           ("sounds", _sounds), ("video", _video), ("in-game", _ingame), ("question", _question),
+           ("sounds", _sounds), ("video", _video), ("in-app", _in_app), ("question", _question),
            ("writing", _writing), ("held", _held)]
 
 

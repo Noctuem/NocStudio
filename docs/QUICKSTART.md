@@ -185,8 +185,8 @@ Each Studio has a `studio.toml` in its home:
 - `[checks.*]` are the limits a candidate must pass (loudness, length, triangle count, texture
   size). They start loose; set them to your project's own.
 - `[review]` sets how many candidates a batch may hold and when the inbox counts as full.
-- `[playtests] dirs` names folders of playtest sessions, if your project writes them; the
-  Playtests tab appears when it is set.
+- `[test_runs] dirs` names folders of test-run sessions, if your project writes them; the
+  Test runs tab appears when it is set.
 
 ## Moving, updating, removing
 

@@ -31,7 +31,7 @@
         "audio",
         "video",
         "text",
-        "ingame",
+        "in_app",
         "question",
         "mixed"
       ]
@@ -100,7 +100,7 @@
     },
     "launch": {
       "type": "string",
-      "description": "For in-game batches: the line that starts the game."
+      "description": "For in-app batches: the line that starts the project."
     },
     "context": {
       "type": "array",
@@ -166,7 +166,7 @@
           },
           "label": {
             "type": "string",
-            "description": "The words over it in the game."
+            "description": "The words over it in the running project."
           },
           "body": {
             "type": "string",
@@ -270,7 +270,7 @@
       "properties": {
         "dest": {
           "type": "string",
-          "description": "Path in the game repo. Ends in / for a folder."
+          "description": "Path in the project folder. Ends in / for a folder."
         },
         "steps": {
           "type": "array",

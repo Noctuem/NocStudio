@@ -37,6 +37,7 @@
             "batch",
             "question",
             "chat",
+            "test_run",
             "playtest",
             "spec",
             "studio"
