@@ -59,6 +59,20 @@
           },
           "note": {
             "type": "string"
+          },
+          "marks": {
+            "type": "object",
+            "description": "Parts of the picture or model the user painted, in up to five colours, each with a note. The page also keeps a picture of them at marks/<candidate>.png.",
+            "properties": {
+              "kind": { "enum": ["image", "model"] },
+              "notes": { "type": "object", "description": "colour -> the user's note for that colour, exact" },
+              "where": { "type": "object", "description": "colour -> where those marks sit, worked out by the page" },
+              "strokes": { "type": "array", "description": "On a picture: {c: colour or erase, r: radius in the picture's pixels, p: [[x, y], ...]}" },
+              "size": { "type": "array", "description": "On a picture: its width and height in pixels" },
+              "faces": { "type": "object", "description": "On a model: mesh number -> colour -> face numbers" },
+              "meshes": { "type": "object", "description": "On a model: mesh number -> its name" },
+              "moments": { "type": "object", "description": "On a moving model: colour -> {clip, t, length}, the motion and the second it was painted at" }
+            }
           }
         }
       }

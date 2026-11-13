@@ -124,6 +124,12 @@ S todo
 It prints every submitted verdict, oldest first, with their words quoted and
 the steps for each, what they answered about the things only they can do, and
 every text they edited in the Library (see Slots: working copies).
+A candidate may carry **marks**: parts of a picture or a model they painted in
+colours, a note for each colour. `todo` names the picture of them
+(`batches/<batch>/marks/<candidate>.png`, the marks painted on with a legend)
+and says where each colour sits; on a motion, the clip and the second. Open
+the picture before you act: a colour's note is about that part only. A note
+sent from the Library's Mark button carries the same picture as its file.
 For each verdict, in order:
 
 - **Ship** (`ship`, `ship_and_iterate`): `S import <batch>` copies the winner

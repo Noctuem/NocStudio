@@ -62,6 +62,9 @@ OLD_SOURCE = {"playtest": "test_run"}
 TRIAGE_STATUS = ("open", "planned", "fixed", "wontfix", "question")
 MILESTONE_STATUS = ("done", "current", "next", "later", "parked")
 EDIT_MAX = 400_000  # characters of the user's own version of a text candidate
+MARK_COLOURS = ("red", "yellow", "green", "blue", "purple")  # the user's marks on a picture or a model, in this order
+MARK_LIMIT = 200_000  # face numbers or stroke points kept on one candidate
+MARK_PICTURE_MAX = 16 * 1024 * 1024
 HAND_STATUS = ("open", "later", "done", "parked")  # later: the user's, but nothing waits on it yet
 HAND_KINDS = ("action", "decision", "play", "info")  # something to do, a question to answer, a build to try, a thing to know
 # how the user likes the page: one answer for every Studio here (STUDIO_PREFS names another file, for a test)
@@ -97,6 +100,56 @@ DEFAULT_CONFIG = {
 
 class StudioError(Exception):
     """A problem the person at the keyboard can fix; the message says how."""
+
+
+def clean_marks(raw) -> dict | None:
+    """The user's marks on a candidate, as the page sends them: a note and a place for each colour, and the
+    strokes (on a picture) or the face numbers (on a model). Anything else is dropped."""
+    if not isinstance(raw, dict) or raw.get("kind") not in ("image", "model"):
+        return None
+    pick = lambda d, n: {c: str(v).strip()[:n] for c, v in (d or {}).items() if c in MARK_COLOURS and isinstance(v, str)}  # noqa: E731
+    notes, where = pick(raw.get("notes"), 4000), pick(raw.get("where"), 800)
+    out, budget = {"kind": raw["kind"], "notes": notes, "where": where}, MARK_LIMIT
+    num = lambda x: isinstance(x, (int, float)) and not isinstance(x, bool)  # noqa: E731
+    if raw["kind"] == "image":
+        strokes = []
+        for s in raw.get("strokes") or []:
+            if budget <= 0:
+                break
+            if not isinstance(s, dict) or s.get("c") not in MARK_COLOURS + ("erase",):
+                continue
+            pts = [[int(p[0]), int(p[1])] for p in s.get("p") or [] if isinstance(p, list) and len(p) == 2 and num(p[0]) and num(p[1])][:budget]
+            budget -= len(pts)
+            r = float(s["r"]) if num(s.get("r")) and 0 < s["r"] < 100_000 else 1.0
+            if pts:
+                strokes.append({"c": s["c"], "r": r, "p": pts})
+        out["strokes"] = strokes
+        size = raw.get("size")
+        if isinstance(size, list) and len(size) == 2 and all(num(x) and x > 0 for x in size):
+            out["size"] = [int(size[0]), int(size[1])]
+    else:
+        faces, meshes = {}, {}
+        for key, by in (raw.get("faces") or {}).items():
+            if not isinstance(by, dict):
+                continue
+            kept = {}
+            for c, ids in by.items():
+                if c in MARK_COLOURS and isinstance(ids, list) and budget > 0:
+                    ints = sorted({int(f) for f in ids if num(f) and f >= 0})[:budget]
+                    budget -= len(ints)
+                    if ints:
+                        kept[c] = ints
+            if kept:
+                faces[str(key)[:20]] = kept
+                meshes[str(key)[:20]] = str((raw.get("meshes") or {}).get(key) or key)[:200]
+        out["faces"], out["meshes"] = faces, meshes
+        moments = {}  # a colour painted on a moving model: the motion and the moment, in seconds
+        for c, mo in (raw.get("moments") or {}).items():
+            if c in MARK_COLOURS and isinstance(mo, dict) and isinstance(mo.get("clip"), str) and num(mo.get("t")) and num(mo.get("length")):
+                moments[c] = {"clip": mo["clip"][:200], "t": round(float(mo["t"]), 3), "length": round(float(mo["length"]), 3)}
+        if moments:
+            out["moments"] = moments
+    return out if notes or where else None
 
 
 def fresh_slot(slot):
@@ -559,6 +612,38 @@ class Studio:
         return report
 
     # ---------------------------------------------------------------- verdicts
+    def marks_picture(self, batch_id: str, cid: str) -> Path:
+        """The picture of the user's marks on one candidate, with a legend: what Claude looks at."""
+        return self.batch_dir(batch_id) / "marks" / f"{safe_id(cid, 'candidate')}.png"
+
+    def put_marks_picture(self, batch_id: str, cid: str, data: bytes) -> None:
+        """Keep the page's picture of the marks; an empty one means there are none any more."""
+        batch = self.load_batch(batch_id)
+        if batch["status"] == "processed":
+            raise StudioError("this batch is closed")
+        if cid not in [c["id"] for c in batch.get("candidates", [])]:
+            raise StudioError(f"no candidate {cid!r} in {batch_id}")
+        path = self.marks_picture(batch_id, cid)
+        if not data:
+            path.unlink(missing_ok=True)
+            return
+        if len(data) > MARK_PICTURE_MAX or not data.startswith(b"\x89PNG\r\n\x1a\n"):
+            raise StudioError("send the marks as a PNG of at most 16 MB")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_bytes(data)
+        os.replace(tmp, path)
+
+    def marks_view(self, batch_id: str, cid: str, marks: dict | None) -> dict | None:
+        """The user's marks on a candidate as Claude reads them: the picture, then each colour's note and place."""
+        if not marks:
+            return None
+        picture = self.marks_picture(batch_id, cid)
+        colours = [dict({"colour": c, "note": (marks.get("notes") or {}).get(c, ""), "where": (marks.get("where") or {}).get(c, "")},
+                        **({"moment": marks["moments"][c]} if c in (marks.get("moments") or {}) else {}))
+                   for c in MARK_COLOURS if c in (marks.get("notes") or {}) or c in (marks.get("where") or {})]
+        return {"on": marks.get("kind"), "picture": str(picture) if picture.exists() else "", "colours": colours}
+
     def save_draft(self, batch_id: str, draft: dict) -> None:
         batch = self.load_batch(batch_id)
         if batch["status"] == "processed":
@@ -586,10 +671,13 @@ class Studio:
                 if strict:
                     raise StudioError(f"the edited text of {cid} is over {EDIT_MAX // 1000} KB")
                 edited = None
-            if call or score or note or edited is not None:
+            marks = clean_marks(entry.get("marks"))
+            if call or score or note or edited is not None or marks:
                 out_c[cid] = {"call": call, "score": score, "note": note}
                 if edited is not None:
                     out_c[cid]["edited"] = edited.replace("\r\n", "\n")
+                if marks:
+                    out_c[cid]["marks"] = marks
         action = raw.get("action")
         if action not in ACTIONS[mode]:
             action = None
@@ -652,6 +740,7 @@ class Studio:
             return f"This batch takes {limit} winner{'s' if limit != 1 else ''}; {chosen} are marked."
         if action in ("another_round", "ship_and_iterate"):
             said = verdict.get("note") or any(c.get("note") or c.get("call") in ("keep", "redo")
+                                              or any((c.get("marks") or {}).get("notes", {}).values())
                                               for c in verdict["candidates"].values())
             if not said:
                 return "Another round needs a direction: write a note, or mark a Keep or a Redo."
@@ -929,6 +1018,9 @@ class Studio:
                    "files": [f["path"] for f in cand.get("files", [])]}
             if cand["id"] in edits:
                 row["edited"] = edits[cand["id"]]
+            marks = self.marks_view(batch["id"], cand["id"], entry.get("marks"))
+            if marks:
+                row["marks"] = marks
             by_call.setdefault(entry.get("call") or "unmarked", []).append(row)
         action = verdict["action"]
         me = "python tool/studio.py"
@@ -940,6 +1032,12 @@ class Studio:
                 steps.append(f"The user edited the text of {cand['id']} on the card. Their version is {edits[cand['id']]}; "
                              f"it is the one that counts (import copies it). See what they changed, in the home: "
                              f"git diff --no-index --word-diff \"{first}\" \"{edits[cand['id']]}\"")
+        marked = [c["id"] for c in batch["candidates"] if (verdict["candidates"].get(c["id"]) or {}).get("marks")]
+        if marked:
+            steps.append(f"The user marked parts of {', '.join(marked)} in colours, with a note for each colour. Before anything else, "
+                         "open each marked picture (listed with the candidate; the marks are painted on it, with a legend) and read "
+                         "each colour's note with where it is: that is what the note is about. A colour marked in a motion names the "
+                         "clip and the second; the picture shows the model posed at that moment.")
         if batch["mode"] == "question":
             if action == "answer":
                 steps.append("The user's answer is a ruling. Apply it where it belongs (spec, content, TODO).")
@@ -1010,6 +1108,14 @@ class Studio:
                 lines.append(f"### {cand['id']}: {cand.get('title', '')}{score}")
                 if entry.get("note"):
                     lines += ["", "> " + entry["note"].replace("\n", "\n> ")]
+                marks = self.marks_view(batch_id, cand["id"], entry.get("marks"))
+                if marks:
+                    pic = self.marks_picture(batch_id, cand["id"])
+                    lines += ["", "The user marked parts of it in colours"
+                              + (f"; the marks are painted on `{pic.relative_to(self.home).as_posix()}`, with a legend:" if marks["picture"] else ":")]
+                    for m in marks["colours"]:
+                        said = "> " + m["note"].replace("\n", "\n> ") if m["note"] else "(no note for this colour)"
+                        lines += [f"- **{m['colour']}**" + (f" ({m['where']})" if m["where"] else "") + ":", "", "  " + said.replace("\n", "\n  ")]
                 if cand["id"] in edits:
                     lines += ["", "The user edited this text on the card. Their version, which the next round starts from: "
                                   f"`{edits[cand['id']]}`"]

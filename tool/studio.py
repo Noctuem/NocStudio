@@ -376,14 +376,22 @@ def cmd_todo(a):
             print(f"   their answer: \"{item['his_answer']}\"")
         if item["his_note"]:
             print(f"   their note:   \"{item['his_note']}\"")
-        for name in ("winners", "keep", "redo", "reject"):
+        for name in ("winners", "keep", "redo", "reject", "unmarked"):
             for row in item[name]:
+                if name == "unmarked" and not (row.get("note") or row.get("marks")):
+                    continue
                 score = f" {row['score']}/10" if row.get("score") else ""
                 label = f" ({row['label']})" if row.get("label") else ""
                 note = f" \"{row['note']}\"" if row.get("note") else ""
                 print(f"   {name.rstrip('s'):7} {row['candidate']}{label}: {row['title']}{score}{note}")
                 if row.get("edited"):
                     print(f"           the user edited it; their version: {row['edited']}")
+                marks = row.get("marks")
+                if marks:
+                    print(f"           marked in colours; the picture of it: {marks['picture'] or '(not saved; ask them to open it again)'}")
+                    for m in marks["colours"]:
+                        said = f"\"{m['note']}\"" if m["note"] else "(no note)"
+                        print(f"             {m['colour']:7} {said}" + (f"\n                     at {m['where']}" if m["where"] else ""))
         print("   do:")
         for k, step in enumerate(item["steps"], 1):
             print(f"     {k}. {step}")

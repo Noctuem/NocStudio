@@ -169,6 +169,7 @@
     share: async () => { throw new Error('This is a sample page: nothing here can be shared'); },
     addNote: async () => { throw new Error('This is a sample page: notes are not kept here'); },
     putFile: async () => { throw new Error('This is a sample page: notes are not kept here'); },
+    putMarks: async () => {},
     editText: async () => { throw new Error('This is a sample page: edits are not kept here'); },
     note: async () => { throw new Error('This is a sample page: notes are not kept here'); },
     src: (url) => STATIC.files[url] || '',
@@ -195,6 +196,12 @@
     addNote: (text, kind, urgent) => call('POST', '/api/note', { text, kind, urgent }),
     putFile: async (id, file, name) => { // the file as it is, not JSON: any size; the header tells the server the page sent it
       const res = await fetch(rel('/api/note/' + encodeURIComponent(id) + '/file?name=' + encodeURIComponent(name || file.name)), { method: 'PUT', headers: { 'X-Studio-File': '1' }, body: file });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || ('The studio answered ' + res.status));
+      return data;
+    },
+    putMarks: async (id, cid, blob) => { // the marked picture Claude reads; nothing sent takes it away
+      const res = await fetch(rel('/api/batch/' + encodeURIComponent(id) + '/marks/' + encodeURIComponent(cid)), { method: 'PUT', headers: { 'X-Studio-File': '1' }, body: blob || new Blob([]) });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || ('The studio answered ' + res.status));
       return data;
@@ -332,7 +339,7 @@
     root.updateMatrixWorld(true);
     root.traverse((n) => {
       const pos = n.geometry && n.geometry.attributes.position;
-      if (!pos) return;
+      if (!pos || n.userData.mark) return;
       if (n.isSkinnedMesh) {
         const step = Math.max(1, Math.floor(pos.count / 1500));
         for (let i = 0; i < pos.count; i += step) box.expandByPoint(n.boneTransform(i, p.fromBufferAttribute(pos, i)).applyMatrix4(n.matrixWorld));
@@ -362,7 +369,8 @@
     const ref = refFigure(); scene.add(ref);
     const FIGURE = new THREE.Box3(new THREE.Vector3(-0.22, 0, -0.12), new THREE.Vector3(0.22, 1.8, 0.12));
     const v = { el: canvas, dirty: true, mixer: null, clips: [], action: null, w: 0, hh: 0, playing: true, rotate: false, cam: camera, target: controls.target,
-      box: new THREE.Box3(new THREE.Vector3(-0.4, 0, -0.2), new THREE.Vector3(0.4, 1.8, 0.2)), fit: { c: new THREE.Vector3(0, 0.9, 0), d: 1 } };
+      box: new THREE.Box3(new THREE.Vector3(-0.4, 0, -0.2), new THREE.Vector3(0.4, 1.8, 0.2)), fit: { c: new THREE.Vector3(0, 0.9, 0), d: 1 },
+      scene, controls, canvas, figure: ref, renderer: r, fixed: opt.clip || '' };
     const small = (box) => { const size = box.getSize(new THREE.Vector3()); return Math.max(size.x, size.y, size.z) < 0.9; };
     // what the view frames: the piece as it stands, or everything it passes through in the motion it plays
     function measure(clip) {
@@ -445,7 +453,7 @@
       if (o.ref !== undefined && ref.visible !== o.ref) { ref.visible = o.ref; if (!v.moved) place(); }
       if (o.rotate !== undefined) { v.rotate = o.rotate; controls.autoRotate = o.rotate; }
       if (o.playing !== undefined) v.playing = o.playing;
-      if (o.wire !== undefined && v.model) v.model.traverse((n) => { if (n.material) n.material.wireframe = o.wire; });
+      if (o.wire !== undefined && v.model) v.model.traverse((n) => { if (n.material && !n.userData.mark) n.material.wireframe = o.wire; });
       if (o.rate !== undefined) v.rate = o.rate;
       const want = opt.clip || o.clip;  // a motion candidate plays its own clip whatever the picker says
       if ((opt.clip || o.clip !== undefined) && v.mixer && want !== v.clipName) {
@@ -478,16 +486,23 @@
   function zoomPane(src, group) {
     const box = h('div', { class: 'zoom' });
     const img = h('img', { src, alt: '', draggable: 'false' });
-    box.append(img);
+    const layer = h('div', { class: 'marklayer' });  // marks, moved and scaled with the picture
+    box.append(img, layer);
     const t = group.t;
-    const pane = { el: box, apply };
+    const pane = { el: box, apply, img, layer, pen: null };
     group.panes.push(pane);
     function dims() { return { bw: box.clientWidth, bh: box.clientHeight, iw: img.naturalWidth, ih: img.naturalHeight }; }
     function apply() {
       const d = dims(); if (!d.bw || !d.iw) return;
       const s = Math.min(d.bw / d.iw, d.bh / d.ih) * t.z;
-      img.style.transform = 'translate(' + (d.bw / 2 - t.cx * d.iw * s) + 'px,' + (d.bh / 2 - t.cy * d.ih * s) + 'px) scale(' + s + ')';
+      img.style.transform = layer.style.transform = 'translate(' + (d.bw / 2 - t.cx * d.iw * s) + 'px,' + (d.bh / 2 - t.cy * d.ih * s) + 'px) scale(' + s + ')';
+      layer.style.width = d.iw + 'px'; layer.style.height = d.ih + 'px'; pane.scale = s;
     }
+    // where a point on the screen falls on the picture, in its own pixels
+    pane.toImage = (x, y) => {
+      const d = dims(), r = box.getBoundingClientRect(), k = cz(box), s = Math.min(d.bw / d.iw, d.bh / d.ih) * t.z;
+      return [((x - r.left) / k - (d.bw / 2 - t.cx * d.iw * s)) / s, ((y - r.top) / k - (d.bh / 2 - t.cy * d.ih * s)) / s];
+    };
     const all = () => group.panes.forEach((p) => p.apply());
     function zoomAt(px, py, factor) {
       const d = dims(); if (!d.iw) return;
@@ -502,9 +517,18 @@
     img.addEventListener('load', apply);
     box.addEventListener('wheel', (e) => { e.preventDefault(); const r = box.getBoundingClientRect(), k = cz(box); zoomAt((e.clientX - r.left) / k, (e.clientY - r.top) / k, e.deltaY < 0 ? 1.18 : 1 / 1.18); }, { passive: false });
     box.addEventListener('dblclick', (e) => { const d = dims(); const r = box.getBoundingClientRect(); const fit = Math.min(d.bw / d.iw, d.bh / d.ih), k = cz(box); zoomAt((e.clientX - r.left) / k, (e.clientY - r.top) / k, t.z > 1.01 ? 1 / t.z : Math.max(2, 1 / fit)); });
-    const pts = new Map(); let pinch = 0;
-    box.addEventListener('pointerdown', (e) => { box.setPointerCapture(e.pointerId); pts.set(e.pointerId, [e.clientX, e.clientY]); pinch = 0; });
+    const pts = new Map(); let pinch = 0, drawing = null;
+    // marking: one pointer paints; a second finger, or the right button, moves the picture as before
+    box.addEventListener('pointerdown', (e) => {
+      box.setPointerCapture(e.pointerId);
+      if (drawing !== null) { pane.pen.cancel(); drawing = null; }
+      else if (pane.pen && pane.pen.on && !pts.size && e.button === 0) { drawing = e.pointerId; pane.pen.down(e.clientX, e.clientY); return; }
+      pts.set(e.pointerId, [e.clientX, e.clientY]); pinch = 0;
+    });
+    box.addEventListener('contextmenu', (e) => { if (pane.pen && pane.pen.on) e.preventDefault(); });
     box.addEventListener('pointermove', (e) => {
+      if (pane.pen) pane.pen.hover(e.clientX, e.clientY);
+      if (e.pointerId === drawing) { pane.pen.move(e.clientX, e.clientY); return; }
       if (!pts.has(e.pointerId)) return;
       const prev = pts.get(e.pointerId); pts.set(e.pointerId, [e.clientX, e.clientY]);
       const d = dims(); if (!d.iw) return;
@@ -517,10 +541,453 @@
         pinch = dist;
       }
     });
-    const up = (e) => { pts.delete(e.pointerId); pinch = 0; };
+    const up = (e) => { if (e.pointerId === drawing) { drawing = null; pane.pen.up(); return; } pts.delete(e.pointerId); pinch = 0; };
+    box.addEventListener('pointerleave', () => { if (pane.pen) pane.pen.hover(null); });
     box.addEventListener('pointerup', up); box.addEventListener('pointercancel', up);
     if (window.ResizeObserver) { const ro = new ResizeObserver(apply); ro.observe(box); pane.destroy = () => ro.disconnect(); }
     return pane;
+  }
+
+  // ------------------------------------------------------------------ marks
+  // The user paints on a picture or on a model's faces in up to five colours, and writes a note for each colour.
+  // What Claude gets: the marks as data, a sentence per colour on where they sit, and one picture of it all.
+  const MARK = [['red', '#ff453a'], ['yellow', '#ffd60a'], ['green', '#30d158'], ['blue', '#0a84ff'], ['purple', '#bf5af2']];
+  const MARK_HEX = Object.fromEntries(MARK);
+  const BRUSH = [6, 14, 30];  // the brush's radius on the screen, in pixels: small, medium, large
+  function newInk(saved, kind) {
+    saved = saved || {};
+    const ink = { kind, notes: Object.assign({}, saved.notes || {}), strokes: (saved.strokes || []).map((s) => Object.assign({}, s)),
+      faces: {}, meshes: Object.assign({}, saved.meshes || {}), where: Object.assign({}, saved.where || {}), moments: Object.assign({}, saved.moments || {}),
+      colour: 'red', size: 1, erase: false, on: false, subs: [] };
+    for (const [key, byColour] of Object.entries(saved.faces || {})) {
+      const m = ink.faces[key] = new Map();
+      for (const [c, list] of Object.entries(byColour || {})) for (const f of list || []) m.set(f, c);
+    }
+    ink.changed = (what) => ink.subs.forEach((fn) => fn(what));
+    return ink;
+  }
+  // the colours that have something marked in them
+  function inkUsed(ink) {
+    const used = new Set();
+    if (ink.kind === 'image') { for (const s of ink.strokes) if (s.c !== 'erase') used.add(s.c); for (const c of Object.keys(ink.where)) if (!ink.where[c]) used.delete(c); }
+    else for (const m of Object.values(ink.faces)) for (const c of m.values()) used.add(c);
+    return MARK.map(([c]) => c).filter((c) => used.has(c));
+  }
+  // the marks as they are saved: plain lists, nothing the server has to work out
+  function inkData(ink) {
+    const used = inkUsed(ink);
+    if (!used.length && !Object.values(ink.notes).some((x) => x && x.trim())) return null;
+    const out = { kind: ink.kind, notes: {}, where: {} };
+    for (const c of used) { out.notes[c] = (ink.notes[c] || '').trim(); out.where[c] = ink.where[c] || ''; }
+    if (ink.kind === 'image') { out.strokes = ink.strokes; out.size = ink.imageSize || null; }
+    else {
+      out.faces = {}; out.meshes = {}; out.moments = {};
+      for (const c of used) if (ink.moments[c]) out.moments[c] = ink.moments[c];
+      for (const [key, m] of Object.entries(ink.faces)) {
+        const by = {};
+        for (const [f, c] of m) (by[c] = by[c] || []).push(f);
+        if (Object.keys(by).length) { for (const c of Object.keys(by)) by[c].sort((a, b) => a - b); out.faces[key] = by; out.meshes[key] = ink.meshes[key] || key; }
+      }
+    }
+    return out;
+  }
+  const thirds = (f, words) => words[f < 1 / 3 ? 0 : f > 2 / 3 ? 2 : 1];
+  const pct = (x) => (x < 0.01 ? 'under 1%' : 'about ' + Math.round(x * 100) + '%');
+
+  // painting on a picture shown in a zoom pane
+  function markImage(pane, ink) {
+    const layers = {};
+    let iw = 0, ih = 0, q = 1, stroke = null;
+    const brush = h('div', { class: 'brush', hidden: true });
+    pane.el.append(brush);
+    const ctxOf = (c) => layers[c].getContext('2d');
+    function seg(ctx, s, a, b) {
+      ctx.lineCap = ctx.lineJoin = 'round'; ctx.lineWidth = 2 * s.r * q; ctx.strokeStyle = ctx.fillStyle = s.c === 'erase' ? '#000' : MARK_HEX[s.c];
+      ctx.globalCompositeOperation = s.c === 'erase' ? 'destination-out' : 'source-over';
+      ctx.beginPath(); ctx.moveTo(a[0] * q, a[1] * q); ctx.lineTo(b[0] * q, b[1] * q); ctx.stroke();
+      ctx.beginPath(); ctx.arc(b[0] * q, b[1] * q, s.r * q, 0, 7); ctx.fill();
+    }
+    function paint(s, from) {
+      const targets = s.c === 'erase' ? MARK.map(([c]) => c) : [s.c];
+      for (const c of targets) { const ctx = ctxOf(c); for (let i = Math.max(0, from); i < s.p.length; i++) seg(ctx, s, s.p[Math.max(0, i - 1)], s.p[i]); }
+    }
+    function redraw() { for (const [c] of MARK) ctxOf(c).clearRect(0, 0, layers[c].width, layers[c].height); for (const s of ink.strokes) paint(s, 0); }
+    // where each colour sits, read back from what is painted
+    function measure() {
+      const n = 200, k = n / Math.max(iw, ih), w = Math.max(1, Math.round(iw * k)), hh = Math.max(1, Math.round(ih * k));
+      const small = h('canvas', { width: w, height: hh }).getContext('2d', { willReadFrequently: true });
+      for (const [c] of MARK) {
+        small.clearRect(0, 0, w, hh); small.drawImage(layers[c], 0, 0, w, hh);
+        const px = small.getImageData(0, 0, w, hh).data;
+        let x0 = w, y0 = hh, x1 = -1, y1 = -1, count = 0;
+        for (let y = 0; y < hh; y++) for (let x = 0; x < w; x++) if (px[(y * w + x) * 4 + 3] > 40) { count++; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+        if (!count) { if (ink.strokes.some((s) => s.c === c)) ink.where[c] = ''; else delete ink.where[c]; continue; }
+        const X0 = Math.round(x0 / k), X1 = Math.round((x1 + 1) / k), Y0 = Math.round(y0 / k), Y1 = Math.round((y1 + 1) / k);
+        const fx = (X0 + X1) / 2 / iw, fy = (Y0 + Y1) / 2 / ih;
+        const pos = fx > 1 / 3 && fx < 2 / 3 && fy > 1 / 3 && fy < 2 / 3 ? 'the middle' : [thirds(fy, ['upper', '', 'lower']), thirds(fx, ['left', 'centre', 'right'])].filter(Boolean).join(' ');
+        ink.where[c] = 'x ' + X0 + '–' + X1 + ', y ' + Y0 + '–' + Y1 + ' px of the ' + iw + ' × ' + ih + ' picture (' + pos + ', from its top left corner); ' + pct(count / (w * hh)) + ' of the picture';
+      }
+    }
+    function start() {
+      iw = pane.img.naturalWidth; ih = pane.img.naturalHeight;
+      if (!iw) return;
+      q = Math.min(1, 2048 / Math.max(iw, ih)); ink.imageSize = [iw, ih];
+      for (const [c] of MARK) { layers[c] = h('canvas', { width: Math.round(iw * q), height: Math.round(ih * q), class: 'ink' }); pane.layer.append(layers[c]); }
+      redraw(); if (ink.strokes.length) measure();
+    }
+    if (pane.img.complete && pane.img.naturalWidth) start(); else pane.img.addEventListener('load', start, { once: true });
+    pane.pen = {
+      get on() { return ink.on; },
+      down(x, y) { if (!iw) return; const p = pane.toImage(x, y); stroke = { c: ink.erase ? 'erase' : ink.colour, r: Math.max(0.5, Math.round(BRUSH[ink.size] / (pane.scale || 1) * 10) / 10), p: [p.map(Math.round)] }; ink.strokes.push(stroke); paint(stroke, 0); },
+      move(x, y) { if (!stroke) return; const p = pane.toImage(x, y).map(Math.round), last = stroke.p[stroke.p.length - 1]; if (Math.hypot(p[0] - last[0], p[1] - last[1]) < stroke.r / 3) return; stroke.p.push(p); paint(stroke, stroke.p.length - 1); },
+      up() { if (!stroke) return; stroke = null; measure(); ink.changed('marks'); },
+      cancel() { if (!stroke) return; ink.strokes.pop(); stroke = null; redraw(); },
+      hover(x, y) {
+        if (x === null || !ink.on) { brush.hidden = true; return; }
+        const r = pane.el.getBoundingClientRect(), k = cz(pane.el), d = 2 * BRUSH[ink.size];
+        Object.assign(brush.style, { left: ((x - r.left) / k - d / 2) + 'px', top: ((y - r.top) / k - d / 2) + 'px', width: d + 'px', height: d + 'px' });
+        brush.hidden = false; brush.classList.toggle('erase', ink.erase); brush.style.borderColor = ink.erase ? '' : MARK_HEX[ink.colour];
+      },
+    };
+    const api = {
+      undo() { if (!ink.strokes.length) return; ink.strokes.pop(); redraw(); measure(); ink.changed('marks'); },
+      clear() { ink.strokes = []; redraw(); measure(); ink.changed('marks'); },
+      mode(on) { pane.el.classList.toggle('pen', on); if (!on) brush.hidden = true; },
+      // the picture Claude reads: the image with the marks over it, at up to 1600 px across
+      async picture() {
+        if (!iw) return null;
+        const k = Math.min(1, 1600 / Math.max(iw, ih)), w = Math.round(iw * k), hh = Math.round(ih * k);
+        const out = h('canvas', { width: w, height: hh }), ctx = out.getContext('2d');
+        ctx.fillStyle = '#1b1b1f'; ctx.fillRect(0, 0, w, hh);
+        try { ctx.drawImage(pane.img, 0, 0, w, hh); } catch (e) { /* drawn without it */ }
+        ctx.globalAlpha = 0.5; for (const [c] of MARK) ctx.drawImage(layers[c], 0, 0, w, hh); ctx.globalAlpha = 1;
+        return withLegend(out, ink);
+      },
+    };
+    return api;
+  }
+
+  // painting faces of a model in a 3D view, still or moving. On a motion the brush stops it, the bar scrubs to the
+  // frame, and each colour keeps the clip and the moment it was painted at: "the elbow folds wrong here".
+  function markModel(v, ink) {
+    const meshes = [], overlays = new Map(), V = new THREE.Vector3(), M = new THREE.Matrix4();
+    let ready = false, painting = false, dirty = new Set(), raf = 0, poseKey = null;
+    const brush = h('div', { class: 'brush', hidden: true });
+    const scrub = h('div', { class: 'grp scrub', hidden: true });
+    const r3 = (x) => Math.round(x * 1000) / 1000;
+    function start() {
+      let key = 0;
+      v.model.traverse((n) => {
+        if (!n.isMesh || n.userData.mark || !n.geometry || !n.geometry.attributes.position) return;
+        const k = String(key++), g = n.geometry, pos = g.attributes.position, idx = g.index;
+        const count = idx ? idx.count / 3 : pos.count / 3;
+        const mats = Array.isArray(n.material) ? n.material : [n.material];
+        meshes.push({ key: k, mesh: n, count, vi: (f, j) => (idx ? idx.getX(3 * f + j) : 3 * f + j),
+          PW: new Float32Array(pos.count * 3), C: new Float32Array(count * 3), N: new Float32Array(count * 3), A: new Float32Array(count),
+          both: mats.some((m) => m && m.side === THREE.DoubleSide), name: n.name || (n.parent && n.parent.name) || 'mesh ' + k });
+        ink.meshes[k] = meshes[meshes.length - 1].name;
+        if (!ink.faces[k]) ink.faces[k] = new Map();
+        dirty.add(k);
+      });
+      ready = true; buildScrub(); rebuild(); measure();
+    }
+    const moving = () => !!(v.action && v.clips.length);
+    // every face where it stands now, in the scene's space: a moving mesh is posed again for each new moment
+    function pose() {
+      const key = moving() ? v.clipName + '@' + v.action.time.toFixed(4) : 'still';
+      if (key === poseKey && !(moving() && v.playing)) return;
+      poseKey = key;
+      v.model.updateMatrixWorld(true);
+      const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), e1 = new THREE.Vector3(), e2 = new THREE.Vector3();
+      for (const m of meshes) {
+        const pos = m.mesh.geometry.attributes.position, mw = m.mesh.matrixWorld;
+        for (let i = 0; i < pos.count; i++) {
+          V.fromBufferAttribute(pos, i); if (m.mesh.isSkinnedMesh) m.mesh.boneTransform(i, V); V.applyMatrix4(mw);
+          m.PW[3 * i] = V.x; m.PW[3 * i + 1] = V.y; m.PW[3 * i + 2] = V.z;
+        }
+        for (let f = 0; f < m.count; f++) {
+          a.fromArray(m.PW, 3 * m.vi(f, 0)); b.fromArray(m.PW, 3 * m.vi(f, 1)); c.fromArray(m.PW, 3 * m.vi(f, 2));
+          m.C[3 * f] = (a.x + b.x + c.x) / 3; m.C[3 * f + 1] = (a.y + b.y + c.y) / 3; m.C[3 * f + 2] = (a.z + b.z + c.z) / 3;
+          e1.subVectors(b, a); e2.subVectors(c, a); e1.cross(e2); m.A[f] = e1.length() / 2; e1.normalize();
+          m.N[3 * f] = e1.x; m.N[3 * f + 1] = e1.y; m.N[3 * f + 2] = e1.z;
+        }
+      }
+    }
+    // the moment shown now, and a way to show another and come back
+    const now = () => (moving() ? { clip: v.clipName, t: r3(v.action.time), length: r3(v.action.getClip().duration) } : null);
+    function show(mo) {
+      if (!mo || !v.mixer) return;
+      if (mo.clip !== v.clipName && v.clips.some((c) => c.name === mo.clip)) v.set({ clip: mo.clip });
+      if (v.action) { v.action.time = Math.min(mo.t, v.action.getClip().duration); v.mixer.update(0); }
+      v.dirty = true; syncScrub();
+    }
+    function at(mo, fn) {  // do fn with the model in the pose of moment mo, then put it back
+      const was = now(), playing = v.playing;
+      if (mo) { v.set({ playing: false }); show(mo); }
+      try { return fn(); } finally { if (mo && was) { show(was); v.set({ playing }); } else if (mo && !was && v.action) v.set({ clip: '' }); poseKey = null; }
+    }
+    // one see-through mesh per colour over each mesh, holding only the faces painted that colour; on a skinned
+    // mesh it is skinned too, so the marks move with the motion
+    function rebuild() {
+      raf = 0;
+      for (const k of dirty) {
+        const m = meshes.find((x) => x.key === k); if (!m) continue;
+        const lists = {};
+        for (const [f, c] of ink.faces[k]) (lists[c] = lists[c] || []).push(f);
+        for (const [c, hex] of MARK) {
+          const id = k + ':' + c, list = lists[c] || [];
+          let o = overlays.get(id);
+          if (!list.length) { if (o) o.visible = false; continue; }
+          if (!o) {
+            const g = new THREE.BufferGeometry(), src = m.mesh.geometry;
+            g.setAttribute('position', src.attributes.position);
+            if (m.mesh.isSkinnedMesh) { g.setAttribute('skinIndex', src.attributes.skinIndex); g.setAttribute('skinWeight', src.attributes.skinWeight); }
+            const mat = new THREE.MeshBasicMaterial({ color: hex, transparent: true, opacity: 0.8, depthWrite: false, side: m.both ? THREE.DoubleSide : THREE.FrontSide,
+              polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+            o = m.mesh.isSkinnedMesh ? new THREE.SkinnedMesh(g, mat) : new THREE.Mesh(g, mat);
+            if (m.mesh.isSkinnedMesh) o.bind(m.mesh.skeleton, m.mesh.bindMatrix);
+            o.userData.mark = true; o.frustumCulled = false; o.renderOrder = 2; o.raycast = () => {};
+            m.mesh.add(o); overlays.set(id, o);
+          }
+          const ix = new Uint32Array(list.length * 3);
+          list.forEach((f, i) => { ix[3 * i] = m.vi(f, 0); ix[3 * i + 1] = m.vi(f, 1); ix[3 * i + 2] = m.vi(f, 2); });
+          o.geometry.setIndex(new THREE.BufferAttribute(ix, 1)); o.visible = true;
+        }
+      }
+      dirty = new Set(); v.dirty = true;
+    }
+    // where each colour sits, measured in the pose it was painted in: Y is up, the model's front faces +Z
+    function measure() {
+      ink.where = {};
+      const used = new Set();
+      for (const m of meshes) for (const c of ink.faces[m.key].values()) used.add(c);
+      for (const c of used) at(ink.moments[c], () => {
+        pose();
+        const box = v.box, size = box.getSize(new THREE.Vector3());
+        const s = { n: 0, area: 0, total: 0, sum: new THREE.Vector3(), box: new THREE.Box3(), names: new Set() };
+        for (const m of meshes) {
+          for (let f = 0; f < m.count; f++) s.total += m.A[f];
+          for (const [f, col] of ink.faces[m.key]) {
+            if (col !== c) continue;
+            V.fromArray(m.C, 3 * f); s.n++; s.area += m.A[f]; s.sum.addScaledVector(V, m.A[f] || 1e-9); s.box.expandByPoint(V); s.names.add(m.name);
+          }
+        }
+        const mid = s.sum.divideScalar(s.area || 1e-9), span = s.box.getSize(new THREE.Vector3()), f2 = (x) => x.toFixed(2);
+        const fx = size.x ? (mid.x - box.min.x) / size.x : 0.5, fy = size.y ? (mid.y - box.min.y) / size.y : 0.5, fz = size.z ? (mid.z - box.min.z) / size.z : 0.5;
+        const place = [thirds(fy, ['low', 'at mid height', 'high']), thirds(fz, ['toward the back', '', 'toward the front']),
+          thirds(fx, ['on the left as seen from the front', 'centred left to right', 'on the right as seen from the front'])].filter(Boolean).join(', ');
+        const mo = ink.moments[c];
+        ink.where[c] = (mo ? 'in the motion "' + mo.clip + '" at ' + mo.t.toFixed(2) + ' s of ' + mo.length.toFixed(2) + ' s (' + Math.round(100 * mo.t / (mo.length || 1)) + '% through); ' : '') +
+          s.n + ' face' + (s.n === 1 ? '' : 's') + ' on ' + [...s.names].map((x) => '"' + x + '"').join(', ') + '; ' + place +
+          '; centre at (' + f2(mid.x) + ', ' + f2(mid.y) + ', ' + f2(mid.z) + ') m in the model\'s space (Y up, its front faces +Z)' + (mo ? ', in that pose' : '') +
+          '; spans ' + f2(span.x) + ' × ' + f2(span.y) + ' × ' + f2(span.z) + ' m; ' + pct(s.area / (s.total || 1)) + ' of its surface';
+      });
+    }
+    // the faces under the brush: the nearest face under it sets the depth, and only faces that face you count
+    function brushAt(e) {
+      pose();
+      const r = v.canvas.getBoundingClientRect(), px = e.clientX - r.left, py = e.clientY - r.top, rad = BRUSH[ink.size] * (r.width / (v.canvas.clientWidth || r.width));
+      M.multiplyMatrices(v.cam.projectionMatrix, v.cam.matrixWorldInverse);
+      const q = M.elements, eye = v.cam.position, hits = [];
+      let near = null;
+      for (const m of meshes) {
+        for (let f = 0; f < m.count; f++) {
+          const x = m.C[3 * f], y = m.C[3 * f + 1], z = m.C[3 * f + 2];
+          const w = q[3] * x + q[7] * y + q[11] * z + q[15]; if (w <= 0) continue;
+          const sx = ((q[0] * x + q[4] * y + q[8] * z + q[12]) / w * 0.5 + 0.5) * r.width, sy = (0.5 - (q[1] * x + q[5] * y + q[9] * z + q[13]) / w * 0.5) * r.height;
+          if ((sx - px) * (sx - px) + (sy - py) * (sy - py) > rad * rad) continue;
+          if (!m.both && m.N[3 * f] * (x - eye.x) + m.N[3 * f + 1] * (y - eye.y) + m.N[3 * f + 2] * (z - eye.z) > 0) continue;
+          const d = Math.hypot(x - eye.x, y - eye.y, z - eye.z);
+          hits.push([m, f, d]); if (!near || d < near[2]) near = [m, f, d];
+        }
+      }
+      if (!near) return;
+      const R = rad * 2 * near[2] * Math.tan(THREE.MathUtils.degToRad(v.cam.fov) / 2) / (r.height || 1);
+      const nx = near[0].C[3 * near[1]], ny = near[0].C[3 * near[1] + 1], nz = near[0].C[3 * near[1] + 2], mo = now();
+      for (const [m, f] of hits) {
+        if (Math.hypot(m.C[3 * f] - nx, m.C[3 * f + 1] - ny, m.C[3 * f + 2] - nz) > Math.max(R, 1e-6)) continue;  // behind what you are painting
+        const map = ink.faces[m.key];
+        if (ink.erase) { if (map.delete(f)) dirty.add(m.key); }
+        else if (map.get(f) !== ink.colour) { map.set(f, ink.colour); dirty.add(m.key); }
+      }
+      if (!ink.erase) { if (mo) ink.moments[ink.colour] = mo; else delete ink.moments[ink.colour]; }
+      if (dirty.size && !raf) raf = requestAnimationFrame(rebuild);
+    }
+    // the bar under the tools for a model that moves: which motion, play or hold, and the frame
+    let rng = null, label = null, pick = null, play = null;
+    function buildScrub() {
+      if (!v.clips.length) return;
+      const fixed = !!v.fixed || v.clips.length === 1;  // a motion candidate plays its own clip only
+      pick = fixed ? null : h('select', { 'aria-label': 'Motion to mark', onchange: () => { v.set({ clip: pick.value, playing: false }); poseKey = null; syncScrub(); } },
+        h('option', { value: '' }, 'Still'), v.clips.map((c) => h('option', { value: c.name }, c.name)));
+      play = h('button', { class: 'btn small', type: 'button', onclick: () => { if (!v.action) return; v.set({ playing: !v.playing }); syncScrub(); } }, 'Play');
+      const step = (k) => h('button', { class: 'btn small', type: 'button', title: k < 0 ? 'A frame back' : 'A frame on', onclick: () => {
+        if (!v.action) return; v.set({ playing: false }); const d = v.action.getClip().duration;
+        v.action.time = Math.min(d, Math.max(0, v.action.time + k / 30)); v.mixer.update(0); v.dirty = true; syncScrub(); } }, k < 0 ? '◀' : '▶');
+      rng = h('input', { type: 'range', min: 0, max: 1, step: 0.001, value: 0, 'aria-label': 'Moment in the motion', oninput: () => {
+        if (!v.action) return; v.set({ playing: false }); v.action.time = +rng.value * v.action.getClip().duration; v.mixer.update(0); v.dirty = true; syncScrub(); } });
+      label = h('span', { class: 'mono t' });
+      scrub.replaceChildren(h('span', { class: 'hint' }, 'Motion'), pick, play, step(-1), rng, step(1), label);
+      scrub.hidden = false; syncScrub();
+      (function tick() { if (!scrub.isConnected && ready && tickN++ > 50) return; if (v.playing) syncScrub(); requestAnimationFrame(tick); })();
+    }
+    let tickN = 0;
+    function syncScrub() {
+      if (!rng) return;
+      const on = moving();
+      if (pick) pick.value = v.clipName || '';
+      rng.disabled = play.disabled = !on;
+      play.textContent = on && v.playing ? 'Hold' : 'Play';
+      const d = on ? v.action.getClip().duration : 0;
+      rng.value = on && d ? String(v.action.time / d) : '0';
+      label.textContent = on ? v.action.time.toFixed(2) + ' / ' + d.toFixed(2) + ' s' : 'rest pose';
+    }
+    // the brush takes the left button and one finger; the right button turns the model, the wheel zooms
+    const down = (e) => {
+      if (!ink.on || !ready || e.button !== 0 || painting) return;
+      e.stopImmediatePropagation(); e.preventDefault();
+      if (moving() && v.playing) { v.set({ playing: false }); syncScrub(); }  // a moving model is marked on a held frame
+      v.canvas.setPointerCapture(e.pointerId); painting = e.pointerId; v.moved = true; brushAt(e);
+    };
+    const move = (e) => {
+      if (ink.on) hover(e);
+      if (e.pointerId !== painting) return;
+      e.stopImmediatePropagation(); brushAt(e);
+    };
+    const up = (e) => { if (e.pointerId !== painting) return; painting = false; e.stopImmediatePropagation(); if (dirty.size) rebuild(); measure(); ink.changed('marks'); };
+    function hover(e) {
+      const host = v.canvas.parentElement; if (!host) return;
+      if (!brush.isConnected) { host.style.position = host.style.position || 'relative'; host.append(brush); }
+      if (!e) { brush.hidden = true; return; }
+      const r = host.getBoundingClientRect(), k = cz(host), d = 2 * BRUSH[ink.size];
+      Object.assign(brush.style, { left: ((e.clientX - r.left) / k - d / 2) + 'px', top: ((e.clientY - r.top) / k - d / 2) + 'px', width: d + 'px', height: d + 'px' });
+      brush.hidden = false; brush.classList.toggle('erase', ink.erase); brush.style.borderColor = ink.erase ? '' : MARK_HEX[ink.colour];
+    }
+    v.canvas.addEventListener('pointerdown', down, { capture: true });
+    v.canvas.addEventListener('pointermove', move, { capture: true });
+    v.canvas.addEventListener('pointerup', up, { capture: true });
+    v.canvas.addEventListener('pointercancel', up, { capture: true });
+    v.canvas.addEventListener('pointerleave', () => { brush.hidden = true; });
+    v.canvas.addEventListener('contextmenu', (e) => { if (ink.on) e.preventDefault(); });
+    let tries = 0;
+    (function wait() { if (v.model) start(); else if (tries++ < 300) setTimeout(wait, 100); })();  // the model is still loading
+    // the picture Claude reads. A still model: the user's view, then front, right, back, left and top. Marks made in a
+    // motion: a row for each moment, posed as it was then, with the colours painted at it named on the row
+    function shots() {
+      const used = inkUsed(ink), moments = [];
+      for (const c of used) {
+        const mo = ink.moments[c] || null, same = moments.find((x) => (x.mo && mo) ? x.mo.clip === mo.clip && Math.abs(x.mo.t - mo.t) < 0.0005 : !x.mo && !mo);
+        if (same) same.colours.push(c); else moments.push({ mo, colours: [c] });
+      }
+      if (!moments.some((x) => x.mo)) return [{ mo: null, label: '', views: [['Your view', null], ['Front', [0, 0, 1]], ['Right side', [1, 0, 0]], ['Back', [0, 0, -1]], ['Left side', [-1, 0, 0]], ['Top', [0, 1, 0]]], cols: 3 }];
+      return moments.slice(0, 5).map((x) => ({ mo: x.mo, cols: 4, label: x.colours.join(', ') + (x.mo ? ' · "' + x.mo.clip + '" at ' + x.mo.t.toFixed(2) + ' s of ' + x.mo.length.toFixed(2) + ' s' : ' · rest pose'),
+        views: [['Your view', null], ['Front', [0, 0, 1]], ['Right side', [1, 0, 0]], ['Back', [0, 0, -1]]] }));
+    }
+    return {
+      scrub,
+      undo() {},
+      clear() { for (const m of meshes) { ink.faces[m.key].clear(); dirty.add(m.key); } ink.moments = {}; rebuild(); measure(); ink.changed('marks'); },
+      mode(on) {
+        v.canvas.classList.toggle('pen', on); if (!on) brush.hidden = true;
+        v.controls.mouseButtons.RIGHT = on ? THREE.MOUSE.ROTATE : THREE.MOUSE.PAN;
+        v.set({ rotate: false });
+      },
+      goto(mo) { if (!mo) return; v.set({ playing: false }); show(mo); poseKey = null; },
+      async picture() {
+        if (!ready) return null;
+        const rows = shots(), T = rows[0].cols === 3 ? 400 : 300, band = rows[0].label ? 30 : 0;
+        const perRow = rows[0].cols === 3 ? 2 : 1, H = rows.length * perRow * T + rows.length * band;
+        const r = v.renderer, out = h('canvas', { width: T * rows[0].cols, height: H }), ctx = out.getContext('2d');
+        ctx.fillStyle = '#1b1b1f'; ctx.fillRect(0, 0, out.width, out.height);
+        const cam = new THREE.PerspectiveCamera(32, 1, 0.01, 1000), figure = v.figure.visible;
+        r.setSize(T, T, false);
+        let y0 = 0;
+        for (const row of rows) {
+          at(row.mo, () => {
+            v.model.updateMatrixWorld(true);
+            const box = row.mo ? bounds3(v.model) : v.box, c = box.getCenter(new THREE.Vector3()), rad = box.getSize(new THREE.Vector3()).length() / 2 || 1;
+            const d = rad / Math.sin(THREE.MathUtils.degToRad(16)) * 1.02;
+            if (band) { ctx.fillStyle = '#26262c'; ctx.fillRect(0, y0, out.width, band); ctx.fillStyle = '#fff'; ctx.font = '600 15px system-ui, sans-serif'; ctx.fillText(row.label, 10, y0 + 20); }
+            row.views.forEach(([name, dir], i) => {
+              v.figure.visible = !dir && figure;
+              if (dir) { cam.up.set(0, dir[1] ? 0 : 1, dir[1] ? -1 : 0); cam.position.set(c.x + dir[0] * d, c.y + dir[1] * d, c.z + dir[2] * d); cam.near = d / 100; cam.far = d * 100; cam.lookAt(c); cam.updateProjectionMatrix(); r.render(v.scene, cam); }
+              else { const own = v.cam.clone(); own.aspect = 1; own.updateProjectionMatrix(); r.render(v.scene, own); }
+              const x = (i % row.cols) * T, y = y0 + band + Math.floor(i / row.cols) * T;
+              ctx.drawImage(r.domElement, x, y, T, T);
+              ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(x, y, 110, 24); ctx.fillStyle = '#fff'; ctx.font = '600 13px system-ui, sans-serif'; ctx.fillText(name, x + 8, y + 17);
+              ctx.strokeStyle = '#333'; ctx.strokeRect(x + 0.5, y + 0.5, T - 1, T - 1);
+            });
+            y0 += band + perRow * T;
+          });
+        }
+        v.figure.visible = figure; v.dirty = true;  // the next frame draws the view at its own size again
+        return withLegend(out, ink);
+      },
+    };
+  }
+
+  // under a marked picture: each colour, its note, and where it is; so the picture reads on its own
+  function withLegend(top, ink) {
+    const used = inkUsed(ink), W = Math.max(top.width, 800), pad = 14, line = 20;
+    const meas = h('canvas').getContext('2d'); meas.font = '15px system-ui, sans-serif';
+    const wrap = (text, width) => { const out = []; let cur = ''; for (const w of String(text).split(/\s+/)) { const t2 = cur ? cur + ' ' + w : w; if (meas.measureText(t2).width > width && cur) { out.push(cur); cur = w; } else cur = t2; } if (cur) out.push(cur); return out.length ? out : ['']; };
+    const rows = used.map((c) => ({ c, lines: wrap(ink.notes[c] && ink.notes[c].trim() ? '“' + ink.notes[c].trim() + '”' : '(no note for this colour)', W - 2 * pad - 110) }));
+    const legendH = rows.length ? pad + rows.reduce((n, r) => n + r.lines.length * line + 8, 0) + pad : 0;
+    const out = h('canvas', { width: W, height: top.height + legendH }), ctx = out.getContext('2d');
+    ctx.fillStyle = '#111114'; ctx.fillRect(0, 0, out.width, out.height);
+    ctx.drawImage(top, Math.round((W - top.width) / 2), 0);
+    let y = top.height + pad;
+    for (const r of rows) {
+      ctx.fillStyle = MARK_HEX[r.c]; ctx.fillRect(pad, y + 3, 16, 16);
+      ctx.fillStyle = '#fff'; ctx.font = '600 15px system-ui, sans-serif'; ctx.fillText(r.c, pad + 24, y + 16);
+      ctx.font = '15px system-ui, sans-serif'; ctx.fillStyle = '#e6e6ea';
+      r.lines.forEach((l, i) => ctx.fillText(l, pad + 110, y + 16 + i * line));
+      y += r.lines.length * line + 8;
+    }
+    return new Promise((ok) => out.toBlob((b) => ok(b), 'image/png'));
+  }
+
+  // the tools: mark on or off, a colour, the brush, rub out, undo, clear; and a note for each colour used
+  function markTools(ink, live) {
+    const marker = { undo: () => live().undo(), clear: () => live().clear(), mode: (on) => live().mode(on) };
+    const swatches = MARK.map(([c, hex]) => h('button', { class: 'swatch', type: 'button', title: c, 'aria-label': 'Mark in ' + c, style: '--sw:' + hex,
+      onclick: () => { ink.colour = c; ink.erase = false; if (!ink.on) toggle(true); draw(); } }));
+    const sizes = ['S', 'M', 'L'].map((label, i) => h('button', { class: 'btn small', type: 'button', title: ['Small', 'Medium', 'Large'][i] + ' brush', onclick: () => { ink.size = i; draw(); } }, label));
+    const pen = h('button', { class: 'btn small', type: 'button', title: 'Paint on it. Right-drag turns or moves it; the wheel zooms.', onclick: () => toggle(!ink.on) }, 'Mark');
+    const rub = h('button', { class: 'btn small', type: 'button', onclick: () => { ink.erase = !ink.erase; if (!ink.on) toggle(true); draw(); } }, 'Rub out');
+    const undo = ink.kind === 'image' ? h('button', { class: 'btn small', type: 'button', onclick: () => marker.undo() }, 'Undo') : null;
+    const clear = h('button', { class: 'btn small', type: 'button', onclick: () => { if (inkUsed(ink).length) marker.clear(); } }, 'Clear all');
+    function toggle(on) { ink.on = on; marker.mode(on); draw(); }
+    function draw() {
+      pen.classList.toggle('on', ink.on); pen.setAttribute('aria-pressed', String(ink.on));
+      swatches.forEach((b, i) => { const on = ink.on && !ink.erase && MARK[i][0] === ink.colour; b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); });
+      sizes.forEach((b, i) => b.classList.toggle('on', i === ink.size)); rub.classList.toggle('on', ink.on && ink.erase);
+    }
+    draw();
+    return h('div', { class: 'grp marktools' }, pen, h('span', { class: 'swatches' }, swatches), h('span', { class: 'sizes' }, sizes), rub, undo, clear, live().scrub || null);
+  }
+  function markNotes(ink, editableNow, goto) {
+    const box = h('div', { class: 'marknotes' }), fields = {};
+    function draw() {
+      const used = inkUsed(ink);
+      for (const c of Object.keys(fields)) if (!used.includes(c)) { fields[c].row.remove(); delete fields[c]; }
+      used.forEach((c, i) => {
+        if (!fields[c]) {
+          const t = h('textarea', { class: 'field', rows: 1, placeholder: 'What the ' + c + ' marks are about', 'aria-label': 'Note for the ' + c + ' marks', value: ink.notes[c] || '',
+            oninput: () => { ink.notes[c] = t.value; ink.changed('notes'); } });
+          t.disabled = !editableNow();
+          const when = h('button', { class: 'btn small moment', type: 'button', title: 'Show the model at this moment', onclick: (e) => { e.preventDefault(); if (goto) goto(ink.moments[c]); } });
+          fields[c] = { row: h('div', { class: 'marknote', style: '--sw:' + MARK_HEX[c] }, h('span', { class: 'sw' }), t, when), t, when };
+        }
+        const mo = ink.moments && ink.moments[c];
+        fields[c].when.hidden = !mo; if (mo) fields[c].when.textContent = mo.clip + ' ' + mo.t.toFixed(2) + ' s';
+        box.insertBefore(fields[c].row, box.children[i] || null);
+      });
+      box.hidden = !used.length;
+    }
+    ink.subs.push((what) => { if (what === 'marks') draw(); });
+    draw();
+    return box;
   }
 
   // -------------------------------------------------------------- sound view
@@ -1102,7 +1569,7 @@
         v.el.classList.add('tall'); stage.append(v.el);
         return h('article', { class: 'tile wide' }, h('div', { class: 'thead' }, h('h3', {}, f.label), sel,
           f.clip ? [tog('Play', 'playing'), rateButtons(() => v.set({ rate: S.opts.rate }))] : null,
-          tog('Turntable', 'rotate'), f.clip ? null : tog('Wireframe', 'wire'), tog('1.8 m figure', 'ref')), stage);
+          tog('Turntable', 'rotate'), f.clip ? null : tog('Wireframe', 'wire'), tog('1.8 m figure', 'ref'), STATIC ? null : markButton(f)), stage);
       }
       if (f.kind === 'audio') {
         const p = audioPlayer(f.url, f.label); S.cleanup.push(() => p.destroy());
@@ -1117,8 +1584,10 @@
         if (mine) return h('article', { class: 'tile' }, stage);
       }
       else stage.append(h('img', { class: 'fit', src: f.url, alt: f.label, loading: 'lazy', onclick: (e) => shot(e.target.src) }));
-      return h('article', { class: 'tile' }, stage, h('div', { class: 'thead' }, h('span', { class: 'mono muted', style: 'overflow-wrap:anywhere' }, f.label)));
+      return h('article', { class: 'tile' }, stage, h('div', { class: 'thead' }, h('span', { class: 'mono muted grow', style: 'overflow-wrap:anywhere' }, f.label),
+        (f.kind === 'image' || f.kind === 'texture') && !STATIC ? markButton(f) : null));
     };
+    function markButton(f) { return h('button', { class: 'btn small', type: 'button', title: 'Mark parts of it in colours, with a note for each, and send it to Claude', onclick: () => markOver(f, s) }, 'Mark'); }
     const mo = motionOf(s.motion);
     if (mo) main.append(h('section', {}, h('h2', {}, 'The motion, looping in place'),
       h('p', { class: 'muted', style: 'max-width:80ch' }, 'Baked from the project\'s own drawing of it' + (mo.seconds ? ', ' + mo.seconds.toFixed(2) + ' s a loop' : '') + '. The light here is the page\'s, not the hall\'s.'),
@@ -1132,7 +1601,7 @@
         panel ? panel.el : null,
         h('div', { class: 'grid', style: '--tile:' + (wide ? 760 : rows[0].kind === 'audio' ? 380 : 420) + 'px' }, rows.map(show))));
     }
-    if (!files.length && !mo) main.append(h('div', { class: 'empty' }, s.status === 'needed' ? 'Nothing exists for this yet.' : 'This has no file you can open here: it lives in the project as numbers or motion data' + (s.kind === 'in_app' ? ', and is judged in the game.' : '.')));
+    if (!files.length && !mo) main.append(h('div', { class: 'empty' }, s.status === 'needed' ? 'Nothing exists for this yet.' : 'This has no file you can open here: it lives in the project as numbers or motion data' + (s.kind === 'in_app' ? ', and is judged in the running project.' : '.')));
     const past = (s.history || []).slice(0, -1).reverse();
     if (past.length) main.append(h('section', {}, h('h2', {}, 'Earlier versions'), h('div', { class: 'rows' }, past.map((v) => h('div', { class: 'row' },
       h('span', { class: 'mono muted' }, 'v' + v.version), h('div', { class: 'grow' }, v.title || v.candidate || ''), h('span', { class: 'sub' }, v.date ? String(v.date).slice(0, 10) : ''))))));
@@ -1310,7 +1779,8 @@
     if (!v.action) return b.mode === 'question' ? 'Choose an option or write your own answer.' : 'Mark the candidates, then choose what happens next.';
     if (b.mode === 'question') return (v.action === 'answer' && !chosen && !v.answer) ? 'Pick an option or write your own answer.' : '';
     if ((v.action === 'ship' || v.action === 'ship_and_iterate') && !chosen) return 'Nothing is marked to ship. Mark a winner, or choose another round.';
-    if ((v.action === 'another_round' || v.action === 'ship_and_iterate') && !v.note && !calls.some((c) => c.note || c.call === 'keep' || c.call === 'redo'))
+    const marked = (c) => c.marks && Object.values(c.marks.notes || {}).some((x) => x && x.trim());
+    if ((v.action === 'another_round' || v.action === 'ship_and_iterate') && !v.note && !calls.some((c) => c.note || marked(c) || c.call === 'keep' || c.call === 'redo'))
       return 'Another round needs a direction: write a note, or mark a Keep or a Redo.';
     return '';
   }
@@ -1344,6 +1814,16 @@
     return parts.join(' · ');
   }
   const primary = (cand) => (cand.files || []).find((f) => f.role === 'primary') || (cand.files || [])[0] || null;
+  function markChip(cid) {
+    const el = h('div', { class: 'markchip', hidden: true });
+    const upd = () => {
+      const mk = entry(cid).marks, used = mk ? Object.keys(mk.notes || {}) : [];
+      el.hidden = !used.length;
+      el.replaceChildren(...used.map((c) => h('span', { class: 'sw', style: '--sw:' + MARK_HEX[c], title: c })), used.length ? ' Marked in ' + used.join(', ') + '; open it to see' : '');
+    };
+    (S.ui[cid] = S.ui[cid] || []).push(upd); upd();
+    return el;
+  }
 
   // what a candidate looks like, small (in the grid) or large (in the overlay)
   function media(cand, big, group) {
@@ -1389,10 +1869,10 @@
           const div = h('div', { class: 'tex', role: 'img', 'aria-label': cand.title + ', tiled' });
           div.style.backgroundImage = 'url("' + src + '")'; div.style.backgroundSize = S.opts.texScale + 'px';
           stage.append(div);
-        } else if (big) { stage.style.flex = '1'; stage.style.minHeight = '0'; stage.append(zoomPane(src, group.zoom).el); }
+        } else if (big) { stage.style.flex = '1'; stage.style.minHeight = '0'; api.pane = zoomPane(src, group.zoom); stage.append(api.pane.el); if (api.onPane) api.onPane(api.pane); }
         else stage.append(h('img', { class: 'fit', src, alt: cand.title, loading: 'lazy' }));
       };
-      build(); api.set = () => { paint(); build(); };
+      api.pane = null; build(); api.set = () => { api.pane = null; paint(); build(); if (!api.pane && api.onPane) api.onPane(null); };
       if (big) { stage.style.flex = '1'; stage.style.minHeight = '0'; }
     }
     return api;
@@ -1585,7 +2065,7 @@
           cand.carried_from ? h('span', { class: 'chip keep', title: 'You kept this in an earlier round' }, 'From last round') : null,
           box ? h('label', { class: 'cmp' }, box, 'Compare') : null),
         m.el,
-        h('div', { class: 'tinfo' }, cand.summary && b.kind !== 'question' ? h('p', { class: 'sum' }, cand.summary) : null,
+        h('div', { class: 'tinfo' }, cand.summary && b.kind !== 'question' ? h('p', { class: 'sum' }, cand.summary) : null, markChip(cand.id),
           factsLine(cand) ? h('div', { class: 'facts' }, factsLine(cand)) : null,
           checks.length ? h('div', { class: 'checks' }, checks.map((c) => h('span', { class: c.level }, (c.level === 'error' ? 'Broken rule: ' : 'Note: ') + c.msg))) : null),
         ctl);
@@ -1624,7 +2104,7 @@
       const why = h('div', { class: 'why', role: 'status' });
       const send = h('button', { class: 'btn primary', type: 'button', onclick: async () => {
         send.disabled = true;
-        try { clearTimeout(saveTimer); await API.submit(b.id, S.verdict); S.state = await API.state(); toast('Verdict sent'); render(); }
+        try { if (S.markFlush) await S.markFlush(); clearTimeout(saveTimer); await API.submit(b.id, S.verdict); S.state = await API.state(); toast('Verdict sent'); render(); }
         catch (e) { toast(e.message); send.disabled = false; }
       } }, 'Submit verdict');
       S.ui._bar = () => {
@@ -1673,6 +2153,7 @@
   // ---------------------------------------------------- look closer, compare
   function closeOver() {
     if (!S.over) return;
+    if (S.markFlush) S.markFlush();
     S.over.destroy(); S.over.el.remove(); S.over = null;
     document.body.style.overflow = '';
     if (S.batch) for (const c of S.batch.candidates) S.ui[c.id] = (S.ui[c.id] || []).filter((fn) => !fn.over);
@@ -1712,12 +2193,82 @@
       noteField = ctl.noteField;
       const info = h('div', {}, cands[0].summary ? h('p', { class: 'muted' }, cands[0].summary) : null, h('div', { class: 'facts' }, factsLine(cands[0])));
       const kids = [...ctl.children];
-      el.append(h('div', { class: 'side' }, h('div', {}, kids[0], kids.length > 2 ? kids[1] : null), info, kids[kids.length - 1]));
+      const marking = markCandidate(cands[0], medias[0], el, bar);
+      el.append(h('div', { class: 'side' }, h('div', {}, kids[0], kids.length > 2 ? kids[1] : null), info, h('div', {}, kids[kids.length - 1], marking)));
     }
     S.current = cands.some((c) => c.id === S.current) ? S.current : cands[0].id;
     S.over = { el, ids: cands.map((c) => c.id), note: noteField, mark, apply: () => medias.forEach((m) => m.set()), destroy: () => medias.forEach((m) => m.destroy()) };
     document.body.append(el); document.body.style.overflow = 'hidden';
     mark();
+  }
+
+  // marks on a candidate, in the closer look: kept on the verdict, with a picture beside the batch for Claude
+  function markCandidate(cand, m, el, bar) {
+    const b = S.batch, file = primary(cand);
+    const isModel = !!(m.view && m.view.canvas);  // a model, or a motion baked from the project
+    if (!isModel && !(file && b.kind !== 'in_app' && (file.kind === 'image' || file.kind === 'texture') && m.pane !== undefined)) return null;
+    const ink = newInk(entry(cand.id).marks, isModel ? 'model' : 'image');
+    let marker = null;
+    const attach = (pane) => { marker = pane ? markImage(pane, ink) : null; if (marker) marker.mode(ink.on); };
+    if (isModel) marker = markModel(m.view, ink);
+    else { m.onPane = attach; if (m.pane) attach(m.pane); }
+    const live = () => marker || { undo() {}, clear() {}, mode() {}, picture: async () => null };
+    let timer = 0, pending = false;
+    const send = async () => {
+      clearTimeout(timer); timer = 0;
+      if (!pending) return;
+      pending = false;
+      const blob = inkUsed(ink).length ? await live().picture() : null;
+      await API.putMarks(b.id, cand.id, blob).catch((e) => toast('The marked picture was not saved: ' + e.message));
+    };
+    ink.subs.push(() => {
+      if (!editable()) return;
+      entry(cand.id).marks = inkData(ink); changed(cand.id);
+      pending = true; clearTimeout(timer); timer = setTimeout(send, 1500);
+    });
+    S.markFlush = send;
+    if (editable()) bar.after(h('div', { class: 'tools overtools' }, markTools(ink, live),
+      h('span', { class: 'hint' }, isModel ? 'Paint faces · right-drag turns it · scroll zooms · a motion holds on its frame while you paint' : 'Paint areas · right-drag moves it · scroll zooms')));
+    return markNotes(ink, editable, (mo) => live().goto && live().goto(mo));
+  }
+
+  // marks on something in the Library: they go to Claude as a note, with the marked picture on it
+  function markOver(f, s) {
+    const prev = $('.over.marking'); if (prev) prev.remove();
+    const isModel = f.kind === 'model';
+    const ink = newInk(null, isModel ? 'model' : 'image');
+    ink.on = true;  // here the point is to mark: the brush is ready
+    let marker = null, view = null, pane = null;
+    const stage = h('div', { class: 'pane' });
+    if (isModel) { view = modelView(f.url, { zoom: true, clip: f.clip }); stage.append(view.el); marker = markModel(view, ink); }
+    else { pane = zoomPane(f.url, { t: { z: 1, cx: 0.5, cy: 0.5 }, panes: [] }); stage.append(pane.el); marker = markImage(pane, ink); }
+    const words = h('textarea', { class: 'field', rows: 2, placeholder: 'Anything else about it (optional)', 'aria-label': 'A note on the whole thing' });
+    const close = () => { document.removeEventListener('keydown', key); if (view) view.destroy(); if (pane && pane.destroy) pane.destroy(); el.remove(); document.body.style.overflow = ''; };
+    const key = (e) => { if (e.key === 'Escape' && !/^(TEXTAREA|INPUT)$/.test((e.target || {}).tagName || '')) { close(); e.stopPropagation(); } };
+    const send = h('button', { class: 'btn primary', type: 'button', onclick: async () => {
+      const used = inkUsed(ink);
+      if (!used.length) { toast('Mark something first'); return; }
+      send.disabled = true;
+      try {
+        const lines = ['Marks on ' + s.title + ' (' + s.id + ', ' + f.label + '). The marked picture is attached; each colour is quoted with where it is.'];
+        if (words.value.trim()) lines.push('', words.value.trim());
+        lines.push('');
+        for (const c of used) lines.push('- ' + c + ': ' + (ink.notes[c] && ink.notes[c].trim() ? '"' + ink.notes[c].trim() + '"' : '(no note)') + (ink.where[c] ? '. Where: ' + ink.where[c] : ''));
+        const blob = await marker.picture();
+        const made = (await API.addNote(lines.join('\n'), '', false)).note;
+        if (blob) { const file = new File([blob], 'marks ' + s.id + '.png', { type: 'image/png' }); await sendFiles(made.id, [file]); }
+        close(); await afterNote('Noted, with the marked picture');
+      } catch (e) { toast(e.message); send.disabled = false; }
+    } }, 'Send as a note');
+    const bar = h('div', { class: 'bar' }, h('h3', {}, 'Mark ' + s.title), h('span', { class: 'hint' }, f.label),
+      h('button', { class: 'btn small', type: 'button', onclick: close }, 'Close (Esc)'));
+    const el = h('div', { class: 'over marking', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Mark ' + s.title }, bar,
+      h('div', { class: 'tools overtools' }, markTools(ink, () => marker), h('span', { class: 'hint' }, isModel ? 'Paint faces · right-drag turns it · scroll zooms' : 'Paint areas · right-drag moves it · scroll zooms')),
+      h('div', { class: 'panes' }, stage),
+      h('div', { class: 'side marking' }, h('div', {}, markNotes(ink, () => true, (mo) => marker.goto && marker.goto(mo))), h('div', {}, words, h('div', { class: 'jf' }, send))));
+    document.body.append(el); document.body.style.overflow = 'hidden';
+    document.addEventListener('keydown', key);
+    marker.mode(true);
   }
 
   // ----------------------------------------------------------------- library

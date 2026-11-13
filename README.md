@@ -163,6 +163,12 @@ The page knows how to show each kind of work:
 
 ![Three models in the 3D viewer with a reference figure](docs/screenshots/models.png)
 
+**Mark what you mean.** Looking closer at a picture, a texture, a model or a motion, press Mark and
+paint over the part you are talking about, in up to five colours, with a note for each colour. On a
+motion the frame holds while you paint, and each colour keeps the clip and the second. The agent gets
+your words, a plain account of where each colour sits, and one picture of it all (a model from six
+sides, or posed at each moment you marked). On an asset in the Library, Mark sends the same thing as a note.
+
 Before a batch reaches you, **checks** run on every file (too loud, too long, too many
 triangles, wrong size, no record of how it was made). A batch that breaks a rule is held back
 and the agent is told why, so you never spend a minute on something a script could refuse.

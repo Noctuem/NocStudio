@@ -356,6 +356,14 @@ def make_handler(home: Path, allowed_hosts: set[str], quiet: bool = False, hub: 
                     folder = studio.home / "live" / "talkfiles" / time.strftime("%Y-%m-%d")
                     entry = notefiles.receive_to(folder, (parse_qs(split.query).get("name") or [""])[0], self.rfile, int(length))
                     return self.send_json({"ok": True, "path": str(folder / entry["name"]), "name": entry["name"], "size": entry["size"]})
+                if len(parts) == 5 and parts[:2] == ["api", "batch"] and parts[3] == "marks" and self.command == "PUT":
+                    length = int(self.headers.get("Content-Length") or 0)  # the picture of the user's marks on one candidate
+                    if length > 16 * 1024 * 1024:
+                        raise StudioError("the marked picture is over 16 MB")
+                    data = self.rfile.read(length)
+                    with LOCK:
+                        self.studio().put_marks_picture(parts[2], parts[4], data)
+                    return self.send_json({"ok": True})
                 if parts[:2] == ["api", "talk"]:
                     return self.talk_post(self.studio(), parts[2:], self.body())
                 if parts == ["api", "idea"]:

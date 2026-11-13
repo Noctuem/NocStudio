@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import math
+import shutil
 import os
 import struct
 import subprocess
@@ -173,6 +174,49 @@ def main() -> int:
         status, body = http("POST", base + f"/api/batch/{batch['id']}/submit",
                             {"action": "ship_and_iterate", "note": "closer, but drier", "candidates": {"a": {"call": "winner", "score": 8, "note": "this one"}, "b": {"call": "redo", "note": "too soft"}}})
         check(status == 200 and body["pending"] == 1, "the user's verdict is submitted")
+
+        # marks: parts of a picture painted in colours, a note for each; Claude gets the picture and where each colour is
+        marked = studio.new_batch("marked", kind="texture", mode="rate", ask="Approve?", look_at=["The rust"])
+        studio.add_candidate(marked["id"], [src / "tex.png"], made_with={"tool": "selftest"})
+        studio.publish(marked["id"])
+        def put_pic(cid, data):
+            req = urllib.request.Request(base + f"/api/batch/{marked['id']}/marks/{cid}", data=data, method="PUT", headers={"X-Studio-File": "1"})
+            try:
+                with urllib.request.urlopen(req, timeout=10) as res:
+                    return res.status
+            except urllib.error.HTTPError as err:
+                return err.code
+        png = (src / "tex.png").read_bytes()
+        refused = [put_pic("a", b"not a picture"), put_pic("zz", png)]
+        stored = put_pic("a", png)
+        marks = {"kind": "image", "notes": {"red": "too shiny here", "blue": "", "pink": "dropped"},
+                 "where": {"red": "x 2–30, y 4–20 px of the 64 × 64 picture (upper left)", "blue": "x 40–60, y 40–60 px"},
+                 "strokes": [{"c": "red", "r": 3, "p": [[2, 4], [30, 20]]}, {"c": "blue", "r": 3, "p": [[40, 40]]}, {"c": "pink", "r": 3, "p": [[1, 1]]}], "size": [64, 64]}
+        status, body = http("POST", base + f"/api/batch/{marked['id']}/submit", {"action": "another_round", "candidates": {"a": {"marks": marks}}})
+        kept = studio.load_batch(marked["id"])["verdict"]["candidates"]["a"]["marks"]
+        item = next(x for x in studio.todo() if x["batch"] == marked["id"])
+        row = item["unmarked"][0]["marks"]
+        brief = studio.brief(marked["id"])
+        listed = subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "studio.py"), "--home", str(home), "todo"],
+                                capture_output=True, text=True, encoding="utf-8").stdout
+        check(refused == [400, 400] and stored == 200 and status == 200
+              and set(kept["notes"]) == {"red", "blue"} and [s["c"] for s in kept["strokes"]] == ["red", "blue"]
+              and row["picture"] == str(studio.marks_picture(marked["id"], "a")) and Path(row["picture"]).read_bytes() == png
+              and [c["colour"] for c in row["colours"]] == ["red", "blue"] and row["colours"][0]["note"] == "too shiny here"
+              and any("marked parts of a" in s for s in item["steps"])
+              and "**red** (x 2–30, y 4–20 px" in brief and "> too shiny here" in brief and f"batches/{marked['id']}/marks/a.png" in brief
+              and "marked in colours; the picture of it: " + row["picture"] in listed and '"too shiny here"' in listed,
+              "marks in colours reach Claude: the picture, each colour's note exactly, and where it is; a colour's note alone gives another round its direction")
+        from studiolib.store import clean_marks
+        moved = clean_marks({"kind": "model", "notes": {"red": "the elbow folds back"}, "where": {"red": 'in the motion "walk" at 0.42 s of 1.20 s; 6 faces on "arm_l"'},
+                             "faces": {"3": {"red": [9, 4, 4, -1, "x"]}}, "meshes": {"3": "arm_l"},
+                             "moments": {"red": {"clip": "walk", "t": 0.4204, "length": 1.2}, "blue": {"clip": "walk", "t": 0.1, "length": 1.2}, "green": {"t": 1}}})
+        check(moved["faces"] == {"3": {"red": [4, 9]}} and moved["meshes"] == {"3": "arm_l"}
+              and moved["moments"] == {"red": {"clip": "walk", "t": 0.42, "length": 1.2}, "blue": {"clip": "walk", "t": 0.1, "length": 1.2}},
+              "marks on a moving model keep the faces, and for each colour the motion and the second it was painted at")
+        studio.reopen(marked["id"])
+        check(put_pic("a", b"") == 200 and not studio.marks_picture(marked["id"], "a").exists(), "an empty picture takes the marks away")
+        shutil.rmtree(studio.batch_dir(marked["id"]))
 
         # the overview: the road, the build in hand, what only the user can do
         studio.set_milestone("M1", name="One room", status="current")
