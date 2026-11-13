@@ -1075,10 +1075,68 @@
       syncChip(st.sync),
       usageChip(),
       st.launch ? h('button', { class: 'btn small primary launch-btn', type: 'button', title: 'Start a remote Claude session on the PC in ' + st.launch.folder + ', for the Claude app', onclick: toggleLaunch }, 'Start Claude') : null,
+      wakeChip(),
       st.static ? null : h('button', { class: 'btn small', type: 'button', title: 'Leave a note for the project (N)', onclick: openNotePop }, 'Note'),
       st.hub ? h('a', { class: 'btn small allp', href: st.hub, title: 'Back to the list of your projects' }, 'All projects') : null, scaleControl(), themeControl(),
       st.static ? h('span', { class: 'sample' }, 'Sample data. Candidates are placeholders drawn by script.') : null);
   }
+  // Send verdicts: tells a session sitting idle at its prompt that there are verdicts for it to check (studiolib/wake.py)
+  const WK = { data: null, busy: false, timer: 0 };
+  async function wakeLoad() {
+    if (document.hidden && WK.data) return;
+    try { WK.data = await call('GET', '/api/wake'); } catch (e) { return; }
+    for (const b of document.querySelectorAll('.wake-btn')) b.replaceWith(wakeButton());
+    if ($('.wakepop')) drawWakePop();
+  }
+  function wakeWhy(d) {
+    if (!d) return 'Checking for verdicts…';
+    if (!d.waiting) return 'No verdicts are waiting for a session';
+    if (!d.sessions.length) return d.hooks ? 'No session can be told now: it has to sit idle at its prompt, and have started or finished a turn since the Studio’s hooks were installed'
+      : 'Sessions cannot be woken yet: run  studio.py hooks install  once, on the PC';
+    const n = d.unseen;
+    return n ? n + ' verdict' + (n !== 1 ? 's' : '') + ' no session has seen. Tells ' + (d.sessions.length === 1 ? d.sessions[0].title : 'a session you pick') + ' to check them'
+      : 'Every verdict waiting was already handed to a session. Press to tell one again';
+  }
+  function wakeButton() {
+    const d = WK.data, can = !!(d && d.waiting && d.sessions.length), armed = can && d.unseen > 0;
+    return h('button', { class: 'btn small wake-btn' + (armed ? ' primary' : ''), type: 'button', disabled: !can || WK.busy, title: wakeWhy(d), onclick: toggleWake },
+      WK.busy ? 'Sending…' : 'Send verdicts', armed ? h('span', { class: 'count' }, String(d.unseen)) : null);
+  }
+  function wakeChip() {
+    if (S.state.static || S.state.site) return null;
+    if (!WK.timer) { WK.timer = setInterval(wakeLoad, 5000); wakeLoad(); }
+    return wakeButton();
+  }
+  async function wakeSend(s) {
+    closeWake(); WK.busy = true;
+    for (const b of document.querySelectorAll('.wake-btn')) b.replaceWith(wakeButton());
+    try { await call('POST', '/api/wake', { session: s.id }); toast('Sent to ' + s.title + ': it checks your verdicts now'); }
+    catch (e) { toast(e.message); }
+    WK.busy = false; wakeLoad();
+  }
+  function closeWake() { const el = $('.wakepop'); if (el) el.remove(); document.removeEventListener('keydown', wakeKey); }
+  function wakeKey(e) { if (e.key === 'Escape') { closeWake(); e.stopPropagation(); } }
+  function toggleWake() {
+    const d = WK.data;
+    if ($('.wakepop')) { closeWake(); return; }
+    if (!d || !d.sessions.length) return;
+    if (d.sessions.length === 1) { wakeSend(d.sessions[0]); return; }
+    document.body.append(h('div', { class: 'notepop wakepop', role: 'dialog', 'aria-label': 'Send verdicts' }));
+    document.addEventListener('keydown', wakeKey);
+    drawWakePop();
+  }
+  function drawWakePop() {
+    const el = $('.wakepop'), d = WK.data || { sessions: [] };
+    if (!el) return;
+    const ago = (s) => s < 90 ? 'just now' : s < 5400 ? Math.round(s / 60) + ' min' : Math.round(s / 3600) + ' h';
+    el.replaceChildren(...[
+      h('div', { class: 'jh' }, h('h2', { class: 'grow' }, 'Send verdicts to'), h('button', { class: 'btn small', type: 'button', onclick: closeWake }, 'Close (Esc)')),
+      h('p', {}, 'The session you pick is told there are verdicts for it to check, and starts on them.'),
+      ...d.sessions.map((s) => h('button', { class: 'trow', type: 'button', onclick: () => wakeSend(s) },
+        h('span', { class: 'tt' }, s.title), h('span', { class: 'd' }, [s.where, s.talk ? 'on the Talk page' : '', 'idle ' + ago(s.quiet || 0)].filter(Boolean).join(' · ')))),
+      d.sessions.length ? null : h('div', { class: 'muted' }, wakeWhy(d))].filter(Boolean));
+  }
+
   // the plan's usage: Claude Code's own /usage, read on the PC (it calls no model, so reading it costs nothing)
   const U = { data: null, err: '', at: 0, busy: false };
   async function usageLoad(fresh) {

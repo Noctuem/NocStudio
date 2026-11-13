@@ -642,13 +642,16 @@ def cmd_hooks(a):
               else f"Not installed: studio.py hooks install   (it edits {setup.claude_settings()})")
         if events and not setup.hooks_hand_over():
             print("They were installed before the notes box, so sessions are not handed the user's notes: studio.py hooks install")
+        elif events and not setup.hooks_wake():
+            print("They were installed before the Send verdicts button, which cannot wake a session yet: studio.py hooks install")
         return
     out = setup.install_hooks(remove=a.action == "remove")
     print(f"{'Removed from' if a.action == 'remove' else 'Installed in'} {out['settings']}"
           + (f"\n  as it was before: {out['backup']}" if out["backup"] else ""))
     if a.action == "install":
         print("Every Claude Code session in a project that has a Studio now shows on its Overview while it works,\n"
-              "and is handed the notes the user leaves for it in the notes box.\n"
+              "and is handed the notes the user leaves for it in the notes box. The page's Send verdicts button\n"
+              "can wake one that sits idle, once it has started or finished a turn since this install.\n"
               "Sessions already open pick it up within a few seconds, or when they next start.")
 
 

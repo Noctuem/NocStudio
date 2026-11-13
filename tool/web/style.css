@@ -591,6 +591,11 @@ details.setup > :not(summary) { margin: 0 14px 12px; }
 .tidea .grow { flex: 1 1 auto; }
 .tidea .ideadoc { max-height: 38vh; overflow: auto; font-size: 14px; }
 
+/* Send verdicts */
+.wake-btn .count { margin-left: 6px; padding: 2px 6px; color: inherit; border-radius: 9px; background: color-mix(in srgb, var(--accent-ink) 22%, transparent); }
+.wakepop { gap: 10px; }
+.wakepop p { margin: 0; }
+
 /* the plan's usage */
 .usage-btn.hot { border-color: var(--accent); color: var(--accent-fg); }
 .usagepop { gap: 12px; }

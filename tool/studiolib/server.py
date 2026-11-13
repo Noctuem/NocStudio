@@ -276,6 +276,9 @@ def make_handler(home: Path, allowed_hosts: set[str], quiet: bool = False, hub: 
                     if parts[1:] == ["live"]:
                         from . import board
                         return self.send_json(board.live(studio))
+                    if parts[1:] == ["wake"]:  # for Send verdicts: what no session has seen, and who can be told
+                        from . import wake
+                        return self.send_json(wake.view(studio))
                     if len(parts) == 3 and parts[1] == "batch":
                         return self.send_json(studio.load_batch(parts[2]))
                     if len(parts) == 3 and parts[1] == "button":  # the last press: running, or its exit code and last lines
@@ -369,6 +372,12 @@ def make_handler(home: Path, allowed_hosts: set[str], quiet: bool = False, hub: 
                 if parts == ["api", "idea"]:
                     return self.idea_post(self.studio(), self.body())
                 data = self.body()
+                if parts == ["api", "wake"]:  # the user pressed Send verdicts: tell that session there are verdicts to check
+                    from . import wake
+                    studio = self.studio()
+                    if studio.config.get("site"):
+                        return self.fail(403, "sessions run on the PC; send verdicts from the PC's Studio")
+                    return self.send_json(dict(wake.send(studio, str(data.get("session") or "")), ok=True))
                 if parts == ["api", "button"]:  # the user's click on a button a session filed: only its id comes from the page
                     from . import buttons
                     studio, hid = self.studio(), str(data.get("id") or "")

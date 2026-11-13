@@ -259,8 +259,9 @@ Code the rules:
 2. One batch, one decision, six candidates at most.
 3. You only see what passes the checks.
 4. Nothing happens on a verdict until you submit it. Claude Code's hooks hand it to a session when
-   it finishes a turn or you send it a message; never in the middle of its work, and an idle session
-   is never woken for it.
+   it finishes a turn or you send it a message; never in the middle of its work. An idle session is
+   woken for it only when you press Send verdicts at the top of the page: the button is lit while a
+   verdict waits that no session has seen, and it tells the session you pick to check them.
 5. Your words are quoted, never paraphrased.
 6. The board is kept true as work happens: a step moves, work starts or lands, a merge, a
    publish, a setback.

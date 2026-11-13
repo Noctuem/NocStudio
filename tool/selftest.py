@@ -415,6 +415,38 @@ def main() -> int:
         hook(session_id="s-1", cwd=str(deep), hook_event_name="SessionEnd")
         check(board.sessions(studio)[0]["state"] == "ended" and (home / "live" / ".gitignore").exists(), "a session that ends is marked ended, and none of this is history")
 
+        # Send verdicts: a session idle at its prompt is woken only when the user presses it, through the waiter hook
+        from studiolib import wake
+
+        def waiter(sid: str):
+            proc = subprocess.Popen([sys.executable, str(Path(__file__).resolve().parent / "hook.py"), "--wait"], stdin=subprocess.PIPE,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=hook_env)
+            proc.stdin.write(json.dumps(dict(session_id=sid, cwd=str(deep), hook_event_name="Stop")).encode()); proc.stdin.close()
+            for _ in range(100):
+                if sid in wake.awake(home) and (home / "live" / "wake" / f"{sid}.wait").read_text(encoding="utf-8").startswith(f"{proc.pid}:"):
+                    break
+                time.sleep(0.1)
+            return proc
+
+        hook(session_id="s-w", cwd=str(deep), hook_event_name="SessionStart")
+        hook(session_id="s-w", cwd=str(deep), hook_event_name="Stop")
+        first = waiter("s-w")
+        second = waiter("s-w")
+        first.wait(10)
+        status, seen = http("GET", base + "/api/wake")
+        check(first.returncode == 0 and not first.stderr.read() and status == 200 and [s["id"] for s in seen["sessions"]] == ["s-w"]
+              and seen["waiting"] >= 1 and seen["unseen"] == 0,
+              "a newer waiter for a session takes over from the older one, and the page sees who can be told and what waits")
+        status, refused = http("POST", base + "/api/wake", {"session": "s-1"})
+        check(status == 400 and "cannot be reached" in refused.get("error", ""), "a session with no waiter is not told, and the page says why")
+        status, sent = http("POST", base + "/api/wake", {"session": "s-w"})
+        second.wait(10)
+        told = second.stderr.read().decode("utf-8")
+        check(status == 200 and sent["how"] == "woken" and second.returncode == 2 and "pressed Send verdicts" in told and batch["id"] in told
+              and "S todo" in told and "s-w" not in wake.awake(home) and not (home / "live" / "wake" / "s-w.go").exists(),
+              "pressing Send verdicts wakes that session with what waits for it (exit 2 for asyncRewake), and the waiter is gone")
+        hook(session_id="s-w", cwd=str(deep), hook_event_name="SessionEnd")
+
         # the hooks go into Claude Code's settings beside whatever is there, and come out again
         settings = setup.claude_settings()
         settings.parent.mkdir(parents=True)
@@ -425,7 +457,9 @@ def main() -> int:
         data = json.loads(settings.read_text(encoding="utf-8"))
         check(set(setup.hooks_installed()) == set(setup.HOOK_EVENTS) and data["model"] == "opus" and len(data["hooks"]["Stop"]) == 2
               and data["hooks"]["Stop"][0] == theirs["hooks"]["Stop"][0] and "async" not in data["hooks"]["SessionStart"][0]["hooks"][0]
-              and data["hooks"]["PreToolUse"][0]["hooks"][0]["async"] is True and setup.hooks_hand_over()
+              and data["hooks"]["PreToolUse"][0]["hooks"][0]["async"] is True and setup.hooks_hand_over() and setup.hooks_wake()
+              and data["hooks"]["Stop"][-1]["hooks"][1]["asyncRewake"] is True and data["hooks"]["Stop"][-1]["hooks"][1]["args"][-1] == "--wait"
+              and len(data["hooks"]["PostToolUse"][-1]["hooks"]) == 1
               and all("async" not in data["hooks"][e][-1]["hooks"][0] and data["hooks"][e][-1]["hooks"][0]["timeout"] for e in ("Stop", "PostToolUse"))
               and json.loads(Path(str(settings) + ".before-nocstudio").read_text(encoding="utf-8")) == theirs,
               "installing twice leaves one hook per event, the user's own settings as they were, and a copy from before")

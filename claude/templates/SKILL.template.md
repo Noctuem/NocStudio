@@ -121,6 +121,10 @@ and push (or `S save`), and it is live a minute later. Stopping one is the same.
 S todo
 ```
 
+The same holds when you are woken with "The user pressed Send verdicts in the
+Studio": they pressed the page's Send verdicts button for you, and that is them
+saying so. Start on them at once.
+
 It prints every submitted verdict, oldest first, with their words quoted and
 the steps for each, what they answered about the things only they can do, and
 every text they edited in the Library (see Slots: working copies).

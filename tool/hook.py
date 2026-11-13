@@ -9,7 +9,8 @@ It watches, and it does one thing more: it hands over what the user left in the 
 Notes from the notes box go when the session finishes a turn (it carries on and deals with them), when
 the user sends it a message, and between tool calls once a note has waited a while or is marked urgent.
 Verdicts on batches and answers to what only the user could do go only when it finishes a turn or is
-sent a message, never in the middle of work. An idle session is never woken. With
+sent a message, never in the middle of work. An idle session is woken only when the user presses Send
+verdicts on the page (`hook.py --wait`, below, and studiolib/wake.py). With
 no note waiting it prints nothing. When the Studio has a second copy (a server's, for the phone; see
 studiolib/sync.py), it also starts a sync in the background as a session starts, is given a prompt or
 finishes a turn, at most once a minute, so what was left on the phone reaches the session without the
@@ -311,7 +312,31 @@ def fetch(home: str, e: dict) -> None:
                      creationflags=flags, start_new_session=not flags, close_fds=True)
 
 
+def wait_for_send(e: dict, home: str) -> int:
+    """`hook.py --wait`: Claude Code runs this in the background (asyncRewake) as a session starts and when it
+    finishes a turn. It waits until the user presses Send verdicts for this session, then exits 2 with what to
+    tell it, which wakes the session even when it sits idle. Otherwise it ends quietly with 0."""
+    session = str(e.get("session_id") or "")
+    if e.get("agent_id") or not session or os.environ.get("STUDIO_TALK"):
+        return 0  # a subagent is never woken, and a conversation the page runs is told through its own input
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from studiolib import wake
+    if not wake.wait(home, session):
+        return 0
+    text = wake.message(home, session)
+    sys.stderr.buffer.write(text.encode("utf-8"))
+    sys.stderr.flush()
+    return 2
+
+
 def main() -> int:
+    if "--wait" in sys.argv[1:]:
+        try:
+            e = json.loads(sys.stdin.buffer.read().decode("utf-8", errors="replace") or "{}")
+            home = home_for(e.get("cwd") or os.getcwd()) if isinstance(e, dict) else ""
+            return wait_for_send(e, home) if home else 0
+        except Exception:
+            return 0
     try:
         e = json.loads(sys.stdin.buffer.read().decode("utf-8", errors="replace") or "{}")
         if not isinstance(e, dict):

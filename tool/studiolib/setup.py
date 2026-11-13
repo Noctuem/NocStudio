@@ -190,6 +190,8 @@ HOOK_EVENTS = ("SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "
 # these finish before the session goes on: two tell it its own id, three hand it what the user left for it
 WAITED_FOR = ("SessionStart", "CwdChanged", "Stop", "PostToolUse", "UserPromptSubmit")
 HOOK_TIMEOUT = 20  # seconds: a hook the session waits for must never hold it up for long
+# and on these, a second one waits in the background for the user to press Send verdicts (studiolib/wake.py)
+WAKE_EVENTS = ("SessionStart", "Stop")
 
 
 def claude_settings() -> Path:
@@ -231,6 +233,18 @@ def hooks_hand_over(path: Path | None = None) -> bool:
                for event in ("Stop", "PostToolUse", "UserPromptSubmit"))
 
 
+def hooks_wake(path: Path | None = None) -> bool:
+    """Whether the hooks as installed let the Send verdicts button wake an idle session."""
+    try:
+        data = read_json(path or claude_settings(), {}) or {}
+    except StudioError:
+        return False
+    hooks = data.get("hooks") or {}
+    return all(any(_ours(h) and h.get("asyncRewake") and "--wait" in (h.get("args") or [])
+                   for g in hooks.get(event) or [] if isinstance(g, dict) for h in g.get("hooks") or [])
+               for event in WAKE_EVENTS)
+
+
 def install_hooks(path: Path | None = None, remove: bool = False) -> dict:
     """Add this kit's hook to Claude Code's settings, or take it out. Every other setting is left as it is."""
     path = path or claude_settings()
@@ -258,8 +272,13 @@ def install_hooks(path: Path | None = None, remove: bool = False) -> dict:
         else:
             del hooks[event]
     if not remove:
+        from . import wake
         for event in HOOK_EVENTS:
-            hooks.setdefault(event, []).append({"hooks": [dict(_hook_command(), **({"timeout": HOOK_TIMEOUT} if event in WAITED_FOR else {"async": True}))]})
+            mine = [dict(_hook_command(), **({"timeout": HOOK_TIMEOUT} if event in WAITED_FOR else {"async": True}))]
+            if event in WAKE_EVENTS:
+                waiter = _hook_command()
+                mine.append(dict(waiter, args=[*waiter["args"], "--wait"], asyncRewake=True, timeout=wake.WAIT))
+            hooks.setdefault(event, []).append({"hooks": mine})
     if not hooks:
         del data["hooks"]
     write_json(path, data)
