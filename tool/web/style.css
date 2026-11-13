@@ -420,7 +420,7 @@ main.hud { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 40
 .asks { display: flex; flex-direction: column; gap: 6px; }
 .need { background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); color: inherit; }
 .need.urgent { border-color: color-mix(in srgb, var(--bad) 60%, transparent); }
-.need > summary, a.need { display: flex; gap: 8px; align-items: center; padding: 8px 10px; cursor: pointer; list-style: none; font-weight: 600; }
+.need > summary, a.need { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 10px; cursor: pointer; list-style: none; font-weight: 600; }
 .need > summary::-webkit-details-marker { display: none; }
 .need > summary:hover, a.need:hover { background: var(--raised); text-decoration: none; }
 .need > summary .grow, a.need .grow { overflow-wrap: anywhere; }
@@ -571,7 +571,9 @@ details.setup > :not(summary) { margin: 0 14px 12px; }
 .brow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .brow .grow { flex: 1 1 auto; }
 .bpress { white-space: nowrap; }
-.need > summary .bpress { flex: none; }
+/* a long button label: the title keeps its width, the button drops under it and its words wrap inside it */
+.need > summary .grow { flex: 1 1 14ch; }
+.need > summary .bpress { flex: 0 1 auto; max-width: 100%; white-space: normal; text-align: left; }
 .bwhat { overflow-wrap: anywhere; font-size: 12px; }
 .bwhat code { user-select: all; }
 .bout { margin: 0; max-height: 220px; overflow: auto; padding: 8px 10px; background: var(--stage); color: var(--fg); border: 1px solid var(--line-soft);
