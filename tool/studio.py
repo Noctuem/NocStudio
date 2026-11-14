@@ -397,7 +397,9 @@ def cmd_todo(a):
                     what = "clip" if marks["on"] == "video" else "sound"
                     tempo = marks.get("tempo")
                     about = ", ".join(x for x in (marks.get("file", ""), f"{marks['length']:.2f} s" if marks.get("length") else "",
-                                                  f"{tempo['bpm']:g} beats a minute, {tempo['beats']} to the bar" if tempo else "") if x)
+                                                  f"{tempo['bpm']:g} beats a minute, {tempo['beats']} to the bar" if tempo else "",
+                                                  f"{marks['fps']:g} frames a second" if marks.get("fps") else "",
+                                                  f"{marks['size'][0]} x {marks['size'][1]}" if marks.get("size") else "") if x)
                     print(f"           marks on the timeline of the {what}" + (f" ({about})" if about else "")
                           + f"; the sheet: {marks['picture'] or '(not saved; ask them to open it again)'}")
                     for m in marks["spans"]:

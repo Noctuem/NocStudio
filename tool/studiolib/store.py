@@ -1202,7 +1202,10 @@ class Studio:
                          "candidate: the sheet first (every mark numbered on it, with a legend), then a mark's own picture where it "
                          "has one. Then read each mark: its times, the user's note, and its 'where' line, which the page measured. "
                          "A note is about its own moment or stretch only. KEEP is a fence around that part: it must come through the "
-                         "redo as it is. CUT means that stretch goes. A plain change with no note still says that part is wrong.")
+                         "redo as it is. CUT means that stretch goes. A plain change with no note still says that part is wrong."
+                         + (" On a clip the frames count from 0 (frame n starts n / fps seconds in), and paint is on the mark's first "
+                            "frame: its own picture is that frame at the clip's size with the paint over it."
+                            if any(((verdict["candidates"].get(c) or {}).get("marks") or {}).get("kind") == "video" for c in timed) else ""))
         marked = [c["id"] for c in batch["candidates"] if (verdict["candidates"].get(c["id"]) or {}).get("marks")]
         marked = [c for c in marked if c not in timed]
         if marked:
@@ -1255,10 +1258,14 @@ class Studio:
         what = "clip" if marks["on"] == "video" else "sound"
         tempo = marks.get("tempo")
         lines = [f"The user put marks on the timeline of the {what}" + (f" `{marks['file']}`" if marks.get("file") else "")
-                 + (f" ({marks['length']:.2f} s" + (f", {tempo['bpm']:g} beats a minute, {tempo['beats']} to the bar" if tempo else "") + ")"
+                 + (f" ({marks['length']:.2f} s" + (f", {tempo['bpm']:g} beats a minute, {tempo['beats']} to the bar" if tempo else "")
+                    + (f", {marks['fps']:g} frames a second counted from 0" if marks.get("fps") else "")
+                    + (f", {marks['size'][0]} x {marks['size'][1]}" if marks.get("size") else "") + ")"
                     if marks.get("length") else "")
                  + ". Each note is about its own moment or stretch only. KEEP is a fence around that part: it must come "
                    "through the redo as it is. CUT means that stretch goes."
+                 + (" Paint is on a mark's first frame: its own picture is that frame at the clip's size with the paint over it."
+                    if marks["on"] == "video" else "")
                  + (f" Open the sheet first, {here(marks['picture'])}: every mark is numbered on it, with a legend." if marks["picture"] else ""), ""]
         for m in marks["spans"]:
             said = "> " + m["note"].replace("\n", "\n> ") if m["note"] else "(no note for this mark)"

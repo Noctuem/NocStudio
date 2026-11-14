@@ -312,7 +312,10 @@ def _motions(studio, model):
 def _video(studio, _):
     bid = studio.new_batch("video", sample=True, filed_by=BY, kind="video", title="Video: three clips",
                            ask="Which clip would you keep?", brief=SAY + " The clips are test patterns, four seconds each, silent.",
-                           look_at=["Each clip loops; the controls are the browser's own"])["id"]
+                           look_at=["Play a clip in its tile; it loops",
+                                    "Press Mark, or Enter: step a frame at a time with , and . and press M to mark the frame the clip is on",
+                                    "I and O set the start and the end of a stretch; Paint (B) draws on the frame, in the colour of its mark",
+                                    "Each mark has its own note, and is a Change, a Cut or a Keep"])["id"]
     for title, name, summary in VIDEO:
         studio.add_candidate(bid, [SRC / "video" / name], title=title, summary=summary,
                              made_with={"tool": "ffmpeg test source", "source": "studio.py samples"})

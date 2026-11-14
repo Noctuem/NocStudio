@@ -338,6 +338,41 @@ def main() -> int:
               "a clip's length, frames a second, size and count of frames are read from the MP4 itself")
         check(all(filechecks.check_video(src / n, {}) == ({}, []) for n in ("odd.webm", "cut_short.mp4", "not_one.mp4", "tex.png")),
               "a WebM, or an MP4 that cannot be read, has no facts and is no fault")
+        # marks on a clip: Claude is told the frames and where the paint is, and gets the picture of a mark's first frame
+        cut = studio.new_batch("cut", kind="video", mode="rate", ask="Approve the cut?", look_at=["The wipe"])
+        studio.add_candidate(cut["id"], [clips / "clip_bars.mp4"], title="Bars", made_with={"tool": "selftest"})
+        studio.publish(cut["id"])
+        painted = "at 1.52 s (frame 45 of 120, 30 fps); paint in the upper left (x 0 to 125, y 0 to 54 of 640 x 360), about 1% of the frame"
+        on_clip = {"kind": "video", "file": "clip_bars.mp4", "length": 4.0, "fps": 30, "size": [640, 360], "spans": [
+            {"id": "m2", "c": "yellow", "tag": "cut", "t0": 2.017, "t1": 2.683, "note": "this drags",
+             "where": "from 2.02 s to 2.68 s (frames 60 to 80 of 120, 30 fps), 0.67 s long"},
+            {"id": "m1", "c": "red", "tag": "change", "t0": 1.517, "t1": 1.517, "note": "", "where": painted,
+             "strokes": [{"c": "red", "r": 10.3, "p": [[8, 44], [112, 44]]}, {"c": "erase", "r": 4, "p": [[60, 44]]}]}]}
+        saved, _ = http("PUT", base + f"/api/batch/{cut['id']}/draft", {"candidates": {"a": {"marks": on_clip}}})
+        sent = [put_mark("a", "", png, cut["id"]), put_mark("a", "m1", png, cut["id"])]
+        status, _ = http("POST", base + f"/api/batch/{cut['id']}/submit", {"action": "another_round", "candidates": {"a": {"marks": on_clip}}})
+        item = next((x for x in studio.todo() if x["batch"] == cut["id"]), {"unmarked": [{}], "steps": []})
+        row = item["unmarked"][0].get("marks") or {"spans": [{}, {}]}
+        own = studio.mark_picture(cut["id"], "a", "m1")
+        kept_paint = studio.load_batch(cut["id"])["verdict"]["candidates"]["a"]["marks"]["spans"][0].get("strokes")
+        check(saved == 200 and sent == [200, 200] and status == 200 and row.get("on") == "video" and (row["fps"], row["size"]) == (30.0, [640, 360])
+              and [(m["number"], m["id"], m["tag"], m["moment"]) for m in row["spans"]] == [(1, "m1", "change", True), (2, "m2", "cut", False)]
+              and row["spans"][0]["picture"] == str(own) and not row["spans"][1]["picture"] and row["spans"][0]["where"] == painted
+              and kept_paint == [{"c": "red", "r": 10.3, "p": [[8, 44], [112, 44]]}, {"c": "erase", "r": 4.0, "p": [[60, 44]]}],
+              "marks on a clip go through as on a sound: in time order, with the frames a second, the size, the paint and what was rubbed out, and a mark's own picture")
+        check("On a clip the frames count from 0" in " ".join(item["steps"]) and "KEEP is a fence" in " ".join(item["steps"]),
+              "the steps for a clip also say that frames count from 0 and that paint is on a mark's first frame")
+        listed = cli("todo").stdout
+        check("marks on the timeline of the clip (clip_bars.mp4, 4.00 s, 30 frames a second, 640 x 360); the sheet: " + row.get("picture", "?") in listed
+              and "1. change, at 1.52 s, red: (no note)" in listed and '2. CUT, 2.02 s to 2.68 s (0.67 s), yellow: "this drags"' in listed
+              and "where: " + painted in listed and "its own picture: " + str(own) in listed,
+              "todo prints a clip's marks with its frames a second and size, times in seconds, where the paint is, and the picture")
+        brief = studio.brief(cut["id"])
+        check("marks on the timeline of the clip `clip_bars.mp4` (4.00 s, 30 frames a second counted from 0, 640 x 360)" in brief
+              and "Paint is on a mark's first frame" in brief and f"- **1. change, at 1.52 s, red** ({painted}):" in brief
+              and "- **2. CUT, 2.02 s to 2.68 s (0.67 s), yellow**" in brief and f"Its own picture: `batches/{cut['id']}/marks/a/m1.png`" in brief,
+              "the brief for the next round says the same of a clip")
+        shutil.rmtree(studio.batch_dir(cut["id"]))
 
         # the overview: the road, the build in hand, what only the user can do
         studio.set_milestone("M1", name="One room", status="current")
@@ -1031,6 +1066,9 @@ def main() -> int:
         check([c["facts"].get("fps") for c in studio.load_batch("sample-video")["candidates"]] == [30.0, 30.0, 15.0]
               and all(c["facts"]["frames"] == c["facts"]["fps"] * 4 for c in studio.load_batch("sample-video")["candidates"]),
               "filing a clip keeps its facts on it, as a sound's are kept")
+        clip_look = " ".join(studio.load_batch("sample-video")["look_at"])
+        check("Mark" in clip_look and "frame" in clip_look and "browser" not in clip_look,
+              "the clip sample says how to mark a clip, and no longer that the controls are the browser's own")
         studio.save_draft("sample-tune", {"candidates": {"a": {"marks": {"kind": "sound", "length": 12.0, "spans": [{"id": "m1", "t0": 8, "t1": 10, "tag": "cut"}]}}}})
         studio.put_marks_picture("sample-tune", "a", (src / "tex.png").read_bytes())
         studio.put_mark_picture("sample-tune", "a", "m1", (src / "tex.png").read_bytes())

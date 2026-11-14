@@ -156,7 +156,7 @@ The page knows how to show each kind of work:
 | 3D models | Each piece framed to fill the view whatever its size; turn, zoom, wireframe, a 1.8 m reference figure, play the clips the model carries |
 | Motions | Each candidate loops in place in the 3D viewer, at full, half or quarter speed |
 | Sounds | Waveform, length and peak level, play them in turn, loop one; opened large, the wave on a ruler of seconds (and bars, when it was filed with a tempo), zoom in time, half speed, and marks on moments and stretches of it |
-| Video | Looping clips side by side |
+| Video | Looping clips side by side; opened large, a bar to scrub along, steps of one frame, the time as seconds and frame number, half and quarter speed, and marks on moments and stretches of it, with paint on a frame |
 | In-app options | Labels to look for in the running app, with the line that starts it |
 | Questions | Options written out with what each costs, risks and feels like |
 | Writing | Short texts shown as written |
@@ -181,6 +181,21 @@ clips, where its energy sits, each against the whole sound), and one picture: th
 every mark coloured and numbered on it, and a legend. Nothing is guessed: the page works out no
 tempo, no pitch and no loudness score. A sound in the Library has Mark too: it sends a note with a
 line for each mark and the picture as its file.
+
+**Mark a part of a clip.** A clip takes the same marks: moments and stretches, each with its own
+note, a colour, and Change, Cut or Keep. Press Mark on a clip (or Enter) and it opens large with
+the browser's own controls off. Space plays and holds, `,` and `.` step one frame back and on
+(with Shift, ten), and the time shows as seconds and as a frame number. Press `M` to mark the
+frame the clip is on, `I` and `O` to set the start and the end of a stretch, or drag along the
+lane under the bar. **Paint** (`B`) turns the pointer into the brush from the picture marks:
+paint on the frame to show where, in the colour of its mark. Painting holds the clip; the paint
+goes on the chosen mark when the clip is on that mark's first frame, and starts a new moment
+otherwise. The agent cannot watch a clip, so it gets pictures: one sheet (the whole clip in
+eight frames, then the frames of each mark with its paint, then a legend with your notes) and,
+for each of the first twelve marks, its first frame at the clip's own size with the paint on
+it. With them go each note, its times and frame numbers, and where on the frame the paint sits.
+The frames a second are read from an MP4 when the batch is filed; for any other clip the page
+measures them while it plays. A clip in the Library has Mark too.
 
 Before a batch reaches you, **checks** run on every file (too loud, too long, too many
 triangles, wrong size, no record of how it was made). A batch that breaks a rule is held back
@@ -344,10 +359,10 @@ edges, and expect it to change.
   Pictures, sounds, clips, writing, questions and in-app options work for any project.
 - **One person.** A Studio is for one person judging. There are no accounts and no sharing. A
   second copy on a server (Linux, Docker, a sign-in proxy in front) is for that same person's phone.
-- **Marks on a sound point; they do not edit.** Left out on purpose: stems played together with
-  solo and mute, a spectrogram to look at, comparing two versions at the same moment, any editing
-  (cut, fade, gain), replies and approvals on a mark, and playing backwards. Marks on a clip are
-  being built; until then a clip opens large and plays, and takes no marks.
+- **Marks on a sound or a clip point; they do not edit.** Left out on purpose: stems played
+  together with solo and mute, a spectrogram to look at, comparing two versions at the same
+  moment, the clip's own sound drawn as a wave, any editing (cut, fade, gain), replies and
+  approvals on a mark, timecode with drop-frame, and playing backwards.
 - **Notes need a session that is working.** A session that has finished its turn and sits at
   the prompt is not woken by a note; it gets it the next time it works. Handing notes over was
   tested with Claude Code 2.1.296.

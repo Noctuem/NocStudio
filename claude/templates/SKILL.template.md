@@ -141,19 +141,32 @@ colours, a note for each colour. `todo` names the picture of them
 and says where each colour sits; on a motion, the clip and the second. Open
 the picture before you act: a colour's note is about that part only. A note
 sent from the Library's Mark button carries the same picture as its file.
-On a **sound** (and on a clip) the marks are on its time instead: each is a
+On a **sound** or a **clip** the marks are on its time instead: each is a
 moment or a stretch with its own note, numbered in time order. You cannot
 hear a sound or watch a clip, so `todo` gives you what you can read: the
-sheet (`marks/<candidate>.png`: the whole wave, every mark coloured and
-numbered on it, a legend under it), then a line for each mark with its times
-and the user's note, a `where` line the page measured (the bar and beat when
-there is a tempo, peak and RMS level, whether it clips, where the energy sits,
-each against the whole sound), and the mark's own picture when it has one
-(`marks/<candidate>/<mark>.png`). Open the pictures first. Each mark says what
-it asks for: a plain change is the part to fix; **KEEP** is a fence around
-that part, which must come through the redo as it is; **CUT** means that
-stretch goes. A note is about its own moment or stretch only, so change that
-part and leave the rest alone unless the note on the whole candidate says more.
+sheet (`marks/<candidate>.png`), then a line for each mark with its times
+and the user's note, a `where` line the page wrote, and the mark's own
+picture when it has one (`marks/<candidate>/<mark>.png`). Open the pictures
+first.
+For a sound the sheet is the whole wave with every mark coloured and numbered
+on it and a legend under it, and `where` gives the bar and beat when there is
+a tempo, peak and RMS level, whether it clips, and where the energy sits, each
+against the whole sound.
+For a clip the sheet is the whole clip in eight frames with the time under
+each, then the frames of each mark (one for a moment; start, middle and end
+for a stretch), then the legend; a mark's own picture is its first frame at
+the clip's size. The user may have painted on that frame to show where: the
+paint is burned into both pictures at half strength, with a thin line round
+it. `where` gives the seconds, the frame numbers and the frames a second, and
+where on the frame the paint sits, in the clip's own pixels from its top left
+corner. Frames count from 0: frame n starts n / fps seconds in, so the time
+given for a frame is the middle of it. Only the first twelve marks get frames
+on the sheet and a picture of their own; the rest are in the legend.
+Each mark says what it asks for: a plain change is the part to fix; **KEEP**
+is a fence around that part, which must come through the redo as it is;
+**CUT** means that stretch goes. A note is about its own moment or stretch
+only, so change that part and leave the rest alone unless the note on the
+whole candidate says more.
 For each verdict, in order:
 
 - **Ship** (`ship`, `ship_and_iterate`): `S import <batch>` copies the winner

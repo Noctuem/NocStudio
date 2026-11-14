@@ -80,6 +80,10 @@ drag across the wave to mark a stretch, press `M` to mark the moment the playhea
 note on each, and make one a **Keep** or a **Cut**. Space plays and holds, the wheel zooms in
 time, and each mark's own play button plays that stretch round and round.
 
+*Video* takes the same marks. Press **Mark** on a clip (or Enter): `,` and `.` step one frame
+back and on, `M` marks the frame the clip is on, `I` and `O` set the start and the end of a
+stretch, and **Paint** (`B`) lets you draw on the frame to show where.
+
 **Size** and **Light / Dark** are at the right of the top bar and are remembered.
 
 ## 5. Teach your agent

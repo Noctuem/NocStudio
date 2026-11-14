@@ -600,6 +600,48 @@
   }
   const thirds = (f, words) => words[f < 1 / 3 ? 0 : f > 2 / 3 ? 2 : 1];
   const pct = (x) => (x < 0.01 ? 'under 1%' : 'about ' + Math.round(x * 100) + '%');
+  // The brush, shared by a picture and a frame of a clip. A stroke is { c: a colour or 'erase', r: its radius, p: [[x, y]] },
+  // all in the picture's own pixels. inkLine draws a stroke on a layer from its point `from` on (all of it, or what was
+  // just added); q is how many of the layer's pixels make one of the picture's
+  function inkLine(ctx, s, from, q) {
+    ctx.lineCap = ctx.lineJoin = 'round'; ctx.lineWidth = 2 * s.r * q; ctx.strokeStyle = ctx.fillStyle = s.c === 'erase' ? '#000' : MARK_HEX[s.c];
+    ctx.globalCompositeOperation = s.c === 'erase' ? 'destination-out' : 'source-over';
+    for (let i = Math.max(0, from); i < s.p.length; i++) {
+      const a = s.p[Math.max(0, i - 1)], b = s.p[i];
+      ctx.beginPath(); ctx.moveTo(a[0] * q, a[1] * q); ctx.lineTo(b[0] * q, b[1] * q); ctx.stroke();
+      ctx.beginPath(); ctx.arc(b[0] * q, b[1] * q, s.r * q, 0, 7); ctx.fill();
+    }
+  }
+  // a stroke begun where the brush comes down, at p on the picture; scale is the screen's pixels to one of the picture's
+  const inkStart = (ink, p, scale) => ({ c: ink.erase ? 'erase' : ink.colour, r: Math.max(0.5, Math.round(BRUSH[ink.size] / (scale || 1) * 10) / 10), p: [p.map(Math.round)] });
+  // the brush moved to p: the stroke takes the point, unless it has hardly moved
+  function inkMore(s, p) {
+    p = p.map(Math.round); const last = s.p[s.p.length - 1];
+    if (Math.hypot(p[0] - last[0], p[1] - last[1]) < s.r / 3) return false;
+    s.p.push(p); return true;
+  }
+  // where the paint on a layer sits on its picture of iw by ih: its box in the picture's pixels, the part of the
+  // picture in words, and its share of the picture. Nothing painted is null
+  function inkPlace(layer, iw, ih) {
+    const n = 200, k = n / Math.max(iw, ih), w = Math.max(1, Math.round(iw * k)), hh = Math.max(1, Math.round(ih * k));
+    const small = h('canvas', { width: w, height: hh }).getContext('2d', { willReadFrequently: true });
+    small.drawImage(layer, 0, 0, w, hh);
+    const px = small.getImageData(0, 0, w, hh).data;
+    let x0 = w, y0 = hh, x1 = -1, y1 = -1, count = 0;
+    for (let y = 0; y < hh; y++) for (let x = 0; x < w; x++) if (px[(y * w + x) * 4 + 3] > 40) { count++; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+    if (!count) return null;
+    const X0 = Math.round(x0 / k), X1 = Math.round((x1 + 1) / k), Y0 = Math.round(y0 / k), Y1 = Math.round((y1 + 1) / k);
+    const fx = (X0 + X1) / 2 / iw, fy = (Y0 + Y1) / 2 / ih;
+    const pos = fx > 1 / 3 && fx < 2 / 3 && fy > 1 / 3 && fy < 2 / 3 ? 'the middle' : [thirds(fy, ['upper', '', 'lower']), thirds(fx, ['left', 'centre', 'right'])].filter(Boolean).join(' ');
+    return { x0: X0, x1: X1, y0: Y0, y1: Y1, pos, share: count / (w * hh) };
+  }
+  // the ring that shows the brush under the pointer, over `host`; with x null it is hidden
+  function inkRing(ring, host, x, y, ink) {
+    if (x === null || !ink.on) { ring.hidden = true; return; }
+    const r = host.getBoundingClientRect(), k = cz(host), d = 2 * BRUSH[ink.size];
+    Object.assign(ring.style, { left: ((x - r.left) / k - d / 2) + 'px', top: ((y - r.top) / k - d / 2) + 'px', width: d + 'px', height: d + 'px' });
+    ring.hidden = false; ring.classList.toggle('erase', ink.erase); ring.style.borderColor = ink.erase ? '' : MARK_HEX[ink.colour];
+  }
 
   // painting on a picture shown in a zoom pane
   function markImage(pane, ink) {
@@ -608,31 +650,17 @@
     const brush = h('div', { class: 'brush', hidden: true });
     pane.el.append(brush);
     const ctxOf = (c) => layers[c].getContext('2d');
-    function seg(ctx, s, a, b) {
-      ctx.lineCap = ctx.lineJoin = 'round'; ctx.lineWidth = 2 * s.r * q; ctx.strokeStyle = ctx.fillStyle = s.c === 'erase' ? '#000' : MARK_HEX[s.c];
-      ctx.globalCompositeOperation = s.c === 'erase' ? 'destination-out' : 'source-over';
-      ctx.beginPath(); ctx.moveTo(a[0] * q, a[1] * q); ctx.lineTo(b[0] * q, b[1] * q); ctx.stroke();
-      ctx.beginPath(); ctx.arc(b[0] * q, b[1] * q, s.r * q, 0, 7); ctx.fill();
-    }
     function paint(s, from) {
       const targets = s.c === 'erase' ? MARK.map(([c]) => c) : [s.c];
-      for (const c of targets) { const ctx = ctxOf(c); for (let i = Math.max(0, from); i < s.p.length; i++) seg(ctx, s, s.p[Math.max(0, i - 1)], s.p[i]); }
+      for (const c of targets) inkLine(ctxOf(c), s, from, q);
     }
     function redraw() { for (const [c] of MARK) ctxOf(c).clearRect(0, 0, layers[c].width, layers[c].height); for (const s of ink.strokes) paint(s, 0); }
     // where each colour sits, read back from what is painted
     function measure() {
-      const n = 200, k = n / Math.max(iw, ih), w = Math.max(1, Math.round(iw * k)), hh = Math.max(1, Math.round(ih * k));
-      const small = h('canvas', { width: w, height: hh }).getContext('2d', { willReadFrequently: true });
       for (const [c] of MARK) {
-        small.clearRect(0, 0, w, hh); small.drawImage(layers[c], 0, 0, w, hh);
-        const px = small.getImageData(0, 0, w, hh).data;
-        let x0 = w, y0 = hh, x1 = -1, y1 = -1, count = 0;
-        for (let y = 0; y < hh; y++) for (let x = 0; x < w; x++) if (px[(y * w + x) * 4 + 3] > 40) { count++; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
-        if (!count) { if (ink.strokes.some((s) => s.c === c)) ink.where[c] = ''; else delete ink.where[c]; continue; }
-        const X0 = Math.round(x0 / k), X1 = Math.round((x1 + 1) / k), Y0 = Math.round(y0 / k), Y1 = Math.round((y1 + 1) / k);
-        const fx = (X0 + X1) / 2 / iw, fy = (Y0 + Y1) / 2 / ih;
-        const pos = fx > 1 / 3 && fx < 2 / 3 && fy > 1 / 3 && fy < 2 / 3 ? 'the middle' : [thirds(fy, ['upper', '', 'lower']), thirds(fx, ['left', 'centre', 'right'])].filter(Boolean).join(' ');
-        ink.where[c] = 'x ' + X0 + '–' + X1 + ', y ' + Y0 + '–' + Y1 + ' px of the ' + iw + ' × ' + ih + ' picture (' + pos + ', from its top left corner); ' + pct(count / (w * hh)) + ' of the picture';
+        const at = inkPlace(layers[c], iw, ih);
+        if (!at) { if (ink.strokes.some((s) => s.c === c)) ink.where[c] = ''; else delete ink.where[c]; continue; }
+        ink.where[c] = 'x ' + at.x0 + '–' + at.x1 + ', y ' + at.y0 + '–' + at.y1 + ' px of the ' + iw + ' × ' + ih + ' picture (' + at.pos + ', from its top left corner); ' + pct(at.share) + ' of the picture';
       }
     }
     function start() {
@@ -645,16 +673,11 @@
     if (pane.img.complete && pane.img.naturalWidth) start(); else pane.img.addEventListener('load', start, { once: true });
     pane.pen = {
       get on() { return ink.on; },
-      down(x, y) { if (!iw) return; const p = pane.toImage(x, y); stroke = { c: ink.erase ? 'erase' : ink.colour, r: Math.max(0.5, Math.round(BRUSH[ink.size] / (pane.scale || 1) * 10) / 10), p: [p.map(Math.round)] }; ink.strokes.push(stroke); paint(stroke, 0); },
-      move(x, y) { if (!stroke) return; const p = pane.toImage(x, y).map(Math.round), last = stroke.p[stroke.p.length - 1]; if (Math.hypot(p[0] - last[0], p[1] - last[1]) < stroke.r / 3) return; stroke.p.push(p); paint(stroke, stroke.p.length - 1); },
+      down(x, y) { if (!iw) return; stroke = inkStart(ink, pane.toImage(x, y), pane.scale); ink.strokes.push(stroke); paint(stroke, 0); },
+      move(x, y) { if (stroke && inkMore(stroke, pane.toImage(x, y))) paint(stroke, stroke.p.length - 1); },
       up() { if (!stroke) return; stroke = null; measure(); ink.changed('marks'); },
       cancel() { if (!stroke) return; ink.strokes.pop(); stroke = null; redraw(); },
-      hover(x, y) {
-        if (x === null || !ink.on) { brush.hidden = true; return; }
-        const r = pane.el.getBoundingClientRect(), k = cz(pane.el), d = 2 * BRUSH[ink.size];
-        Object.assign(brush.style, { left: ((x - r.left) / k - d / 2) + 'px', top: ((y - r.top) / k - d / 2) + 'px', width: d + 'px', height: d + 'px' });
-        brush.hidden = false; brush.classList.toggle('erase', ink.erase); brush.style.borderColor = ink.erase ? '' : MARK_HEX[ink.colour];
-      },
+      hover(x, y) { inkRing(brush, pane.el, x, y, ink); },
     };
     const api = {
       undo() { if (!ink.strokes.length) return; ink.strokes.pop(); redraw(); measure(); ink.changed('marks'); },
@@ -1158,7 +1181,8 @@
   }
 
   // playing a sound or a clip: play and hold that keep the place, seek, speed, loop all of it, or loop one stretch by
-  // watching the time each frame. `el` is an <audio> or a <video>; opts.length() gives the length when the page knows it better
+  // watching the time each frame. `el` is an <audio> or a <video>; opts.length() gives the length when the page knows it
+  // better; opts.snap(t) moves a time it is sent to (a clip goes to the middle of a frame)
   function transport(el, opts) {
     opts = opts || {};
     const subs = [], me = { stop: () => el.pause() };
@@ -1193,8 +1217,9 @@
       seek(t, stay) {
         const d = tp.length(), r = range();
         t = Math.min(d || Math.max(0, t), Math.max(0, t));
+        if (opts.snap) t = opts.snap(t);  // a clip goes to the middle of a frame, so the frame shown is the frame named
         if (r && !stay && (t < r[0] - 1e-3 || t > r[1] + 1e-3)) { loop = null; tell('state'); }
-        try { el.currentTime = t; } catch (e) { /* not loaded yet */ }
+        try { if (Math.abs((el.currentTime || 0) - t) > 1e-4) el.currentTime = t; } catch (e) { /* not loaded yet */ }  // going where it already is can end a clip on its last frame
         tell('time');
       },
       rate(r) { el.playbackRate = r || 1; },  // an <audio> or <video> keeps its pitch when slowed
@@ -1427,6 +1452,23 @@
     return new Promise((ok) => out.toBlob((b) => ok(b), 'image/png'));
   }
 
+  // a mark's play button: play its stretch round and round, or stop when it is the one playing
+  const spanLoop = (tl, tp) => (s) => {
+    if (tp.looping() === s.id && tp.playing()) { tp.loopSpan(null); tp.hold(); return; }
+    tp.loopSpan(s.id, () => { const x = tl.get(s.id); return x ? spanRange(x, tp.length()) : null; });
+    tp.seek(spanRange(s, tp.length())[0], true); tp.play();
+  };
+  // a canvas of a timeline made ready to draw on: sized to its place on the page, sharp on any screen, and wiped
+  function laneCanvas(c) {
+    const dpr = Math.min(2, (window.devicePixelRatio || 1) * cz(c)), w = c.clientWidth, hh = c.clientHeight;
+    if (!w || !hh) return null;
+    if (c.width !== Math.round(w * dpr) || c.height !== Math.round(hh * dpr)) { c.width = Math.round(w * dpr); c.height = Math.round(hh * dpr); }
+    const ctx = c.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, hh);
+    return { ctx, w, h: hh, cols: c.width };
+  }
+  // the colours a timeline is drawn in, read from the theme where `el` stands
+  function laneColours(el) { const css = getComputedStyle(el), get = (n, d) => css.getPropertyValue(n).trim() || d; return { text: get('--muted', '#b3b3bd'), line: get('--line', '#2f2f37'), bar: get('--fg', '#f1f1f4'), wave: get('--faint', '#7d7d88') }; }
+
   // ----------------------------------------------------- a sound, to mark it
   const WAVE_BLOCK = 256, FFT_N = 2048;
   const BANDS = [[60, 'under 60 Hz'], [250, 'between 60 and 250 Hz'], [2000, 'between 250 Hz and 2 kHz'], [6000, 'between 2 and 6 kHz'], [Infinity, 'over 6 kHz']];
@@ -1587,14 +1629,7 @@
       x: (t) => { const r = strip.getBoundingClientRect(); return r.left + (t - v.t0) / v.span * r.width; } };
     // whether the marks are on the file on screen: a candidate's marks sit on one of its files
     const mine = () => !!tl && (!tl.spans.length || !tl.file || tl.file === cur.name);
-    function fit(c) {
-      const dpr = Math.min(2, (window.devicePixelRatio || 1) * cz(c)), w = c.clientWidth, hh = c.clientHeight;
-      if (!w || !hh) return null;
-      if (c.width !== Math.round(w * dpr) || c.height !== Math.round(hh * dpr)) { c.width = Math.round(w * dpr); c.height = Math.round(hh * dpr); }
-      const ctx = c.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, hh);
-      return { ctx, w, h: hh, cols: c.width };
-    }
-    const colours = () => { const css = getComputedStyle(box), get = (n, d) => css.getPropertyValue(n).trim() || d; return { text: get('--muted', '#b3b3bd'), line: get('--line', '#2f2f37'), bar: get('--fg', '#f1f1f4'), wave: get('--faint', '#7d7d88') }; };
+    const fit = laneCanvas, colours = () => laneColours(box);
     function drawBase() {
       const col = colours(), r = fit(ruler), w = fit(wave);
       if (r) paintRuler(r.ctx, r.w, v, opts.tempo, col);
@@ -1707,12 +1742,7 @@
         tl = marks; editable = () => !!(o.editable() && mine() && len());
         tl.tempo = opts.tempo || null;
         tl.describe = (s) => { if (!snd) thin = true; return soundWhere(s, tl, snd); };
-        const loop = (s) => {
-          if (tp.looping() === s.id && tp.playing()) { tp.loopSpan(null); tp.hold(); return; }
-          tp.loopSpan(s.id, () => { const x = tl.get(s.id); return x ? spanRange(x, len()) : null; });
-          tp.seek(spanRange(s, len())[0], true); tp.play();
-        };
-        list = spanList(tl, { editable, when: spanWhen, goto: (s) => tp.seek(s.t0), loop, looping: () => tp.looping(),
+        list = spanList(tl, { editable, when: spanWhen, goto: (s) => tp.seek(s.t0), loop: spanLoop(tl, tp), looping: () => tp.looping(),
           none: 'No marks yet. Drag across the wave to mark a stretch, or press M to mark the moment the playhead is at.' });
         side.replaceChildren(list.el);
         lane = spanLane(strip, tl, map, { editable, seek: (t) => tp.seek(t) });
@@ -1729,12 +1759,442 @@
     return api;
   }
 
-  // a clip, large. The clip view will stand here: for now the clip plays with the browser's own controls and takes no marks.
-  // When it marks, it returns what soundView returns (kind 'video', attach, keys, picture, hint, tp) and media() keeps it as api.timed
-  function clipView(url) {
-    const video = h('video', { src: url, controls: true, loop: true, muted: true, playsinline: true, preload: 'auto' });
-    return { el: h('div', { class: 'timeview clip' }, video, h('p', { class: 'hint' }, 'Marks on clips are coming: a moment or a stretch of the clip, with a note for each, as on a sound.')), destroy() { video.pause(); video.removeAttribute('src'); } };
+  // ------------------------------------------------------ a clip, to mark it
+  const CLIP_RATES = [10, 12, 12.5, 15, 20, 23.976, 24, 25, 29.97, 30, 48, 50, 59.94, 60, 90, 100, 120];  // the usual frames a second
+  const CLIP_ROWS = 12;  // the marks that get a row on the sheet and a picture of their own
+  const CLIP_EDGE = 1920;  // the long side of a frame kept as a picture, at most
+  const CLIP_KEPT = 24e6;  // the pixels of large frames kept at one time; the last 400 small copies are kept beside them
+
+  // a second copy of a clip, never seen, that hands out its frames as pictures, so the clip on screen is never moved.
+  // A frame is asked for by a time in the middle of it: the copy goes there, waits until that frame is the one shown,
+  // and draws it. The asking waits in a queue, one frame at a time, and a frame once drawn is kept
+  function clipFrames(src) {
+    const v = h('video', { src, playsinline: true, preload: 'auto' });
+    v.muted = true;
+    const full = new Map(), small = new Map();
+    let queue = Promise.resolve(), alive = true, at = null, kept = 0;
+    const ready = new Promise((ok) => {
+      if (v.readyState >= 2) { ok(true); return; }
+      v.addEventListener('loadeddata', () => ok(true), { once: true }); v.addEventListener('error', () => ok(false), { once: true });
+      setTimeout(() => ok(v.readyState >= 2), 20000);
+    });
+    // go to a time and wait until its frame is shown: the seek has ended, and a frame has come up since it was asked.
+    // `near` is how far, in seconds, that frame's own time may be from the time asked for
+    const go = (t, near) => new Promise((ok) => {
+      let seeked = false, shown = !v.requestVideoFrameCallback, late = 0;
+      const cap = setTimeout(end, 3000);
+      function end() { clearTimeout(cap); clearTimeout(late); v.removeEventListener('seeked', onSeeked); ok(); }
+      function onSeeked() { seeked = true; if (shown) end(); else late = setTimeout(end, 300); }
+      function onFrame(now, meta) {
+        if (near && Math.abs(meta.mediaTime - t) > near) { v.requestVideoFrameCallback(onFrame); return; }  // a frame from before, still coming up
+        shown = true; if (seeked) end();
+      }
+      if (!shown) v.requestVideoFrameCallback(onFrame);
+      v.addEventListener('seeked', onSeeked);
+      try { v.currentTime = t; } catch (e) { end(); }
+    });
+    // the frame the copy shows now, drawn at the clip's own size (1920 on its long side at most), and a small copy of it
+    function still(key) {
+      const k = Math.min(1, CLIP_EDGE / Math.max(v.videoWidth, v.videoHeight)), w = Math.max(1, Math.round(v.videoWidth * k)), hh = Math.max(1, Math.round(v.videoHeight * k));
+      const c = h('canvas', { width: w, height: hh });
+      c.getContext('2d').drawImage(v, 0, 0, w, hh);
+      const ks = Math.min(1, 480 / Math.max(w, hh));
+      let less = c;
+      if (ks < 1) { less = h('canvas', { width: Math.round(w * ks), height: Math.round(hh * ks) }); less.getContext('2d').drawImage(c, 0, 0, less.width, less.height); }
+      small.set(key, less); full.set(key, c); kept += w * hh;
+      if (small.size > 400) small.delete(small.keys().next().value);
+      for (const [old, o] of full) { if (kept <= CLIP_KEPT || old === key) break; full.delete(old); kept -= o.width * o.height; }
+      return c;
+    }
+    return {
+      // the frame at a time, as a canvas: 'small' for a sheet, else at the clip's own size. Nothing when it cannot be read
+      frame(t, size, near) {
+        const key = Math.round(t * 1000), have = (size === 'small' && small.get(key)) || full.get(key);
+        if (have) return Promise.resolve(have);
+        const job = queue.then(async () => {
+          if (!alive || !(await ready) || !v.videoWidth) return null;
+          let c = full.get(key);
+          if (!c) {
+            if (at !== key) { await go(t, near); at = key; }
+            if (!alive) return null;
+            c = still(key);
+          }
+          return size === 'small' ? small.get(key) : c;
+        }).catch(() => null);
+        queue = job;
+        return job;
+      },
+      // the frames a second, when the file's facts do not say: the copy plays for a second, the times of the frames it
+      // shows are read, and the gap between them is taken to the nearest usual rate. 0 when it cannot be told
+      measure() {
+        const job = queue.then(async () => {
+          if (!alive || !(await ready) || !v.requestVideoFrameCallback) return 0;
+          const times = [];
+          let on = true;
+          const tick = (now, meta) => { if (!on) return; times.push(meta.mediaTime); v.requestVideoFrameCallback(tick); };
+          v.requestVideoFrameCallback(tick);
+          try { await v.play(); } catch (e) { on = false; return 0; }
+          await new Promise((ok) => setTimeout(ok, 1100));
+          on = false; v.pause(); at = null;
+          const gaps = [];
+          for (let i = 1; i < times.length; i++) { const d = times[i] - times[i - 1]; if (d > 0.0005) gaps.push(d); }
+          if (gaps.length < 4) return 0;
+          gaps.sort((a, b) => a - b);
+          const raw = 1 / gaps[gaps.length >> 1], usual = CLIP_RATES.reduce((a, b) => (Math.abs(b - raw) < Math.abs(a - raw) ? b : a));
+          return Math.abs(usual - raw) / raw < 0.02 ? usual : Math.round(raw * 100) / 100;
+        }).catch(() => 0);
+        queue = job;
+        return job;
+      },
+      destroy() { alive = false; v.pause(); v.removeAttribute('src'); try { v.load(); } catch (e) { /* already gone */ } full.clear(); small.clear(); },
+    };
   }
+
+  // a clip, large: the clip itself with the browser's controls off, a bar to scrub along with the marks under it, steps
+  // of one frame, paint on a frame, and the list of marks beside it. file: { url, label, name }; opts.facts is what the
+  // file check read from the clip (seconds, fps, frames). attach(marks, { editable }) puts a set of marks on it.
+  // What Claude gets as pictures: picture() is the sheet (the whole clip in eight frames, a row of frames for each
+  // mark, a legend) and shots() is each mark's own first frame at the clip's size, with its paint
+  function clipView(file, opts) {
+    opts = opts || {};
+    const facts = opts.facts || {}, src = API.src(file.url);
+    const video = h('video', { src, playsinline: true, preload: 'auto' });
+    let copy = null;  // the second copy of the clip, made when a frame is first wanted: a clip only looked at is read once
+    const frames = () => copy || (copy = clipFrames(src));
+    let tl = null, list = null, lane = null, alive = true, editable = () => false;
+    let fps = facts.fps > 0 ? facts.fps : 0, measured = false, asked = false, vw = 0, vh = 0, shown = 1, seen = null, pin = null;
+    let stroke = null, drawing = null, scrub = false, press = null, inkKey = '';
+    const pen = { on: false, size: 1, erase: false, colour: '' };  // the brush: what newInk keeps for a picture
+    const layers = new Map();  // the paint of each mark on a layer of its own: id -> { sig, c }
+    const sent = new Map(), bare = new Set();  // what each mark's own picture last showed, and the marks known to have none
+    const tp = transport(video, { length: () => facts.seconds || 0, snap });
+    const len = () => tp.length();
+    // Seconds are the truth; a frame's number is worked out from them. Frames count from 0: frame n starts at n / fps
+    // seconds. With no frame rate known a step is 1/30 s and no frame is named
+    const count = () => (!fps ? 0 : facts.frames && facts.fps === fps ? facts.frames : Math.max(1, Math.round(len() * fps)));
+    const frameOf = (t) => { const c = count(), n = Math.max(0, Math.floor(t * (fps || 30) + 1e-3)); return c ? Math.min(c - 1, n) : n; };
+    const mid = (n) => (n + 0.5) / (fps || 30);  // the middle of a frame: going there shows that frame and no other
+    function snap(t) { return fps && len() ? Math.min(len(), mid(frameOf(t))) : t; }
+    // the frame on screen: the one last shown when the browser says which, else the one the time falls in
+    const nowFrame = () => (fps && seen !== null && !video.seeking && seen <= video.currentTime + 1e-3 && video.currentTime - seen < 1.2 / fps ? frameOf(seen + 0.5 / fps) : frameOf(tp.time()));
+    const secs = (t) => t.toFixed(2) + ' s';
+
+    const ink = h('canvas', { class: 'ink' }), brush = h('div', { class: 'brush', hidden: true });
+    const stage = h('div', { class: 'clipframe' }, video, ink, brush);
+    const ruler = h('canvas', { class: 'timeruler' }), over = h('canvas');
+    const strip = h('div', { class: 'timelane' }, over), head = h('div', { class: 'timehead', hidden: true });
+    const track = h('div', { class: 'timewave track' }, ruler, strip, head);
+    const btn = (label, title, fn, name) => h('button', { class: 'btn small', type: 'button', title, 'aria-label': name || null, onclick: (e) => { e.currentTarget.blur(); fn(); } }, label);
+    const playBtn = btn('Play', 'Play or hold (Space)', () => tp.toggle());
+    const time = h('span', { class: 't' }), status = h('span', { class: 'hint' });
+    const loopBtn = h('button', { class: 'btn small' + (S.opts.loop ? ' on' : ''), type: 'button', 'data-opt': 'loop', 'aria-pressed': String(!!S.opts.loop), title: 'Play the clip round and round',
+      onclick: (e) => { e.currentTarget.blur(); S.opts.loop = !S.opts.loop; showOpts(); tp.loopAll(S.opts.loop); } }, 'Loop');
+    const side = h('div', { class: 'timeside' });
+    const el = h('div', { class: 'timeview clip' }, h('div', { class: 'timemain' }, stage, track,
+      h('div', { class: 'timebar' }, playBtn, h('span', { class: 'grp' }, btn('◀', 'A frame back (,); with Shift, ten', () => step(-1), 'A frame back'), btn('▶', 'A frame on (.); with Shift, ten', () => step(1), 'A frame on')),
+        time, h('span', { class: 'grp' }, rateButtons(() => tp.rate(S.opts.rate))), loopBtn, status)), side);
+    // the brush: Paint on or off, its size, Rub out. Undo and Clear all are the marks' own
+    const penBtn = btn('Paint', 'Paint on the frame, in the colour of its mark (B). Painting holds the clip', () => setPen(!pen.on));
+    const sizes = ['S', 'M', 'L'].map((label, i) => btn(label, ['Small', 'Medium', 'Large'][i] + ' brush', () => { pen.size = i; showPen(); }));
+    const rub = btn('Rub out', 'Rub paint out of the mark on this frame', () => { pen.erase = !(pen.on && pen.erase); setPen(true); });
+    const tools = h('div', { class: 'grp marktools' }, penBtn, h('span', { class: 'sizes' }, sizes), rub);
+    function showPen() {
+      penBtn.classList.toggle('on', pen.on); penBtn.setAttribute('aria-pressed', String(pen.on));
+      sizes.forEach((b, i) => b.classList.toggle('on', i === pen.size)); rub.classList.toggle('on', pen.on && pen.erase);
+      stage.classList.toggle('pen', pen.on);
+      if (!pen.on) brush.hidden = true;
+    }
+    function setPen(on) { pen.on = !!on && editable(); if (!pen.on) pen.erase = false; showPen(); }
+
+    const map = { time: (cx) => { const r = strip.getBoundingClientRect(); return (cx - r.left) / (r.width || 1) * len(); },
+      x: (t) => { const r = strip.getBoundingClientRect(); return r.left + t / (len() || 1) * r.width; } };
+    // a mark's time as the list shows it, and as the sheet does
+    const listWhen = (s) => (s.t1 > s.t0 ? s.t0.toFixed(2) + ' to ' + secs(s.t1) + (fps ? ' · frames ' + frameOf(s.t0) + ' to ' + frameOf(s.t1) : '') : secs(s.t0) + (fps ? ' · frame ' + frameOf(s.t0) : ''));
+    const sheetWhen = (s) => (s.t1 > s.t0 ? secs(s.t0) + ' to ' + secs(s.t1) + ' (' + secs(s.t1 - s.t0) + (fps ? ', frames ' + frameOf(s.t0) + ' to ' + frameOf(s.t1) : '') + ')' : 'at ' + secs(s.t0) + (fps ? ' (frame ' + frameOf(s.t0) + ')' : ''));
+
+    // the paint of one mark, drawn on its layer again only when its strokes have changed
+    const sigOf = (s) => { const k = s.strokes || [], last = k.length ? k[k.length - 1] : null; return s.c + ':' + k.length + ':' + k.reduce((n, x) => n + x.p.length, 0) + ':' + (last ? last.p[last.p.length - 1].join(',') : ''); };
+    const quality = () => Math.min(1, 2048 / Math.max(vw, vh));
+    function layerOf(s) {
+      if (!vw || !s.strokes || !s.strokes.length) { layers.delete(s.id); return null; }
+      const sig = sigOf(s), q = quality();
+      let L = layers.get(s.id);
+      if (L && L.sig === sig) return L.c;
+      if (!L) { L = { c: h('canvas', { width: Math.round(vw * q), height: Math.round(vh * q) }) }; layers.set(s.id, L); }
+      const ctx = L.c.getContext('2d');
+      ctx.globalCompositeOperation = 'source-over'; ctx.clearRect(0, 0, L.c.width, L.c.height);
+      for (const k of s.strokes) inkLine(ctx, k, 0, q);
+      L.sig = sig;
+      return L.c;
+    }
+    // the paint on screen: that of every mark the playhead is inside, over the frame
+    function drawInk() {
+      if (!vw || !tl) return;
+      const n = frameOf(tp.time()), on = tl.spans.filter((s) => s.strokes && s.strokes.length && frameOf(s.t0) <= n && n <= frameOf(s.t1));
+      const key = on.map((s) => s.id + '=' + sigOf(s)).join(' ');
+      if (key === inkKey) return;
+      inkKey = key;
+      const ctx = ink.getContext('2d'); ctx.clearRect(0, 0, ink.width, ink.height);
+      for (const s of on) { const c = layerOf(s); if (c) ctx.drawImage(c, 0, 0, ink.width, ink.height); }
+    }
+    function drawLane() {
+      const d = len(), r = laneCanvas(ruler), m = laneCanvas(over);
+      if (r && d) paintRuler(r.ctx, r.w, { t0: 0, span: d }, null, laneColours(track));
+      if (m && tl && d) paintSpans(m.ctx, tl, (t) => t / d * m.w, 0, m.h);
+    }
+    function drawHead() {
+      const d = len(), t = Math.min(tp.time(), d || 0);
+      head.hidden = !d; head.style.left = (d ? 100 * t / d : 0) + '%';
+      playBtn.textContent = tp.playing() ? 'Hold' : 'Play';
+      time.textContent = d ? secs(t) + ' / ' + secs(d) + (fps ? ' · frame ' + frameOf(t) + ' of ' + count() : '') : '';
+      drawInk();
+    }
+    // the layer of paint lies over the clip's picture, wherever that sits in its box
+    function place() {
+      const bw = stage.clientWidth, bh = stage.clientHeight;
+      if (!bw || !bh || !vw) return;
+      shown = Math.min(bw / vw, bh / vh);
+      Object.assign(ink.style, { left: (bw - vw * shown) / 2 + 'px', top: (bh - vh * shown) / 2 + 'px', width: vw * shown + 'px', height: vh * shown + 'px' });
+    }
+    function say() {
+      status.textContent = !vw ? 'Reading the clip' : vw + ' x ' + vh + (fps ? ' · ' + fps + ' frames a second' + (measured ? ', measured here' : '') : asked === 'busy' ? ' · measuring its frames a second' : ' · its frames a second are not known: a step is 1/30 s');
+    }
+    // the clip's size and length are known: the marks take them, and everything is drawn
+    function ready() {
+      if (!alive || !video.videoWidth || !len()) return;
+      if (vw !== video.videoWidth || vh !== video.videoHeight) {
+        vw = video.videoWidth; vh = video.videoHeight; layers.clear(); inkKey = '';
+        ink.width = Math.round(vw * quality()); ink.height = Math.round(vh * quality());
+      }
+      if (tl) { if (!fps && tl.fps) { fps = tl.fps; measured = true; } Object.assign(tl, { file: file.name, length: sec3(len()), fps, size: [vw, vh] }); }
+      if (!fps && !asked) {
+        asked = 'busy';
+        frames().measure().then((r) => {
+          asked = true; if (!alive) return;
+          if (r && !fps) { fps = r; measured = true; if (tl) { tl.fps = fps; tl.stale(); if (tl.spans.length && editable()) tl.changed('marks'); } }
+          ready();
+        });
+      }
+      place(); drawLane(); drawHead(); say();
+      if (list) list.draw();
+    }
+    // a step of frames: the clip is held, and goes to the middle of the frame so many on or back
+    function step(d) {
+      if (!len()) return;
+      const to = fps ? mid(Math.max(0, Math.min(count() - 1, nowFrame() + d))) : tp.time() + d / 30;
+      if (tp.playing()) { pin = to; tp.hold(); }
+      tp.seek(to);
+    }
+    // I and O: the start or the end of the chosen mark comes to the playhead. With no mark chosen, or the playhead
+    // past its end (for I) or before its start (for O), a new mark starts there
+    function edge(start) {
+      const t = tl.fit(snap(tp.time())), s = tl.get(tl.chosen);
+      if (!s || (start ? t > s.t1 : t < s.t0)) { tl.add(t); return; }
+      if ((start ? s.t0 : s.t1) === t) return;
+      tl.keep(); tl.move(s, start ? t : s.t0, start ? s.t1 : t); tl.changed('marks');
+    }
+    // the mark the brush paints on: the chosen one when the playhead is on its first frame, else one that starts on this frame
+    function target(n) {
+      const c = tl.get(tl.chosen);
+      if (c && frameOf(c.t0) === n) return c;
+      const here = tl.sorted().filter((s) => frameOf(s.t0) === n);
+      return here.find((s) => s.strokes && s.strokes.length) || here[0] || null;
+    }
+    const toFrame = (x, y) => { const r = ink.getBoundingClientRect(); return [(x - r.left) / (r.width || 1) * vw, (y - r.top) / (r.height || 1) * vh]; };
+    function penDown(x, y) {
+      const n = nowFrame(), t = fps ? mid(n) : tp.time();
+      if (tp.playing()) { pin = t; tp.hold(); }
+      let s = target(n);
+      if (pen.erase) { if (!s || !s.strokes || !s.strokes.length) { toast('There is no paint on this frame to rub out'); return; } tl.keep(); }
+      else if (s) tl.keep();
+      else { s = tl.add(t, t, { strokes: [] }); if (!s) return; }
+      if (!s.strokes) s.strokes = [];
+      tl.choose(s); pen.colour = s.c;
+      stroke = inkStart(pen, toFrame(x, y), shown); s.strokes.push(stroke); drawing = s.id;
+      drawInk();
+    }
+    function penMove(x, y) {
+      const s = tl.get(drawing), L = s && layers.get(s.id);
+      if (!L || !inkMore(stroke, toFrame(x, y))) return;
+      inkLine(L.c.getContext('2d'), stroke, stroke.p.length - 1, quality()); L.sig = sigOf(s);
+      drawInk();
+    }
+    function penUp() {
+      const s = tl.get(drawing);
+      stroke = null; drawing = null;
+      if (s) { tl.stale(s); tl.changed('marks'); }
+    }
+    // the ring under the pointer wears the colour of the mark it would paint on; white when the paint would start a new one
+    function ring(x, y) {
+      if (x !== null && pen.on && tl && !stroke) { const s = target(nowFrame()); pen.colour = s ? s.c : ''; }
+      inkRing(brush, stage, x, y, pen);
+      if (!pen.erase && !MARK_HEX[pen.colour]) brush.style.borderColor = '';
+    }
+    stage.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      if (pen.on && editable()) { stage.setPointerCapture(e.pointerId); e.preventDefault(); press = null; penDown(e.clientX, e.clientY); return; }
+      press = [e.clientX, e.clientY];
+    });
+    stage.addEventListener('pointermove', (e) => { ring(e.clientX, e.clientY); if (stroke) penMove(e.clientX, e.clientY); });
+    const lift = (e) => {
+      if (stroke) penUp();
+      else if (press && e.type === 'pointerup' && Math.hypot(e.clientX - press[0], e.clientY - press[1]) < 5) tp.toggle();  // a click on the clip plays or holds it
+      press = null;
+    };
+    stage.addEventListener('pointerup', lift); stage.addEventListener('pointercancel', lift);
+    stage.addEventListener('pointerleave', () => ring(null, null));
+    // the bar: a click goes to that time, a drag scrubs along the clip
+    ruler.addEventListener('pointerdown', (e) => { if (e.button !== 0 || !len()) return; ruler.setPointerCapture(e.pointerId); scrub = true; tp.seek(map.time(e.clientX)); });
+    ruler.addEventListener('pointermove', (e) => { if (scrub) tp.seek(map.time(e.clientX)); });
+    const scrubEnd = () => { scrub = false; };
+    ruler.addEventListener('pointerup', scrubEnd); ruler.addEventListener('pointercancel', scrubEnd);
+    // when the clip is held it goes to the middle of the frame it shows, so the frame named is the frame seen
+    video.addEventListener('pause', () => { const to = pin; pin = null; if (alive && fps && !video.ended) tp.seek(to !== null ? to : mid(nowFrame()), true); });
+    if (video.requestVideoFrameCallback) { const each = (now, meta) => { seen = meta.mediaTime; if (alive) video.requestVideoFrameCallback(each); }; video.requestVideoFrameCallback(each); }
+    tp.on((what) => {
+      if (what === 'length') { ready(); return; }
+      if (what === 'state' && list) list.draw();
+      drawHead();
+    });
+    const ro = window.ResizeObserver ? new ResizeObserver(() => { place(); drawLane(); }) : null;
+    if (ro) { ro.observe(stage); ro.observe(track); }
+
+    // the sentence Claude reads for one mark on a clip: when, which frames, and where its paint sits on the frame
+    function clipWhere(s) {
+      const c = count(), rate = fps ? ', ' + fps + ' fps' : '', parts = [];
+      if (s.t1 > s.t0) parts.push('from ' + secs(s.t0) + ' to ' + secs(s.t1) + (fps ? ' (frames ' + frameOf(s.t0) + ' to ' + frameOf(s.t1) + ' of ' + c + rate + ')' : '') + ', ' + secs(s.t1 - s.t0) + ' long');
+      else parts.push('at ' + secs(s.t0) + (fps ? ' (frame ' + frameOf(s.t0) + ' of ' + c + rate + ')' : ''));
+      const L = layerOf(s), at = L ? inkPlace(L, vw, vh) : null;
+      if (at) parts.push('paint ' + (s.t1 > s.t0 ? 'on its first frame, ' : '') + (at.pos === 'the middle' ? 'in the middle' : /^(left|right)$/.test(at.pos) ? 'on the ' + at.pos : 'in the ' + at.pos)
+        + ' (x ' + at.x0 + ' to ' + at.x1 + ', y ' + at.y0 + ' to ' + at.y1 + ' of ' + vw + ' x ' + vh + '), ' + pct(at.share) + ' of the frame');
+      return { where: parts.join('; ') };
+    }
+    // a mark's paint burned into a picture: at half strength, so the fault shows through, with a thin light line and a
+    // dark one round it, so it also shows on a frame of its own colour
+    function burn(ctx, layer, x, y, w, hh) {
+      const c = h('canvas', { width: w, height: hh }), k = c.getContext('2d'), d = Math.max(1, w / 500);
+      for (const [r, colour] of [[2 * d, '#000'], [d, '#fff']]) {
+        k.globalCompositeOperation = 'source-over'; k.clearRect(0, 0, w, hh);
+        for (let a = 0; a < 8; a++) k.drawImage(layer, r * Math.cos(a * Math.PI / 4), r * Math.sin(a * Math.PI / 4), w, hh);
+        k.globalCompositeOperation = 'destination-out'; k.drawImage(layer, 0, 0, w, hh);
+        k.globalCompositeOperation = 'source-in'; k.fillStyle = colour; k.fillRect(0, 0, w, hh);
+        ctx.drawImage(c, x, y);
+      }
+      ctx.globalAlpha = 0.5; ctx.drawImage(layer, x, y, w, hh); ctx.globalAlpha = 1;
+    }
+    // the sheet Claude reads: the whole clip in eight frames with the time under each, then for each of the first twelve
+    // marks a band (its number, kind and time) over its frame, or over the frames at its start, middle and end, the
+    // paint on the first at half strength; then the legend with the notes. 1600 across
+    function picture() {
+      if (!tl || !tl.spans.length || !len() || !vw) return Promise.resolve(null);
+      const c = count(), near = fps ? 1.01 / fps : 0, get = (t) => frames().frame(fps ? mid(frameOf(t)) : t, 'small', near);
+      const whole = Array.from({ length: 8 }, (_, i) => (c ? mid(Math.round(i * (c - 1) / 7)) : (i + 0.5) / 8 * len()));
+      const cells = tl.sorted().slice(0, CLIP_ROWS).map((s) => { const ts = s.t1 > s.t0 ? [s.t0, (s.t0 + s.t1) / 2, s.t1] : [s.t0]; return { s, ts, got: ts.map(get), layer: layerOf(s) }; });
+      return Promise.all([Promise.all(whole.map(get)), Promise.all(cells.map((x) => Promise.all(x.got)))]).then(([top8, rows]) => {
+        const W = 1600, pad = 16, gap = 6, title = 34, cap = 20, band = 26;
+        const sw = Math.floor((W - 2 * pad - 7 * gap) / 8), sh = Math.round(sw * vh / vw);
+        const k = Math.min(356 / vw, 220 / vh), fw = Math.round(vw * k), fh = Math.round(vh * k);
+        let x = pad, y = title + sh + cap + 14;
+        const places = cells.map((cell) => {  // a cell for each mark; they run across and wrap
+          const w = Math.max(330, cell.ts.length * fw + (cell.ts.length - 1) * 4);  // wide enough for the words on its band
+          if (x > pad && x + w > W - pad) { x = pad; y += band + fh + cap + 12; }
+          const at = { x, y, w }; x += w + 14;
+          return at;
+        });
+        const top = h('canvas', { width: W, height: y + (cells.length ? band + fh + cap : 0) + 4 }), ctx = top.getContext('2d');
+        ctx.fillStyle = '#111114'; ctx.fillRect(0, 0, W, top.height);
+        ctx.fillStyle = '#fff'; ctx.font = '600 15px system-ui, sans-serif';
+        ctx.fillText([file.name, secs(len()) + ' long', vw + ' x ' + vh, fps ? fps + ' frames a second, ' + c + ' frames counted from 0' : 'frames a second not known',
+          'the top row is the whole clip; then each mark'].join(' · '), pad, 22, W - 2 * pad);
+        const put = (img, px, py, w, hh) => {
+          if (img) ctx.drawImage(img, px, py, w, hh);
+          else { ctx.fillStyle = '#26262c'; ctx.fillRect(px, py, w, hh); ctx.fillStyle = '#b3b3bd'; ctx.font = '12px system-ui, sans-serif'; ctx.fillText('this frame could not be read', px + 8, py + 18, w - 16); }
+          ctx.strokeStyle = '#34343c'; ctx.lineWidth = 1; ctx.strokeRect(px + 0.5, py + 0.5, w - 1, hh - 1);
+        };
+        const under = (t, px, py, w, lead) => {  // under a frame: its time and number, or the number alone where the frame is narrow
+          ctx.fillStyle = '#b3b3bd'; ctx.font = '12px system-ui, sans-serif';
+          const all = (lead || '') + secs(t) + (fps ? ' · frame ' + frameOf(t) : '');
+          ctx.fillText(ctx.measureText(all).width <= w - 6 || !fps ? all : 'frame ' + frameOf(t), px, py + 14, w - 6);
+        };
+        top8.forEach((img, i) => { const px = pad + i * (sw + gap); put(img, px, title, sw, sh); under(whole[i], px, title + sh, sw); });
+        cells.forEach((cell, i) => {
+          const at = places[i], s = cell.s;
+          ctx.fillStyle = '#26262c'; ctx.fillRect(at.x, at.y, at.w, band);
+          ctx.fillStyle = MARK_HEX[s.c] || MARK_HEX.red; ctx.fillRect(at.x, at.y, 30, band);
+          ctx.fillStyle = '#111'; ctx.font = '600 14px system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.fillText(String(i + 1), at.x + 15, at.y + 18); ctx.textAlign = 'left';
+          ctx.fillStyle = '#fff'; ctx.fillText(tagWord(s) + ' · ' + sheetWhen(s), at.x + 38, at.y + 18, at.w - 44);
+          cell.ts.forEach((t, j) => {
+            const px = at.x + j * (fw + 4), py = at.y + band;
+            put(rows[i][j], px, py, fw, fh);
+            if (j === 0 && cell.layer) burn(ctx, cell.layer, px, py, fw, fh);
+            under(t, px, py + fh, fw, cell.ts.length > 1 ? ['start ', 'middle ', 'end '][j] : '');
+          });
+        });
+        return spanLegend(top, tl, sheetWhen);
+      });
+    }
+    // each mark's own picture, for the first twelve: the frame at its start at the clip's own size, its paint burned in.
+    // Only those that changed since they were last asked for; nothing for a mark takes its picture away
+    function shots() {
+      if (!tl || !len() || !vw) return Promise.resolve([]);
+      const jobs = [], near = fps ? 1.01 / fps : 0;
+      tl.sorted().forEach((s, i) => {
+        if (i >= CLIP_ROWS) { if (!bare.has(s.id)) { bare.add(s.id); sent.delete(s.id); jobs.push(Promise.resolve([s.id, null])); } return; }
+        const t = fps ? mid(frameOf(s.t0)) : s.t0, sig = Math.round(t * 1000) + '|' + sigOf(s);
+        bare.delete(s.id);
+        if (sent.get(s.id) === sig) return;
+        sent.set(s.id, sig);
+        const layer = layerOf(s);
+        jobs.push(frames().frame(t, 'full', near).then((img) => {
+          if (!img) { sent.delete(s.id); return null; }
+          const out = h('canvas', { width: img.width, height: img.height }), ctx = out.getContext('2d');
+          ctx.drawImage(img, 0, 0);
+          if (layer) burn(ctx, layer, 0, 0, out.width, out.height);
+          return new Promise((ok) => out.toBlob((blob) => ok(blob ? [s.id, blob] : null), 'image/png'));
+        }));
+      });
+      return Promise.all(jobs).then((made) => made.filter(Boolean));
+    }
+    const api = {
+      el, kind: 'video', tp, keys: null, tools, picture, shots,
+      slow: true,  // its pictures are frames read from the clip: it must not be thrown away until they are sent
+      hint: ['Drag along the lane: a stretch · ', h('kbd', {}, 'M'), ' a moment · ', h('kbd', {}, 'I'), ' ', h('kbd', {}, 'O'), ' its start and end · ', h('kbd', {}, ','), ' ', h('kbd', {}, '.'),
+        ' a frame, with Shift ten · ', h('kbd', {}, 'B'), ' paints · ', h('kbd', {}, 'Space'), ' plays · ', h('kbd', {}, '['), ' ', h('kbd', {}, ']'), ' step · ', h('kbd', {}, 'Enter'), ' its note · ', h('kbd', {}, 'Del'), ' takes it away'],
+      // put a set of marks on the clip: they are drawn on the lane, listed beside it, painted on, and the keys work them
+      attach(marks, o) {
+        if (lane) lane.destroy();
+        tl = marks; editable = () => !!(o.editable() && len() && vw);
+        tl.describe = clipWhere;
+        list = spanList(tl, { editable, when: listWhen, goto: (s) => tp.seek(s.t0), loop: spanLoop(tl, tp), looping: () => tp.looping(),
+          none: 'No marks yet. Press M to mark the frame the clip is on, I and O for the start and end of a stretch, or drag along the lane under the bar.' });
+        side.replaceChildren(list.el);
+        lane = spanLane(strip, tl, map, { editable, seek: (t) => tp.seek(t) });
+        tl.subs.push((what) => {
+          if (what === 'notes') return;
+          if (what === 'marks') {
+            for (const s of tl.spans) for (const k of s.strokes || []) if (k.c !== 'erase' && k.c !== s.c) k.c = s.c;  // paint wears its mark's colour
+            for (const id of [...sent.keys()]) if (!tl.get(id)) sent.delete(id);
+            for (const id of [...layers.keys()]) if (!tl.get(id)) layers.delete(id);
+            if (tl.spans.length && editable()) frames();  // pictures will be wanted: the second copy starts to load
+          }
+          drawLane(); drawInk();
+        });
+        api.keys = spanKeys(tl, tp, { editable, note: (id) => list.focus(id), more: (e, key) => {
+          if (e.code === 'Comma' || key === ',' || key === '<') { step(e.shiftKey ? -10 : -1); return true; }
+          if (e.code === 'Period' || key === '.' || key === '>') { step(e.shiftKey ? 10 : 1); return true; }
+          if (key === 'i' || key === 'o') { if (editable()) edge(key === 'i'); return true; }
+          if (key === 'b') { setPen(!pen.on); return true; }
+          return false;
+        } });
+        ready();
+      },
+      set() { tp.rate(S.opts.rate); tp.loopAll(S.opts.loop); },
+      destroy() { alive = false; if (ro) ro.disconnect(); if (lane) lane.destroy(); tp.destroy(); video.removeAttribute('src'); try { video.load(); } catch (e) { /* already gone */ } if (copy) copy.destroy(); layers.clear(); },
+    };
+    showPen(); say(); api.set();
+    return api;
+  }
+
 
   // marks on a sound or a clip in the closer look: kept on the verdict, with a picture of them beside the batch for Claude
   function markTimed(cand, m, el, bar) {
@@ -1756,14 +2216,16 @@
       pending = true; clearTimeout(timer); timer = setTimeout(send, 1500);
     });
     S.markFlush = send;
-    if (editable()) bar.after(h('div', { class: 'tools overtools' }, spanTools(tl, view.tp, editable), h('span', { class: 'hint' }, view.hint)));
+    if (editable()) bar.after(h('div', { class: 'tools overtools' }, spanTools(tl, view.tp, editable), view.tools || null, h('span', { class: 'hint' }, view.hint)));
     return null;
   }
 
-  // marks on a sound in the Library: they go to Claude as a note, a line for each mark, with the picture of them on it
+  // marks on a sound or a clip in the Library: they go to Claude as a note, a line for each mark, with the picture of
+  // them on it and, for a clip, the picture of each mark's own frame
   function markTimedOver(f, s) {
     const prev = $('.over.marking'); if (prev) prev.remove();
-    const view = soundView([{ url: f.url, label: f.label, name: decodeURIComponent(String(f.url).split('/').pop()) }], {});
+    const clip = f.kind === 'video', named = { url: f.url, label: f.label, name: decodeURIComponent(String(f.url).split('/').pop()) };
+    const view = clip ? clipView(named, {}) : soundView([named], {});
     const tl = newSpans(null, view.kind);
     view.attach(tl, { editable: () => true });
     const words = h('textarea', { class: 'field', rows: 2, placeholder: 'Anything else about it (optional)', 'aria-label': 'A note on the whole thing' });
@@ -1777,22 +2239,26 @@
       if (!data) { toast('Mark something first'); return; }
       send.disabled = true;
       try {
-        const lines = ['Marks on ' + s.title + ' (' + s.id + ', ' + f.label + '), a sound ' + clock(tl.length) + ' long. The picture of them is attached; each mark is quoted with when it is. KEEP: that part must stay as it is. CUT: that stretch goes.'];
+        const sheet = view.picture(), each = view.shots ? view.shots() : null;  // both start now, so a clip's frames are read in one go
+        const blob = await sheet, own = new Map(((await each) || []).filter(([, pic]) => pic));
+        const ownName = (i) => 'marks ' + s.id + ' mark ' + (i + 1) + '.png';
+        const lines = ['Marks on ' + s.title + ' (' + s.id + ', ' + f.label + '), ' + (clip ? 'a clip ' + tl.length.toFixed(2) + ' s' : 'a sound ' + clock(tl.length)) + ' long. The picture of them is attached; each mark is quoted with when it is. KEEP: that part must stay as it is. CUT: that stretch goes.'];
         if (words.value.trim()) lines.push('', words.value.trim());
         lines.push('');
-        data.spans.forEach((m, i) => lines.push('- ' + (i + 1) + '. ' + tagWord(m) + ' (' + m.c + '): ' + (m.note ? '"' + m.note + '"' : '(no note)') + (m.where ? '. Where: ' + m.where : '')));
-        const blob = await view.picture();
+        data.spans.forEach((m, i) => lines.push('- ' + (i + 1) + '. ' + tagWord(m) + ' (' + m.c + '): ' + (m.note ? '"' + m.note + '"' : '(no note)') + (m.where ? '. Where: ' + m.where : '') + (own.has(m.id) ? '. Its own picture: ' + ownName(i) : '')));
+        const files = blob ? [new File([blob], 'marks ' + s.id + '.png', { type: 'image/png' })] : [];
+        data.spans.forEach((m, i) => { if (own.has(m.id)) files.push(new File([own.get(m.id)], ownName(i), { type: 'image/png' })); });
         const made = (await API.addNote(lines.join('\n'), '', false)).note;
-        if (blob) await sendFiles(made.id, [new File([blob], 'marks ' + s.id + '.png', { type: 'image/png' })]);
-        close(); await afterNote('Noted, with the picture of the marks');
+        await sendFiles(made.id, files);
+        close(); await afterNote(files.length > 1 ? 'Noted, with the pictures of the marks' : 'Noted, with the picture of the marks');
       } catch (e) { toast(e.message); send.disabled = false; }
     } }, 'Send as a note');
     const bar = h('div', { class: 'bar' }, h('h3', {}, 'Mark ' + s.title), h('span', { class: 'hint' }, f.label),
       h('button', { class: 'btn small', type: 'button', onclick: close }, 'Close (Esc)'));
     const el = h('div', { class: 'over marking', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Mark ' + s.title }, bar,
-      h('div', { class: 'tools overtools' }, spanTools(tl, view.tp, () => true), h('span', { class: 'hint' }, view.hint)),
+      h('div', { class: 'tools overtools' }, spanTools(tl, view.tp, () => true), view.tools || null, h('span', { class: 'hint' }, view.hint)),
       h('div', { class: 'panes' }, h('div', { class: 'pane' }, view.el)),
-      h('div', { class: 'side marking' }, h('div', {}, h('p', { class: 'hint' }, 'Each mark has its own note, in the list beside the wave.')), h('div', {}, words, h('div', { class: 'jf' }, send))));
+      h('div', { class: 'side marking' }, h('div', {}, h('p', { class: 'hint' }, 'Each mark has its own note, in the list beside the ' + (clip ? 'clip' : 'wave') + '.')), h('div', {}, words, h('div', { class: 'jf' }, send))));
     document.body.append(el); document.body.style.overflow = 'hidden';
     document.addEventListener('keydown', key);
   }
@@ -2385,7 +2851,9 @@
       }
       else stage.append(h('img', { class: 'fit', src: f.url, alt: f.label, loading: 'lazy', onclick: (e) => shot(e.target.src) }));
       return h('article', { class: 'tile' }, stage, h('div', { class: 'thead' }, h('span', { class: 'mono muted grow', style: 'overflow-wrap:anywhere' }, f.label),
-        (f.kind === 'image' || f.kind === 'texture') && !STATIC ? markButton(f) : null));
+        (f.kind === 'image' || f.kind === 'texture') && !STATIC ? markButton(f) : null,
+        f.kind === 'video' && !STATIC ? h('button', { class: 'btn small', type: 'button', title: 'Mark moments and stretches of it, paint on a frame, with a note for each mark, and send them to Claude',
+          onclick: () => { const v = $('video', stage); if (v) v.pause(); markTimedOver(f, s); } }, 'Mark') : null));
     };
     function markButton(f) { return h('button', { class: 'btn small', type: 'button', title: 'Mark parts of it in colours, with a note for each, and send it to Claude', onclick: () => markOver(f, s) }, 'Mark'); }
     const mo = motionOf(s.motion);
@@ -2659,7 +3127,7 @@
       const v = api.timed = soundView(cand.files.filter((x) => x.kind === 'audio').map((f) => ({ url: fileUrl(b.id, f.path), label: f.label, name: f.path.split('/').pop() })), { tempo: cand.tempo });
       views.push(v); stage.classList.add('timed'); stage.append(v.el);
     } else if (file.kind === 'video' && big) {
-      const v = clipView(API.src(fileUrl(b.id, file.path)));  // api.timed stays empty until the clip view takes marks
+      const v = api.timed = clipView({ url: fileUrl(b.id, file.path), label: file.label, name: file.path.split('/').pop() }, { facts: file.facts || cand.facts });
       views.push(v); stage.classList.add('timed'); stage.append(v.el);
     } else if (file.kind === 'audio') {
       for (const f of cand.files.filter((x) => x.kind === 'audio')) {
@@ -2877,8 +3345,8 @@
         h('div', { class: 'thead' }, h('span', { class: 'letter' }, cand.id.length <= 2 ? cand.id : cand.id[0]), h('h3', {}, cand.title),
           cand.recommended ? h('span', { class: 'chip accent' }, 'Suggested') : null,
           cand.carried_from ? h('span', { class: 'chip keep', title: 'You kept this in an earlier round' }, 'From last round') : null,
-          timed ? h('button', { class: 'btn small', type: 'button', title: b.kind === 'audio' ? 'Open it large and mark moments and stretches of it, with a note for each (Enter)' : 'Open it large (Enter)',
-            onclick: () => { seq.token++; if (m.play) m.play.stop(); openOver([cand.id]); } }, b.kind === 'audio' && editable() ? 'Mark' : 'Look closer') : null,
+          timed ? h('button', { class: 'btn small', type: 'button', title: editable() ? 'Open it large and mark moments and stretches of it, with a note for each (Enter)' : 'Open it large, with the marks on it (Enter)',
+            onclick: () => { seq.token++; if (m.play) m.play.stop(); const v = $('video', m.el); if (v) v.pause(); openOver([cand.id]); } }, editable() ? 'Mark' : 'Look closer') : null,
           box ? h('label', { class: 'cmp' }, box, 'Compare') : null),
         m.el,
         h('div', { class: 'tinfo' }, cand.summary && b.kind !== 'question' ? h('p', { class: 'sum' }, cand.summary) : null, markChip(cand.id),
@@ -2971,7 +3439,7 @@
   function closeOver() {
     if (!S.over) return;
     const sent = S.markFlush ? S.markFlush() : null;
-    if (S.over.keep && sent && sent.then) { const gone = S.over.destroy; sent.then(gone, gone); S.over.destroy = () => {}; }  // a clip's pictures are grabbed from the clip itself
+    if (S.over.keep && sent && sent.then) { const gone = S.over.destroy; S.over.keep(); sent.then(gone, gone); S.over.destroy = () => {}; }  // a clip's pictures are grabbed from the clip itself: it is held, and thrown away once they are sent
     S.over.destroy(); S.over.el.remove(); S.over = null;
     document.body.style.overflow = '';
     if (S.batch) for (const c of S.batch.candidates) S.ui[c.id] = (S.ui[c.id] || []).filter((fn) => !fn.over);
@@ -3018,7 +3486,7 @@
     S.over = { el, ids: cands.map((c) => c.id), note: noteField, mark, apply: () => medias.forEach((m) => m.set()), destroy: () => medias.forEach((m) => m.destroy()) };
     if (one && medias[0].el.classList.contains('timed')) {  // a sound or a clip: its own hint, and its own keys once it takes marks
       const view = medias[0].timed;
-      if (view) Object.assign(S.over, { keys: (e) => !!view.keys && view.keys(e), keep: !!view.slow });
+      if (view) Object.assign(S.over, { keys: (e) => !!view.keys && view.keys(e), keep: view.slow ? () => view.tp.hold() : null });
       bar.querySelector('.hint').replaceChildren(h('kbd', {}, '←'), ' ', h('kbd', {}, '→'), ' next' + (view ? ' · each mark has its own note, in the list beside it' : ''));
     }
     document.body.append(el); document.body.style.overflow = 'hidden';
