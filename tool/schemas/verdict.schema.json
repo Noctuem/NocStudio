@@ -67,9 +67,9 @@
               "kind": { "enum": ["image", "model"] },
               "notes": { "type": "object", "description": "colour -> the user's note for that colour, exact" },
               "where": { "type": "object", "description": "colour -> where those marks sit, worked out by the page" },
-              "strokes": { "type": "array", "description": "On a picture: {c: colour or erase, r: radius in the picture's pixels, p: [[x, y], ...]}" },
+              "strokes": { "type": "array", "description": "On a picture: {c: colour or erase, r: radius in the picture's pixels, p: [[x, y], ...]}. On a model: {c: colour or erase, r: the brush's radius in the mesh's own units, m: mesh number (the paint is on it and on the other primitives of the same mesh), p: [x, y, z, nx, ny, nz, ...] six numbers a point, in the mesh's own unposed space with the way the surface faced, each point joined to the one before, j: 1 when it is more of the drag before it}. Later strokes cover earlier ones; erase hides what is under it." },
               "size": { "type": "array", "description": "On a picture: its width and height in pixels" },
-              "faces": { "type": "object", "description": "On a model: mesh number -> colour -> face numbers" },
+              "faces": { "type": "object", "description": "On a model marked by whole faces (before there were strokes, or in a browser without WebGL2): mesh number -> colour -> face numbers" },
               "meshes": { "type": "object", "description": "On a model: mesh number -> its name" },
               "moments": { "type": "object", "description": "On a moving model: colour -> {clip, t, length}, the motion and the second it was painted at" }
             }

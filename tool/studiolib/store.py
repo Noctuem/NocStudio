@@ -104,7 +104,8 @@ class StudioError(Exception):
 
 def clean_marks(raw) -> dict | None:
     """The user's marks on a candidate, as the page sends them: a note and a place for each colour, and the
-    strokes (on a picture) or the face numbers (on a model). Anything else is dropped."""
+    strokes (on a picture, or over a model's surface), and the face numbers of a model marked by faces. Anything
+    else is dropped."""
     if not isinstance(raw, dict) or raw.get("kind") not in ("image", "model"):
         return None
     pick = lambda d, n: {c: str(v).strip()[:n] for c, v in (d or {}).items() if c in MARK_COLOURS and isinstance(v, str)}  # noqa: E731
@@ -142,6 +143,24 @@ def clean_marks(raw) -> dict | None:
             if kept:
                 faces[str(key)[:20]] = kept
                 meshes[str(key)[:20]] = str((raw.get("meshes") or {}).get(key) or key)[:200]
+        strokes = []  # paint over the surface: points in a mesh's own space (x, y, z, then the way the surface faced), six numbers each
+        tidy = lambda x: int(x) if x == int(x) else x  # noqa: E731
+        for s in raw.get("strokes") or []:
+            if budget <= 0:
+                break
+            if not isinstance(s, dict) or s.get("c") not in MARK_COLOURS + ("erase",) or not isinstance(s.get("m"), (str, int)) \
+                    or not num(s.get("r")) or not 0 < s["r"] < 100_000 or not isinstance(s.get("p"), list):
+                continue
+            flat = s["p"][:min(len(s["p"]) // 6, budget) * 6]
+            if not flat or not all(num(x) and abs(x) < 1e9 for x in flat):
+                continue
+            budget -= len(flat) // 6
+            key = str(s["m"])[:20]
+            pts = [tidy(float(f"{x:.7g}") if i % 6 < 3 else round(float(x), 2)) for i, x in enumerate(flat)]
+            strokes.append(dict({"c": s["c"], "r": float(f"{s['r']:.4g}"), "m": key, "p": pts}, **({"j": 1} if s.get("j") else {})))
+            meshes.setdefault(key, str((raw.get("meshes") or {}).get(key) or key)[:200])
+        if strokes:
+            out["strokes"] = strokes
         out["faces"], out["meshes"] = faces, meshes
         moments = {}  # a colour painted on a moving model: the motion and the moment, in seconds
         for c, mo in (raw.get("moments") or {}).items():

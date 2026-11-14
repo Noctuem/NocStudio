@@ -165,9 +165,13 @@ The page knows how to show each kind of work:
 
 **Mark what you mean.** Looking closer at a picture, a texture, a model or a motion, press Mark and
 paint over the part you are talking about, in up to five colours, with a note for each colour. On a
-motion the frame holds while you paint, and each colour keeps the clip and the second. The agent gets
-your words, a plain account of where each colour sits, and one picture of it all (a model from six
-sides, or posed at each moment you marked). On an asset in the Library, Mark sends the same thing as a note.
+model the paint lies over the texture as a see-through layer, as fine as the screen, on the side that
+faced you, and it stays on the body when the model is posed or moves (a browser without WebGL2 paints
+whole faces instead). On a motion the frame holds while you paint, and each colour keeps the clip and
+the second. Rub out takes paint off; Undo takes back the last stroke. The agent gets your words, a
+plain account of where each colour sits (on a model: which parts, where in metres and how large), and
+one picture of it all (a model from six sides with the paint on it, or posed at each moment you
+marked). On an asset in the Library, Mark sends the same thing as a note.
 
 Before a batch reaches you, **checks** run on every file (too loud, too long, too many
 triangles, wrong size, no record of how it was made). A batch that breaks a rule is held back
