@@ -826,7 +826,8 @@ class Studio:
             raise StudioError("this batch is closed")
         verdict = self._clean_verdict(batch, draft, strict=False)
         write_json(self.batch_dir(batch_id) / "draft.json", verdict)
-        self._prune_mark_pictures(batch, verdict)
+        if not batch.get("verdict"):  # a verdict that was sent keeps its marks' pictures: a stray draft from another tab takes none
+            self._prune_mark_pictures(batch, verdict)
 
     def _clean_verdict(self, batch: dict, raw: dict, strict: bool) -> dict:
         mode = batch.get("mode", "pick")

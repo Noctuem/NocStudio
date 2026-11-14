@@ -77,9 +77,11 @@ What makes a batch worth their time:
 - **Music is filed with its tempo** when you know it: `--bpm` on `add`, with
   `--beats` to the bar (4 unless you say) and `--first-beat`, the second the
   first bar starts at. The page then counts bars on its ruler and names the
-  bar and beat of every mark they make. Never guess a tempo: leave it out. A
-  sound longer than the Studio's usual limit needs
-  `--target max_seconds=<n>` on the batch (`max_peak_dbfs` likewise).
+  bar and beat of every mark they make. Never guess a tempo: leave it out.
+- **The project's `studio.toml` sets the limits on a sound** (`max_seconds`,
+  `max_peak_dbfs` under `[checks.audio]`). A `--target` of the same name can
+  only tighten one for its batch, never loosen it. A sound over the limit is
+  held back until the user changes the limit.
 - For something that must be judged **in the running app** (`--kind in_app`),
   add no file: give each candidate `--label` with the exact words shown over
   it in the app, and the batch `--launch` with the line that starts the app.

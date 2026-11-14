@@ -777,9 +777,12 @@ def cmd_note(a):
                  "later": "kept for later; nothing more to do",
                  "go": "yours to do now; close it with: note done" if a.mine else
                        ("sent to the session on " + a.lane if a.lane else "no session is on that part, and the page says so")}[note["status"]]
-        if note.get("reading_options"):
+        if note.get("reading_options"):  # on a bug or options the pick changes nothing about who it goes to
             after = (f"the user picks one of the {len(note['reading_options'])} choices on the page first; "
-                     + ("their pick sends it back to be sorted as what they picked" if note["status"] == "confirm" else "it goes on with their pick on it"))
+                     + ("their pick sends it back to be sorted as what they picked" if note["status"] == "confirm" else
+                        "then it is yours to do, with their pick on it; close it with: note done" if a.mine else
+                        f"then it goes to the session on {a.lane}, with their pick on it" if a.lane else
+                        "after their pick it still goes to no session: none is on that part, and the page says so"))
         print(f"{nid}: {note['kind']}. {after[0].upper()}{after[1:]}.")
     elif a.action == "split":
         note = s.split_note(nid, text)

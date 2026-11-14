@@ -91,7 +91,8 @@ def choices(note: dict):
             return None
         if said.get("options"):
             return at, said["options"]
-    return ("reading", note["reading_options"]) if note.get("reading_options") else None
+    # a reading's own choices ask only while that reading stands: a note closed before the pick and opened again asks nothing
+    return ("reading", note["reading_options"]) if note.get("reading_options") and note.get("status") in ("confirm", "go") else None
 
 
 def waits(note: dict) -> str:
@@ -298,6 +299,15 @@ def _thread(note: dict, they: str, you: str) -> list:
     return out
 
 
+def _spoke_since(note: dict) -> bool:
+    """Whether the user said anything after the note was last sorted: a reading is "sent back" only by their words."""
+    try:
+        start = max(0, int(note.get("options_after") or 0))
+    except (TypeError, ValueError):
+        start = 0
+    return any(isinstance(m, dict) and m.get("who") == "you" for m in (note.get("thread") or [])[start:])
+
+
 def _option_help(sort: bool = False) -> list:
     """How a session gives choices: said once in what it is handed, under the first commands that take them."""
     out = ["  --option: whenever your answer" + (" or your reading" if sort else "") + " holds choices for them to pick from, give each one as its own",
@@ -306,7 +316,8 @@ def _option_help(sort: bool = False) -> list:
            "  you as their reply, by its name."]
     if sort:
         out += ["  A reading given with choices is not worked in yet: on a directive or a rule their pick sends the note back",
-                "  for you to sort again as what they picked; on a bug or options it goes on to the session with the pick on it."]
+                "  for you to sort again as what they picked; on a bug or options it goes on, with the pick on it, to whoever",
+                "  --mine or --lane named (to no session if you gave neither)."]
     return out
 
 
@@ -328,11 +339,11 @@ def wording(notes: list, home, lane_rows: dict | None = None, midwork: bool = Fa
         out += [f"TO SORT ({len(new)}): nobody has read these yet. For each one, say what kind of note it is and what you take it to mean.", ""]
         for n in new:
             head = f"  {n['id']}" + ("  URGENT" if n.get("urgent") else "")
-            if n.get("kind"):
+            if n.get("kind") and n.get("kind_by") == "you":  # said only of a kind the user chose, never of one a session gave it
                 head += f"  (the user marked it: {SAID.get(n['kind'], n['kind'])}; sort it as `{n['kind']}`)"
             out += [head, _quote(n.get("text"))] + _files(n, home)
             if n.get("reading"):
-                out.append(f"      An earlier reading, which they sent back: {n['reading']}")
+                out.append(f"      An earlier reading{', which they sent back' if _spoke_since(n) else ''}: {n['reading']}")
                 out += _offered(n.get("reading_options"), "The choices given with that reading")
             out += _thread(n, "They then said:", "You then said:")
             out.append("")

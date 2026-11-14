@@ -276,7 +276,7 @@ def tune_wav(path: Path) -> None:
 def _tune(studio, _):
     seconds = 60 / TUNE["bpm"] * TUNE["beats"] * TUNE_BARS
     bid = studio.new_batch("tune", sample=True, filed_by=BY, kind="audio", mode="rate", title="A longer sound: mark parts of it",
-                           ask="Approve it, or mark what must change.", targets={"max_seconds": 30},
+                           ask="Approve it, or mark what must change.",
                            brief=SAY + f" The tune is written by script: {TUNE_BARS} bars at {TUNE['bpm']:g} beats a minute, with a harsh buzz across bar 5.",
                            look_at=["Press Mark, or Enter: drag across the wave to mark a stretch, press M to drop a moment while it plays",
                                     "Each mark has its own note, and is a Change, a Cut or a Keep",
@@ -358,6 +358,19 @@ SAMPLES = [("motions", _motions), ("models", _models), ("pictures", _pictures), 
            ("writing", _writing), ("held", _held)]
 
 
+def _file(studio, bid: str, any_length: bool = False) -> dict:
+    """Run the checks on a sample and file it. The tune is longer than a project lets its sounds be; it is made-up
+    and never counted, so the project's length limit is set aside while that one sample is checked, and only here."""
+    audio = (studio.config.get("checks") or {}).get("audio")
+    if not (any_length and isinstance(audio, dict) and audio.get("max_seconds")):
+        return studio.publish(bid)
+    limit, audio["max_seconds"] = audio["max_seconds"], 0
+    try:
+        return studio.publish(bid)
+    finally:
+        audio["max_seconds"] = limit
+
+
 def build(studio, model: str = "", fresh: bool = False) -> list[dict]:
     """Make every sample that is missing. `fresh` makes them all again and forgets the user's marks on them."""
     out = []
@@ -375,7 +388,7 @@ def build(studio, model: str = "", fresh: bool = False) -> list[dict]:
         batch = studio.load_batch(bid)
         batch["order"] = [s for s, _ in SAMPLES].index(slug)
         studio.save_batch(batch)
-        report = studio.publish(bid)
+        report = _file(studio, bid, any_length=slug == "tune")
         if slug == "held" and report["ready"]:  # this Studio's checks are loose: nothing to show held
             shutil.rmtree(studio.samples_dir / bid)
             out.append({"id": bid, "note": "left out: this Studio's checks refuse nothing in it"})

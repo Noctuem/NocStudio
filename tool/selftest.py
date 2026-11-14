@@ -142,6 +142,38 @@ def main() -> int:
         check(all(b["id"] != bad["id"] for b in studio.state()["batches"]) and studio.state()["held"][0]["id"] == bad["id"],
               "a refused batch is held back from the inbox")
 
+        # a batch's own target: it can make a sound limit stricter than the project's, never looser, and one that is no number is not used
+        from studiolib import checks as limits
+        make_wav(src / "five.wav", -6.0, 5.0); make_wav(src / "two.wav", -24.0, 2.0)
+        project = {"audio": {"max_peak_dbfs": -20.0, "max_seconds": 3.0}}
+        faults = lambda name, targets, rules=project: sorted(c["id"] for c in limits.check_audio(src / name, rules, targets)[1])  # noqa: E731
+        loose = [{"max_seconds": None, "max_peak_dbfs": None}, {"max_seconds": 0, "max_peak_dbfs": 0}, {"max_seconds": 90, "max_peak_dbfs": 6},
+                 {"max_seconds": float("inf"), "max_peak_dbfs": float("nan")}, {"max_seconds": True, "max_peak_dbfs": False},
+                 {"max_seconds": "90s", "max_peak_dbfs": "-6dB"}, {"max_seconds": "1:30"}, {"max_seconds": [1]}, {"max_seconds": -5}, {"max_seconds": 10 ** 400}]
+        check(faults("five.wav", None) == ["audio.length", "audio.peak"] and all(faults("five.wav", t) == ["audio.length", "audio.peak"] for t in loose)
+              and all(faults("two.wav", t) == [] for t in loose),
+              "a target that is looser than the project's limit, nothing, 0, or not a number leaves the project's limit as it is, and breaks nothing")
+        check(faults("two.wav", {"max_seconds": 1.5}) == ["audio.length"] and faults("two.wav", {"max_peak_dbfs": -30}) == ["audio.peak"]
+              and faults("two.wav", {"max_seconds": 2, "max_peak_dbfs": -24}) == []
+              and faults("five.wav", {"max_seconds": 4, "max_peak_dbfs": -10}, {"audio": {"max_seconds": 0}}) == ["audio.length", "audio.peak"]
+              and faults("five.wav", {"max_seconds": "4"}, {"audio": {"max_seconds": 0}}) == [],
+              "a stricter target is held to, for length and for level alike, and a project with no limit of its own takes the batch's")
+        said = {c["id"]: c["msg"] for c in limits.check_audio(src / "five.wav", project, {"max_seconds": 90})[1]}
+        check(said["audio.length"] == "5.00 s long; the limit is 3 s (the project's, in studio.toml: a batch's own target cannot raise it)"
+              and said["audio.peak"] == "peaks at -6.0 dBFS; the limit is -20"
+              and limits.check_audio(src / "two.wav", project, {"max_seconds": 1.5})[1][0]["msg"] == "2.00 s long; the limit is 1.5 s",
+              "a sound over the limit in a batch that asked for a looser one is told the project's limit stands")
+        tool_cli = lambda *args: subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "studio.py"), "--home", str(home), *args],  # noqa: E731
+                                                capture_output=True, text=True, encoding="utf-8")
+        odd = tool_cli("new", "odd", "--kind", "audio", "--mode", "rate", "--ask", "Approve?", "--look", "x",
+                       "--target", "max_seconds=90s", "--target", "max_peak_dbfs=null").stdout.strip()
+        tool_cli("add", odd, str(src / "five.wav"), "--tool", "selftest")
+        refused = tool_cli("file", odd)
+        check(refused.returncode == 1 and "Traceback" not in refused.stderr and "5.00 s long; the limit is 3 s" in refused.stdout
+              and "peaks at -6.0 dBFS; the limit is -20" in refused.stdout and "NOT filed" in refused.stdout,
+              "filing a batch whose target is not a number ends in the checks' own words, not in a fault of the tool, and the sound is held back")
+        shutil.rmtree(studio.batch_dir(odd))
+
         model = studio.new_batch("creature", kind="model", slot="test.model", ask="Which?", look_at=["Height"], targets={"height_m": 1.8})
         studio.add_candidate(model["id"], [src / "tall.glb"], made_with={"tool": "selftest"})
         studio.add_candidate(model["id"], [src / "right.glb"], made_with={"tool": "selftest"})
@@ -277,12 +309,16 @@ def main() -> int:
         make_wav(src / "tune.wav", -22.0, 4.0)
         added = cli("add", tune["id"], str(src / "tune.wav"), "--title", "Tune", "--tool", "selftest", "--bpm", "96", "--beats", "3", "--first-beat", "0.5")
         lone, slow = cli("add", tune["id"], str(src / "tune.wav"), "--beats", "3"), cli("add", tune["id"], str(src / "tune.wav"), "--bpm", "4")
+        held = studio.publish(tune["id"])
+        studio.config["checks"]["audio"]["max_seconds"] = 5.0  # the user lets sounds run longer, as they would in studio.toml
         filed = studio.publish(tune["id"])
+        studio.config["checks"]["audio"]["max_seconds"] = 3.0
         cand = studio.load_batch(tune["id"])["candidates"]
         check(added.returncode == 0 and len(cand) == 1 and cand[0]["tempo"] == {"bpm": 96.0, "beats": 3, "first": 0.5}
               and lone.returncode == 2 and "--bpm" in lone.stderr and slow.returncode == 2 and "20 to 400" in slow.stderr,
               "a sound is filed with its tempo by --bpm, --beats and --first-beat; beats without a tempo, or a tempo that is not one, is refused")
-        check(filed["ready"] and cand[0]["facts"]["seconds"] == 4.0, "a batch's own target lets a sound run longer than the Studio's usual limit")
+        check(not held["ready"] and any("4.00 s long; the limit is 3 s" in e for e in held["errors"]) and filed["ready"] and cand[0]["facts"]["seconds"] == 4.0,
+              "a batch's own target does not let a sound run longer than the project's limit; it is filed once the user makes the limit longer")
         def put_mark(cid, span, data, batch_id=tune["id"]):
             req = urllib.request.Request(base + f"/api/batch/{batch_id}/marks/{cid}" + (f"/{span}" if span else ""), data=data, method="PUT", headers={"X-Studio-File": "1"})
             try:
@@ -338,6 +374,10 @@ def main() -> int:
               and "- **3. CUT, 0:03.00 to 0:03.50 (0.50 s), green**" in brief and "  > drags\n  > on" in brief
               and f"Its own picture: `batches/{tune['id']}/marks/a/m3.png`" in brief and "KEEP is a fence" in brief and "in colours" not in brief,
               "the brief for the next round says the same: every mark, the user's words quoted, the pictures by their paths")
+        status, _ = http("PUT", base + f"/api/batch/{tune['id']}/draft", {"action": "another_round", "candidates": {"a": {"note": "typed in a tab that never saw the marks"}}})
+        check(status == 200 and studio.load_batch(tune["id"])["status"] == "submitted" and own("m1").exists() and own("m3").exists()
+              and "its own picture: " + str(own("m3")) in cli("todo").stdout,
+              "a draft saved on a batch whose verdict was sent leaves the pictures of that verdict's marks where they are")
         (studio.batch_dir(tune["id"]) / "result.json").write_text('{"action": "another_round"}', encoding="utf-8")
         check(put_mark("a", "m1", png) == 400 and put_mark("a", "", png) == 400, "a closed batch takes no more pictures of marks")
         shutil.rmtree(studio.batch_dir(tune["id"]))
@@ -776,6 +816,39 @@ def main() -> int:
               and http("POST", base + f"/api/note/{gate}", {"action": "confirm"})[0] == 200,
               "a pick on a reading to confirm sends the note back to be sorted as what was picked; the plain reading that follows is confirmed as before")
 
+        # a session is told what happened to a note and no more: a pick is not the user's own category, a note closed before
+        # its pick asks nothing when it is opened again, and a pick sends a bug nowhere the sort did not send it
+        from studiolib import notes as notebox
+        fence = http("POST", base + "/api/note", {"text": "paint the fence"})[1]["note"]["id"]
+        ruled = http("POST", base + "/api/note", {"text": "fences are green from now on", "kind": "rule"})[1]["note"]["id"]
+        note_cli("sort", fence, "--kind", "directive", "--reading", "Paint the fence one of two colours.",
+                 "--option", "Green :: As the gate.", "--option", "White :: As the house.", session="s-3")
+        http("POST", base + f"/api/note/{fence}", {"action": "back", "text": "Green"})
+        told = notebox.wording([studio.note(fence), studio.note(ruled)], home)
+        check("the user marked it" not in text and f"  {fence}\n" in told and f"  {ruled}  (the user marked it: a standing rule; sort it as `rule`)" in told
+              and told.count("the user marked it") == 1 and "An earlier reading, which they sent back: Paint the fence" in told,
+              "after a pick on a reading the session is not told the user marked the note; it is told so only of a kind the user chose themselves")
+        note_cli("sort", fence, "--kind", "bug", "--reading", "The fence's paint peels.", "--option", "Strip it :: A day.", "--option", "Paint over :: An hour.", session="s-3")
+        live = seen(fence)
+        http("POST", base + f"/api/note/{fence}", {"action": "done"})
+        http("POST", base + f"/api/note/{fence}", {"action": "reopen"})
+        opened, told = seen(fence), notebox.wording([studio.note(fence)], home)
+        note_cli("reply", fence, "Which side of the fence?", session="s-3")
+        talk = seen(fence)
+        check((live["status"], live["waits"], live["choice_at"]) == ("go", "you", "reading") and (opened["status"], opened["waits"], opened["choice_at"]) == ("new", "claude", None)
+              and "An earlier reading: The fence's paint peels." in told and "sent back" not in told and "- Strip it: A day." in told
+              and (talk["status"], talk["waits"], talk["choice_at"]) == ("talk", "you", None) and len(opened["reading_options"]) == 2,
+              "a note closed before its pick and opened again asks nothing: the old reading's choices take no click, then or under the answer that follows, and it is not said to be sent back")
+        hinge = http("POST", base + "/api/note", {"text": "the hinge squeaks"})[1]["note"]["id"]
+        lone = note_cli("sort", hinge, "--kind", "bug", "--reading", "The gate's top hinge squeaks.", "--option", "Oil it :: A minute.", "--option", "New hinge :: An hour.", session="s-3")
+        http("POST", base + f"/api/note/{hinge}", {"action": "reply", "text": "Oil it"})
+        row, how = seen(hinge), notebox.wording([studio.note(ruled)], home)
+        check("picks one of the 2 choices" in lone and "it still goes to no session" in lone and "page says so" in lone and "then it is yours to do, with their pick on it" in asked
+              and (row["status"], row["waits"], row["to"]) == ("go", "claude", "") and "to no session if you gave neither" in how and "goes on to the session" not in how,
+              "a bug sorted with choices and sent to nobody is said to go to no session after the pick, as it does; sorted as --mine it is said to be the session's own")
+        for nid_ in (fence, ruled, hinge):
+            http("POST", base + f"/api/note/{nid_}", {"action": "done"})
+
         # files on a note: streamed to disk out of git, handed to a session by path, archived on close, back on reopen
         def put_file(nid: str, name: str, blob: bytes):
             req = urllib.request.Request(base + f"/api/note/{nid}/file?name=" + urllib.parse.quote(name), data=blob, method="PUT", headers={"X-Studio-File": "1"})
@@ -1149,6 +1222,9 @@ def main() -> int:
               and long_one["candidates"][0]["facts"]["seconds"] == 12.0 and long_one["candidates"][0]["facts"]["peak_dbfs"] <= -20.0
               and not list((Path(__file__).resolve().parent / "samples_src").rglob("tune*")),
               "one sample is a longer sound written by script and filed with its tempo, to try marks on")
+        check(studio.config["checks"]["audio"]["max_seconds"] == 3.0 and not long_one["targets"] and long_one["candidates"][0]["checks"] == []
+              and Studio(home).config["checks"]["audio"]["max_seconds"] == 3.0,
+              "the long sample is filed in a Studio whose sounds may run 3 s, with no target of its own, and the project's limit is as it was")
         check([c["facts"].get("fps") for c in studio.load_batch("sample-video")["candidates"]] == [30.0, 30.0, 15.0]
               and all(c["facts"]["frames"] == c["facts"]["fps"] * 4 for c in studio.load_batch("sample-video")["candidates"]),
               "filing a clip keeps its facts on it, as a sound's are kept")

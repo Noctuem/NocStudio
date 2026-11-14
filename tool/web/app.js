@@ -2982,7 +2982,8 @@
   const split = (text) => { const at = String(text).indexOf(' :: '); return at < 0 ? [String(text), ''] : [text.slice(0, at), text.slice(at + 4)]; };
 
   // a button a session filed: the click runs its line on the PC, or opens its file. Only the ask's id goes to the server.
-  function buttonBox(x, inline, onPress) {
+  // the button sits on the row that shows the line, or the path of the file it opens, beside Copy
+  function buttonBox(x) {
     const can = !!x.can_run && (x.status === 'open' || x.status === 'later') && !S.state.static && !S.state.site;
     let ran = x.ran || null, timer = 0;
     const press = h('button', { class: 'btn small primary bpress', type: 'button', disabled: !can,
@@ -2991,13 +2992,15 @@
     const stopBtn = h('button', { class: 'btn small', type: 'button', hidden: true, onclick: () => go('stop') }, 'Stop');
     const status = h('span', { class: 'bstatus' });
     const out = h('pre', { class: 'bout', hidden: true, 'aria-label': 'What it printed, the last lines' });
-    const what = x.open ? h('div', { class: 'bwhat' }, h('span', { class: 'muted' }, 'Opens '), h('code', { class: 'i' }, x.open))
-      : h('div', { class: 'bwhat' }, h('code', { class: 'i' }, x.run), x.cwd ? h('span', { class: 'muted' }, ' in ' + x.cwd) : null);
-    const box = h('div', { class: 'bbox' }, h('div', { class: 'brow' }, inline ? press : null, stopBtn, status, h('span', { class: 'grow' }), copyButton(x.open || x.run)), what, out);
+    const what = h('div', { class: 'bwhat' }, h('span', { class: 'grow' }, x.open ? [h('span', { class: 'muted' }, 'Opens '), h('code', { class: 'i' }, x.open)]
+      : [h('code', { class: 'i' }, x.run), x.cwd ? h('span', { class: 'muted' }, ' in ' + x.cwd) : null]), press, copyButton(x.open || x.run));
+    const how = h('div', { class: 'brow', hidden: true }, stopBtn, status);
+    const box = h('div', { class: 'bbox' }, how, what, out);
     function draw() {
       const running = !!ran && ran.state === 'running';
       press.disabled = !can || running;
       stopBtn.hidden = !running;
+      how.hidden = !ran;
       if (!ran) { status.replaceChildren(); out.hidden = true; return; }
       const ok = ran.state === 'done' && ran.code === 0, bad = ran.state === 'done' && ran.code !== 0;
       const chip = { running: 'Running', opened: 'Opened', stopped: 'Stopped', lost: 'Not known', done: ok ? 'Done' : 'Failed' }[ran.state] || ran.state;
@@ -3019,13 +3022,12 @@
     async function go(action) {
       try {
         ran = Object.assign({}, ran, (await call('POST', '/api/button', { id: x.id, action })).ran); draw();
-        if (onPress) onPress();
         if (ran.kind === 'run') watch(); else toast('Opened');
       } catch (e) { toast(e.message); }
     }
     draw();
     if (can && ran && ran.kind === 'run') setTimeout(watch, 0); // the last lines, and more while it runs
-    return { el: box, press };
+    return { el: box };
   }
 
   function askRow(x) {
@@ -3047,8 +3049,7 @@
       catch (e) { toast(e.message); }
     };
     const fact = (label, text) => (text ? h('div', { class: 'fact' }, h('span', {}, label), h('span', { html: inline(text) })) : null);
-    let row = null; // a button's press is in the row itself, one click from the rail; its output opens below
-    const bb = x.button ? buttonBox(x, !open, () => { if (row) { row.open = true; OPEN.set('ask:' + x.id, true); } }) : null;
+    const bb = x.button ? buttonBox(x) : null;
     const body = h('div', { class: 'askbody' },
       x.detail ? h('p', { html: inline(x.detail) }) : null,
       fact('Blocks', x.gates), fact('If you say nothing', x.default), fact('Takes you', x.time), fact('Waiting since', when(x.created)),
@@ -3059,10 +3060,9 @@
         decide && x.default ? h('button', { class: 'btn small', type: 'button', onclick: () => send('done', 'Use the default: ' + x.default) }, 'Use the default') : null,
         x.status === 'open' ? h('button', { class: 'btn small', type: 'button', onclick: () => send('park') }, 'Not now') : null)]
         : h('div', { class: 'btns' }, h('button', { class: 'btn small', type: 'button', onclick: () => send('reopen') }, 'Open again')));
-    row = fold('ask:' + x.id, !!x.urgent, 'need' + (x.urgent && open ? ' urgent' : ''),
+    return fold('ask:' + x.id, !!x.urgent, 'need' + (x.urgent && open ? ' urgent' : ''),
       [h('span', { class: 'chip' + (open ? ' accent' : '') }, open ? (ASK[x.kind] || 'To do') : (x.status === 'done' ? 'Done' : 'Set aside')),
-        h('span', { class: 'grow' }, x.title), x.urgent && open ? h('span', { class: 'chip bad' }, 'Urgent') : null, bb && open ? bb.press : null], body);
-    return row;
+        h('span', { class: 'grow' }, x.title), x.urgent && open ? h('span', { class: 'chip bad' }, 'Urgent') : null], body);
   }
 
   // what moves by the second: the lanes Claude reports and the sessions the hooks see
@@ -4392,7 +4392,7 @@
       const key = JSON.stringify(list.map((b) => [b.id, b.button, b.run, b.open, b.cwd]));
       if (key === btnKey) return;
       btnKey = key;
-      btns.replaceChildren(...list.map((b) => h('div', { class: 'task' }, h('span', { class: 'label' }, 'A button for you: ' + b.title), buttonBox(b, true).el)));
+      btns.replaceChildren(...list.map((b) => h('div', { class: 'task' }, h('span', { class: 'label' }, 'A button for you: ' + b.title), buttonBox(b).el)));
     }
     function drawHead(state) {
       if (state !== cur) { cur = state; drawActs(); }

@@ -70,10 +70,25 @@ def check_image(path: Path, kind: str, rules: dict):
 
 
 # ---------------------------------------------------------------------- audio
+def _own_limit(value, positive: bool):
+    """A batch's own target as a limit: a real number, above 0 for a length; anything else is None."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or abs(value) > 1e9 or value != value:
+        return None
+    return None if positive and value <= 0 else value
+
+
 def check_audio(path: Path, rules: dict, targets: dict | None = None):
     facts, out = {}, []
-    # a batch may set its own limits (--target max_seconds=90): music is longer than a shot
-    r = dict(rules.get("audio", {}), **{k: v for k, v in (targets or {}).items() if k in ("max_seconds", "max_peak_dbfs")})
+    # the project's studio.toml sets the limits; a batch's own target (--target max_seconds=2) can only make one
+    # stricter, never looser, and one that is not a length above 0 or a real level is not used at all
+    r, stands = dict(rules.get("audio", {})), {}
+    for name, positive in (("max_seconds", True), ("max_peak_dbfs", False)):
+        asked, has = (targets or {}).get(name), r.get(name)
+        own = _own_limit(asked, positive)
+        if own is not None:
+            r[name] = min(has, own) if (has if positive else has is not None) else own
+        if asked is not None and r.get(name) != own:  # said only when the sound is over: the batch asked, and the project's limit stands
+            stands[name] = " (the project's, in studio.toml: a batch's own target cannot raise it)"
     if path.suffix.lower() != ".wav":
         return facts, [_chk("warn", "audio.format", f"{path.suffix} is not WAV; level and length were not checked")]
     try:
@@ -109,9 +124,9 @@ def check_audio(path: Path, rules: dict, targets: dict | None = None):
     if r.get("sample_width_bits") and width * 8 != r["sample_width_bits"]:
         out.append(_chk("error", "audio.bits", f"{width * 8}-bit; the project loads {r['sample_width_bits']}-bit PCM"))
     if r.get("max_peak_dbfs") is not None and dbfs > r["max_peak_dbfs"] + 0.05:
-        out.append(_chk("error", "audio.peak", f"peaks at {dbfs:.1f} dBFS; the limit is {r['max_peak_dbfs']:g}"))
+        out.append(_chk("error", "audio.peak", f"peaks at {dbfs:.1f} dBFS; the limit is {r['max_peak_dbfs']:g}" + stands.get("max_peak_dbfs", "")))
     if r.get("max_seconds") and seconds > r["max_seconds"] + 0.005:
-        out.append(_chk("error", "audio.length", f"{seconds:.2f} s long; the limit is {r['max_seconds']:g} s"))
+        out.append(_chk("error", "audio.length", f"{seconds:.2f} s long; the limit is {r['max_seconds']:g} s" + stands.get("max_seconds", "")))
     if peak == 0:
         out.append(_chk("error", "audio.silent", "the file is silent"))
     return facts, out

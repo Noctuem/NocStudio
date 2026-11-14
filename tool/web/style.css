@@ -628,13 +628,13 @@ details.setup > :not(summary) { margin: 0 14px 12px; }
 /* a button a session filed: the press, how the last one went, and its last lines */
 .bbox { display: flex; flex-direction: column; gap: 6px; }
 .brow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.brow .grow { flex: 1 1 auto; }
-.bpress { white-space: nowrap; }
-/* a long button label: the title keeps its width, the button drops under it and its words wrap inside it */
+/* the head of the card wraps: the title keeps its place beside the chip and its words wrap inside it */
 .need > summary .grow { flex: 1 1 14ch; }
-.need > summary .bpress { flex: 0 1 auto; max-width: 100%; white-space: normal; text-align: left; }
-.bwhat { overflow-wrap: anywhere; font-size: 12px; }
+/* the row that shows the line or the file: the button sits on it, beside Copy; when the line is too long for that, both drop under it */
+.bwhat { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; overflow-wrap: anywhere; font-size: 12px; }
+.bwhat .grow { flex: 1 1 auto; min-width: 0; }
 .bwhat code { user-select: all; }
+.bpress { flex: 0 1 auto; max-width: 100%; white-space: normal; text-align: left; }
 .bout { margin: 0; max-height: 220px; overflow: auto; padding: 8px 10px; background: var(--stage); color: var(--fg); border: 1px solid var(--line-soft);
   border-radius: 3px; font: 11.5px/1.45 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 .task .jf, .tblock .jf, .tbox .jf { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
