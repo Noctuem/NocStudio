@@ -149,7 +149,7 @@ def clean_marks(raw) -> dict | None:
             if kept:
                 faces[str(key)[:20]] = kept
                 meshes[str(key)[:20]] = str((raw.get("meshes") or {}).get(key) or key)[:200]
-        strokes = []  # paint over the surface: points in a mesh's own space (x, y, z, then the way the surface faced), six numbers each
+        strokes = []  # paint over the surface: points in a mesh's own space (x, y, z, then the way to the eye from it), six numbers each
         tidy = lambda x: int(x) if x == int(x) else x  # noqa: E731
         for s in raw.get("strokes") or []:
             if budget <= 0:
