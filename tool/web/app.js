@@ -1415,10 +1415,11 @@
       if (seen.has(s.id)) continue;
       out.push(h('div', { class: 'pill session ' + s.state },
         h('div', { class: 'pillhead' }, h('span', { class: 'dot' + (s.state === 'working' || s.state === 'background' ? ' live' : '') }),
-          h('b', { class: 'grow' }, s.title || s.prompt || 'A Claude Code session'), s.where ? h('span', { class: 'chip' }, s.where) : null),
+          h('b', { class: 'grow' }, s.title || s.prompt || (s.agent === 'codex' ? 'A Codex session' : 'A Claude Code session')),
+          s.agent === 'codex' ? h('span', { class: 'chip' }, 'Codex') : null, s.where ? h('span', { class: 'chip' }, s.where) : null),
         h('div', { class: 'sub' }, sessionLine(s)), sessionBits(s)));
     }
-    if (!out.length) return [h('div', { class: 'empty' }, 'Nothing is running. ', hooks ? 'A Claude Code session in the project shows here as soon as it starts.'
+    if (!out.length) return [h('div', { class: 'empty' }, 'Nothing is running. ', hooks ? 'A Claude Code or Codex session in the project shows here as soon as it starts.'
       : 'Sessions will show here on their own once live reporting is on: say to Claude Code, “turn on the Studio\'s live reporting”.')];
     return [h('div', { class: 'pills' }, out)];
   }

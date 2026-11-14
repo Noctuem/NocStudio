@@ -1825,9 +1825,9 @@ class Studio:
 
     def overview(self) -> dict:
         from . import board, setup
-        hooks = bool(setup.hooks_installed())
+        hooks = bool(setup.hooks_on())
         return {"now": self.now(), "repo": self.repo_git(), "milestones": self.roadmap(), "hands": self._hands_shown(),
-                "board": board.view(self), "live": board.live(self), "hooks": hooks, "hooks_notes": setup.hooks_hand_over(),
+                "board": board.view(self), "live": board.live(self), "hooks": hooks, "hooks_notes": setup.hooks_hand_over_all(),
                 "setup": board.checklist(self, hooks)}
 
     # ------------------------------------------------- the files behind a slot

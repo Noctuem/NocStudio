@@ -6,4 +6,5 @@ __pycache__/
 
 # this PC's Studio for working on NocStudio itself: its skill and instructions hold paths on this machine
 .claude/skills/studio/
+.agents/skills/studio/
 CLAUDE.local.md

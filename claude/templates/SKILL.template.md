@@ -174,8 +174,8 @@ empty and say so in `--ruling`.
 ## The notes box
 
 The user types notes on the Studio's Notes page whenever a thought comes: an
-order, a bug, a question, a half-formed idea. **Never poll for them.** Claude
-Code's hooks hand them to you when you finish a turn, and between tool calls
+order, a bug, a question, a half-formed idea. **Never poll for them.** The
+Studio's hooks hand them to you when you finish a turn, and between tool calls
 once a note has waited a while or is marked urgent. What you are handed lists
 each note in their words and repeats the commands below. `S note waiting`
 prints the same when they ask ("process my notes").
@@ -324,7 +324,7 @@ note, the ETA and the state as it goes: `stuck` with the reason in the note,
 `waiting` when it waits on the user (with an ask in Needs you). Never leave a
 lane on the board that nobody is working.
 
-Claude Code's hooks also report, by themselves, what each session is doing
+The Studio's hooks also report, by themselves, what each session is doing
 (working, waiting, which agents are running); that needs nothing from you.
 The same hooks hand you the user's notes (the notes box, above). `S hooks
 status` says whether they are installed on this machine.

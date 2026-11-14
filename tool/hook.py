@@ -1,7 +1,9 @@
-"""What Claude Code runs on its own while a session works: one small note per event, so the Studio's
+"""What the agent runs on its own while a session works: one small note per event, so the Studio's
 Overview can show what every session in a project is doing right now.
 
-`studio.py hooks install` points Claude Code's hooks here. Each call reads one event (JSON on stdin),
+`studio.py hooks install` points Claude Code's hooks here, and `hooks install --for codex` points Codex's
+(as `hook.py --agent codex`; the two send the same events in nearly the same shape, and where they differ
+the code below says so). Each call reads one event (JSON on stdin),
 finds the Studio of the project the session is working in, and updates that session's file under
 `<studio home>/live/`. A project without a Studio costs one cache lookup and nothing is written.
 
@@ -28,8 +30,7 @@ KIT = Path(__file__).resolve().parents[1]
 REGISTRY = Path(os.environ.get("STUDIO_REGISTRY") or KIT / "studios.json")
 CACHE = Path(os.environ.get("LOCALAPPDATA") or Path.home() / ".cache") / "NocStudio" / "hook-cache.json"
 KEEP_ENDED = 24 * 3600   # a session that ended stays on file this long
-EVENTS = ("SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PermissionRequest", "Notification",
-          "Stop", "StopFailure", "SubagentStart", "SubagentStop", "TaskCreated", "TaskCompleted", "CwdChanged")
+AGENT = "claude"         # whose hook this run is: `--agent codex` says Codex's
 
 
 def now() -> str:
@@ -118,12 +119,30 @@ def home_for(cwd: str) -> str:
 
 
 # ------------------------------------------------------------- one event in
+def patched(patch) -> list:
+    """The files a Codex apply_patch call touches, by name, in the order the patch lists them."""
+    out = []
+    for line in str(patch or "").splitlines():
+        for mark in ("*** Add File: ", "*** Update File: ", "*** Delete File: "):
+            if line.startswith(mark):
+                name = Path(line[len(mark):].strip()).name
+                if name and name not in out:
+                    out.append(name)
+    return out
+
+
 def doing(tool: str, given: dict) -> str:
     """A few words on what a tool call is, as the user would say it."""
     given = given if isinstance(given, dict) else {}
     name = lambda key: Path(str(given.get(key) or "")).name  # noqa: E731
-    if tool in ("Bash", "PowerShell"):
-        return short(given.get("description") or given.get("command"), 90)
+    command = given.get("command")
+    if isinstance(command, list):  # a command given as its words
+        command = " ".join(str(c) for c in command)
+    if tool == "apply_patch":  # Codex's one tool for every edit
+        files = patched(command or given.get("patch") or given.get("input"))
+        return "Editing " + (files[0] if len(files) == 1 else f"{len(files)} files" if files else "files")
+    if tool in ("Bash", "PowerShell", "shell", "local_shell", "exec_command"):
+        return short(given.get("description") or command, 90)
     if tool in ("Edit", "Write", "NotebookEdit", "MultiEdit"):
         return "Editing " + (name("file_path") or name("notebook_path") or "a file")
     if tool == "Read":
@@ -147,7 +166,7 @@ def apply(rec: dict, e: dict) -> dict:
     """Fold one event into what is known about its session."""
     kind, stamp, agent = e.get("hook_event_name") or "", now(), e.get("agent_id") or ""
     rec.setdefault("started", stamp)
-    rec["updated"] = stamp
+    rec["updated"], rec["agent"] = stamp, AGENT
     if e.get("cwd"):
         rec["cwd"] = e["cwd"]
     if e.get("session_title"):
@@ -201,6 +220,10 @@ def apply(rec: dict, e: dict) -> dict:
     elif kind == "StopFailure":
         rec["doing"] = "Stopped on an error: " + short(e.get("error"), 100)
         state("stuck")
+    elif kind == "Interrupt":  # Codex: the user stopped the turn
+        if not agent:
+            rec["doing"] = ""
+            state("waiting")
     elif kind == "SubagentStart":
         if agent:
             agents[agent] = {"type": e.get("agent_type") or "agent", "started": stamp, "doing": ""}
@@ -282,7 +305,11 @@ def hand_over(home: str, e: dict) -> None:
         if judged:
             parts.append(verdicts.wording(judged, home, prompt=kind == "UserPromptSubmit"))
     if parts:
-        out = {"hookSpecificOutput": {"hookEventName": kind, "additionalContext": "\n\n".join(parts)}}
+        text = "\n\n".join(parts)
+        if AGENT == "codex" and kind == "Stop":  # Codex takes no added context as a turn ends: this has it carry on with the text
+            out = {"decision": "block", "reason": text}
+        else:
+            out = {"hookSpecificOutput": {"hookEventName": kind, "additionalContext": text}}
         sys.stdout.write(json.dumps(out))
 
 
@@ -330,7 +357,11 @@ def wait_for_send(e: dict, home: str) -> int:
 
 
 def main() -> int:
-    if "--wait" in sys.argv[1:]:
+    global AGENT
+    args = sys.argv[1:]
+    if "--agent" in args[:-1]:
+        AGENT = "".join(c for c in args[args.index("--agent") + 1].lower() if c.isalnum())[:20] or "claude"
+    if "--wait" in args:
         try:
             e = json.loads(sys.stdin.buffer.read().decode("utf-8", errors="replace") or "{}")
             home = home_for(e.get("cwd") or os.getcwd()) if isinstance(e, dict) else ""

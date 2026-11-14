@@ -15,6 +15,28 @@ REGISTRY = KIT / "studios.json"
 TEMPLATES = KIT / "claude" / "templates"
 FIRST_PORT = 8772  # 8770 is the first studio's, 8771 the demo's
 
+# The agents a Studio can work with. Each reads skills from its own folders and its own instructions file.
+AGENTS = {
+    "claude": {"name": "Claude Code", "skills": (".claude", "skills"), "doc": "CLAUDE.md"},
+    "codex": {"name": "Codex", "skills": (".agents", "skills"), "doc": "AGENTS.md"},
+}
+
+
+def agent(name: str) -> dict:
+    if name not in AGENTS:
+        raise StudioError(f"{name!r} is not an agent the Studio knows; it knows: {', '.join(AGENTS)}")
+    return AGENTS[name]
+
+
+def skill_path(repo: Path, who: str = "claude") -> Path:
+    """Where the project's repo carries the `studio` skill for that agent."""
+    return Path(repo).joinpath(*agent(who)["skills"], "studio", "SKILL.md")
+
+
+def skill_copies(repo: Path) -> list[Path]:
+    """Every copy of the `studio` skill the repo carries, one per agent that has one."""
+    return [p for p in (skill_path(repo, who) for who in AGENTS) if p.is_file()]
+
 GENERIC_TOML = '''# Studio settings for {project}. Edit freely; the tool reads this file on every start.
 
 project = "{project}"
@@ -108,11 +130,17 @@ def skill_text(project: str, home_dir: Path, repo: Path) -> str:
     return _fill((TEMPLATES / "SKILL.template.md").read_text(encoding="utf-8"), values)
 
 
-def install_create_skill(skills: Path | None = None) -> Path:
-    """Put the `studio-create` skill where Claude Code finds it in every project: the user's own skills folder."""
-    target = (skills or Path.home() / ".claude" / "skills") / "studio-create" / "SKILL.md"
+def install_create_skill(skills: Path | None = None, who: str = "claude") -> Path:
+    """Put the `studio-create` skill where the agent finds it in every project: the user's own skills folder."""
+    a = agent(who)
+    target = (skills or Path.home().joinpath(*a["skills"])) / "studio-create" / "SKILL.md"
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(_fill((TEMPLATES / "CREATE-SKILL.template.md").read_text(encoding="utf-8"), {"KIT": str(KIT)}),
+    values = {"KIT": str(KIT), "AGENT": a["name"], "DOC": a["doc"], "SKILLS": "/".join(a["skills"]),
+              "FOR": "" if who == "claude" else f" --for {who}",
+              "SETTINGS": "~/.claude/settings.json" if who == "claude" else "~/.codex/hooks.json",
+              "TRUST": "" if who == "claude" else " Codex runs a new hook only after the user has looked it over: they type "
+                                                  "`/hooks` in Codex once and trust NocStudio's."}
+    target.write_text(_fill((TEMPLATES / "CREATE-SKILL.template.md").read_text(encoding="utf-8"), values),
                       encoding="utf-8", newline="\n")
     return target
 
@@ -124,8 +152,12 @@ def register(name: str, home: Path, repo: Path, port: int, registry: Path | None
 
 
 def create(repo, project: str = "", home: str = "", port: int = 0, registry: Path | None = None,
-           git: bool = True) -> dict:
-    """A new, empty Studio for the project at `repo`. Nothing existing is overwritten."""
+           git: bool = True, agents=("claude",)) -> dict:
+    """A new, empty Studio for the project at `repo`. Nothing existing is overwritten. `agents` names whose
+    sessions work in the project: each gets the skill where it looks for skills."""
+    agents = list(dict.fromkeys(agents)) or ["claude"]
+    for who in agents:
+        agent(who)
     repo = Path(repo).resolve()
     if not repo.is_dir():
         raise StudioError(f"{repo}: no such folder; give the project's repo")
@@ -135,9 +167,10 @@ def create(repo, project: str = "", home: str = "", port: int = 0, registry: Pat
         raise StudioError("the studio home must be outside the project's repo (worktrees would each get a copy)")
     if (home_dir / "studio.toml").exists():
         raise StudioError(f"{home_dir} is a studio already; open it with its studio.cmd")
-    skill = repo / ".claude" / "skills" / "studio" / "SKILL.md"
-    if skill.exists():
-        raise StudioError(f"{skill} exists: this project already has a Studio skill; remove it first if it is stale")
+    skills = [skill_path(repo, who) for who in agents]
+    for skill in skills:
+        if skill.exists():
+            raise StudioError(f"{skill} exists: this project already has a Studio skill; remove it first if it is stale")
     taken = {int(r.get("port") or 0) for r in studios(registry)} | {8770, 8771}
     if port and port in taken:
         raise StudioError(f"port {port} is another studio's; leave --port out to get a free one")
@@ -157,9 +190,10 @@ def create(repo, project: str = "", home: str = "", port: int = 0, registry: Pat
 
     values = {"PROJECT": project, "HOME": str(home_dir), "REPO": str(repo),
               "S": f'py -3.11 "{tool}" --home "{home_dir}"'}
-    skill.parent.mkdir(parents=True, exist_ok=True)
-    skill.write_text(skill_text(project, home_dir, repo), encoding="utf-8", newline="\n")
-    section = home_dir / "CLAUDE-section.md"
+    for skill in skills:
+        skill.parent.mkdir(parents=True, exist_ok=True)
+        skill.write_text(skill_text(project, home_dir, repo), encoding="utf-8", newline="\n")
+    section = home_dir / "CLAUDE-section.md"  # the same words go into AGENTS.md for Codex; the file keeps its name
     section.write_text(_fill((TEMPLATES / "CLAUDE-section.template.md").read_text(encoding="utf-8"), values),
                        encoding="utf-8", newline="\n")
     register(project, home_dir, repo, port, registry)
@@ -179,11 +213,12 @@ def create(repo, project: str = "", home: str = "", port: int = 0, registry: Pat
             committed = True
         except (OSError, subprocess.SubprocessError):
             pass  # no git, or no identity set: the home works without history
-    return {"project": project, "home": str(home_dir), "repo": str(repo), "port": port, "skill": str(skill),
+    return {"project": project, "home": str(home_dir), "repo": str(repo), "port": port, "skill": str(skills[0]),
+            "skills": [str(p) for p in skills], "docs": [AGENTS[who]["doc"] for who in agents],
             "section": str(section), "launcher": str(home_dir / "studio.cmd"), "s": values["S"], "git": committed}
 
 
-# ------------------------------------------------- Claude Code's hooks, in the user's own settings
+# ------------------------------------------------- the agent's hooks, in the user's own settings
 HOOK = KIT / "tool" / "hook.py"
 HOOK_EVENTS = ("SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PermissionRequest", "Notification",
                "Stop", "StopFailure", "SubagentStart", "SubagentStop", "TaskCreated", "TaskCompleted", "CwdChanged")
@@ -192,6 +227,12 @@ WAITED_FOR = ("SessionStart", "CwdChanged", "Stop", "PostToolUse", "UserPromptSu
 HOOK_TIMEOUT = 20  # seconds: a hook the session waits for must never hold it up for long
 # and on these, a second one waits in the background for the user to press Send verdicts (studiolib/wake.py)
 WAKE_EVENTS = ("SessionStart", "Stop")
+# Codex sends fewer kinds of event, in the same shape. It waits only for the three that hand over what the user
+# left, and it gives a hook three seconds at most as a session ends or the user stops a turn.
+CODEX_EVENTS = ("SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PermissionRequest",
+                "Stop", "SubagentStart", "SubagentStop", "Interrupt")
+CODEX_WAITED = ("Stop", "PostToolUse", "UserPromptSubmit")
+CODEX_SHORT = ("SessionEnd", "Interrupt")
 
 
 def claude_settings() -> Path:
@@ -199,58 +240,104 @@ def claude_settings() -> Path:
     return Path(os.environ.get("STUDIO_CLAUDE_SETTINGS") or Path.home() / ".claude" / "settings.json")
 
 
-def _ours(hook: dict) -> bool:
-    return isinstance(hook, dict) and any(Path(str(a)).name == "hook.py" and "tool" in Path(str(a)).parts
-                                          for a in hook.get("args") or [])
+def codex_hooks() -> Path:
+    import os
+    return Path(os.environ.get("STUDIO_CODEX_HOOKS") or Path.home() / ".codex" / "hooks.json")
 
 
-def _hook_command() -> dict:
-    import sys
-    if sys.platform == "win32":  # the launcher outlives a Python upgrade; a path to python.exe would not
-        return {"type": "command", "command": "py", "args": [f"-{sys.version_info[0]}.{sys.version_info[1]}", str(HOOK)]}
-    return {"type": "command", "command": sys.executable, "args": [str(HOOK)]}
+def hooks_file(who: str = "claude") -> Path:
+    """The file of the user's own that holds that agent's hooks."""
+    agent(who)
+    return codex_hooks() if who == "codex" else claude_settings()
 
 
-def hooks_installed(path: Path | None = None) -> list[str]:
-    """The events Claude Code reports to this kit's hook today."""
-    try:
-        data = read_json(path or claude_settings(), {}) or {}
-    except StudioError:
+def hook_events(who: str = "claude") -> tuple:
+    agent(who)
+    return CODEX_EVENTS if who == "codex" else HOOK_EVENTS
+
+
+def _words(hook) -> list[str]:
+    """A hook's command as its words: Claude Code keeps them apart (`args`), Codex in one line."""
+    if not isinstance(hook, dict):
         return []
-    return [event for event, groups in (data.get("hooks") or {}).items()
-            if any(_ours(h) and str(HOOK) in [str(a) for a in h.get("args") or []]
-                   for g in groups if isinstance(g, dict) for h in g.get("hooks") or [])]
+    words = [str(a) for a in hook.get("args") or []]
+    line = str(hook.get("command") or "")
+    if "hook.py" in line:
+        import shlex
+        try:
+            words += [w.strip('"') for w in shlex.split(line, posix=False)]
+        except ValueError:
+            pass
+    return words
 
 
-def hooks_hand_over(path: Path | None = None) -> bool:
-    """Whether the hooks as installed can hand a session the user's notes: an install from before the notes box cannot."""
+def _ours(hook) -> bool:
+    return any(Path(w).name == "hook.py" and "tool" in Path(w).parts for w in _words(hook))
+
+
+def _hook_command(who: str = "claude") -> dict:
+    import sys
+    windows = sys.platform == "win32"  # the launcher outlives a Python upgrade; a path to python.exe would not
+    start = ["py", f"-{sys.version_info[0]}.{sys.version_info[1]}"] if windows else [sys.executable]
+    if who == "codex":  # one line, and the hook is told whose it is
+        import shlex
+        words = [*start, str(HOOK), "--agent", "codex"]
+        line = " ".join(f'"{w}"' if " " in w or "\\" in w else w for w in words) if windows else shlex.join(words)
+        return {"type": "command", "command": line}
+    return {"type": "command", "command": start[0], "args": [*start[1:], str(HOOK)]}
+
+
+def _handlers(hooks: dict, event: str) -> list:
+    return [h for g in hooks.get(event) or [] if isinstance(g, dict) for h in g.get("hooks") or []]
+
+
+def _read_hooks(path: Path | None, who: str) -> dict:
     try:
-        data = read_json(path or claude_settings(), {}) or {}
+        data = read_json(path or hooks_file(who), {}) or {}
     except StudioError:
-        return False
-    hooks = data.get("hooks") or {}
-    return all(any(_ours(h) and not h.get("async") for g in hooks.get(event) or [] if isinstance(g, dict) for h in g.get("hooks") or [])
+        return {}
+    hooks = data.get("hooks") if isinstance(data, dict) else None
+    return hooks if isinstance(hooks, dict) else {}
+
+
+def hooks_installed(path: Path | None = None, who: str = "claude") -> list[str]:
+    """The events that agent reports to this kit's hook today."""
+    hooks = _read_hooks(path, who)
+    return [event for event in hooks if any(_ours(h) and str(HOOK) in _words(h) for h in _handlers(hooks, event))]
+
+
+def hooks_hand_over(path: Path | None = None, who: str = "claude") -> bool:
+    """Whether the hooks as installed can hand a session the user's notes: an install from before the notes box cannot."""
+    hooks = _read_hooks(path, who)
+    return all(any(_ours(h) and not h.get("async") for h in _handlers(hooks, event))
                for event in ("Stop", "PostToolUse", "UserPromptSubmit"))
 
 
 def hooks_wake(path: Path | None = None) -> bool:
-    """Whether the hooks as installed let the Send verdicts button wake an idle session."""
-    try:
-        data = read_json(path or claude_settings(), {}) or {}
-    except StudioError:
-        return False
-    hooks = data.get("hooks") or {}
-    return all(any(_ours(h) and h.get("asyncRewake") and "--wait" in (h.get("args") or [])
-                   for g in hooks.get(event) or [] if isinstance(g, dict) for h in g.get("hooks") or [])
+    """Whether the hooks as installed let the Send verdicts button wake an idle session. Claude Code only:
+    Codex has no hook that can wake a session sitting at its prompt."""
+    hooks = _read_hooks(path, "claude")
+    return all(any(_ours(h) and h.get("asyncRewake") and "--wait" in (h.get("args") or []) for h in _handlers(hooks, event))
                for event in WAKE_EVENTS)
 
 
-def install_hooks(path: Path | None = None, remove: bool = False) -> dict:
-    """Add this kit's hook to Claude Code's settings, or take it out. Every other setting is left as it is."""
-    path = path or claude_settings()
+def hooks_on() -> list[str]:
+    """The agents that report to this kit's hook today."""
+    return [who for who in AGENTS if hooks_installed(who=who)]
+
+
+def hooks_hand_over_all() -> bool:
+    """Whether every agent that reports in is also handed the user's notes. False when none reports in."""
+    on = hooks_on()
+    return bool(on) and all(hooks_hand_over(who=who) for who in on)
+
+
+def install_hooks(path: Path | None = None, remove: bool = False, who: str = "claude") -> dict:
+    """Add this kit's hook to that agent's settings, or take it out. Every other setting is left as it is."""
+    path = path or hooks_file(who)
     data = read_json(path, {}) or {}  # a settings file that does not parse is refused, never rewritten
     if not isinstance(data, dict) or not isinstance(data.get("hooks", {}), dict):
-        raise StudioError(f"{path}: not the shape Claude Code's settings have; nothing was changed")
+        raise StudioError(f"{path}: not the shape {agent(who)['name']}'s settings have; nothing was changed")
     backup = ""
     if path.exists():
         import shutil
@@ -271,7 +358,17 @@ def install_hooks(path: Path | None = None, remove: bool = False) -> dict:
             hooks[event] = groups
         else:
             del hooks[event]
-    if not remove:
+    if not remove and who == "codex":
+        for event in CODEX_EVENTS:
+            mine = _hook_command("codex")
+            if event in CODEX_SHORT:
+                mine["timeout"] = 3
+            elif event in CODEX_WAITED:  # the limit is on what a hook may hand over: none, so a long note arrives whole
+                mine.update(timeout=HOOK_TIMEOUT, additionalContextLimit=0)
+            else:
+                mine["async"] = True
+            hooks.setdefault(event, []).append({"matcher": "*", "hooks": [mine]})
+    elif not remove:
         from . import wake
         for event in HOOK_EVENTS:
             mine = [dict(_hook_command(), **({"timeout": HOOK_TIMEOUT} if event in WAITED_FOR else {"async": True}))]
@@ -281,5 +378,6 @@ def install_hooks(path: Path | None = None, remove: bool = False) -> dict:
             hooks.setdefault(event, []).append({"hooks": mine})
     if not hooks:
         del data["hooks"]
+    path.parent.mkdir(parents=True, exist_ok=True)
     write_json(path, data)
-    return {"settings": str(path), "backup": backup, "events": [] if remove else list(HOOK_EVENTS)}
+    return {"settings": str(path), "backup": backup, "events": [] if remove else list(hook_events(who)), "agent": who}

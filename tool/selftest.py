@@ -114,6 +114,7 @@ def main() -> int:
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         tmp = Path(tmp)
         os.environ["STUDIO_CLAUDE_SETTINGS"] = str(tmp / "claude" / "settings.json")  # never the user's own
+        os.environ["STUDIO_CODEX_HOOKS"] = str(tmp / "codex" / "hooks.json")
         home, proj, src = tmp / "studio", tmp / "proj", tmp / "src"
         proj.mkdir(); src.mkdir()
         studio = Studio.init(home, "Self-test", str(proj))
@@ -404,7 +405,8 @@ def main() -> int:
         status, live = http("GET", base + "/api/live")
         one = live["sessions"][0] if status == 200 and live["sessions"] else {}
         check(len(live["sessions"]) == 1 and one["state"] == "working" and one["prompt"] == "Light the room and test it"
-              and one["doing"] == "Editing room.scene" and one["agents"][0]["type"] == "Explore" and one["where"] == "content",
+              and one["doing"] == "Editing room.scene" and one["agents"][0]["type"] == "Explore" and one["where"] == "content"
+              and one["agent"] == "claude",
               "a session's hooks say what it is doing, and the page can ask; a folder with no Studio is left alone")
         hook(session_id="s-1", cwd=str(deep), hook_event_name="SubagentStop", agent_id="a1")
         hook(session_id="s-1", cwd=str(deep), hook_event_name="Stop", last_assistant_message="The room is lit.",
@@ -1093,6 +1095,10 @@ def main() -> int:
 
             # the idea loop: from the menu, a loose idea becomes a project folder and a Studio, opened on its Talk page
             projects = tmp / "projects"; projects.mkdir()
+            import socket
+            with socket.socket() as probe:  # a port nothing holds: a Studio of the user's own may be open on the usual first one
+                probe.bind(("127.0.0.1", 0))
+                setup.FIRST_PORT = probe.getsockname()[1]
             with open(tmp / "hub.toml", "a", encoding="utf-8") as fh:
                 fh.write(f'\n[ideas]\nfolder = "{projects.as_posix()}"\nwhen_done = "add it to the list"\n')
             req = urllib.request.Request(hub.url + "api/idea", data=json.dumps({"name": "Kite Lab", "text": "a kite that films the yard"}).encode(),
@@ -1153,6 +1159,63 @@ def main() -> int:
             setup.create(other, registry=reg, git=False); check(False, "a second Studio for the same project is refused")
         except StudioError:
             check(True, "a second Studio for the same project is refused")
+
+        # Codex: the same skill where Codex looks for skills, its own hooks file, and the same hook told whose it is
+        cproj = tmp / "codex-proj"
+        cproj.mkdir()
+        cmade = setup.create(cproj, registry=reg, git=False, agents=["codex", "claude"])
+        cskill = (cproj / ".agents/skills/studio/SKILL.md").read_text(encoding="utf-8")
+        check(cskill == (cproj / ".claude/skills/studio/SKILL.md").read_text(encoding="utf-8") and cmade["docs"] == ["AGENTS.md", "CLAUDE.md"]
+              and len(setup.skill_copies(cproj)) == 2 and cmade["home"] in cskill and "Claude Code" not in cskill,
+              "a project Codex works in gets the same skill where Codex looks for skills, and the skill names no one agent")
+        csetup = setup.install_create_skill(tmp / "agents-skills", who="codex").read_text(encoding="utf-8")
+        check("--for codex" in csetup and "`AGENTS.md`" in csetup and ".agents/skills/studio" in csetup and "/hooks" in csetup
+              and "{{" not in csetup and "--for" not in made_skill and "`CLAUDE.md`" in made_skill,
+              "the setup skill for Codex names Codex's own files and commands, and Claude Code's is as it was")
+        chooks = setup.codex_hooks()
+        chooks.parent.mkdir(parents=True)
+        ctheirs = {"hooks": {"Stop": [{"matcher": "*", "hooks": [{"type": "command", "command": 'py -3.11 "C:/mine/scripts/codex/hook.py"', "timeout": 10}]}]}}
+        chooks.write_text(json.dumps(ctheirs), encoding="utf-8")
+        setup.install_hooks(who="codex"); setup.install_hooks(who="codex")
+        cdata = json.loads(chooks.read_text(encoding="utf-8"))
+        cstop = cdata["hooks"]["Stop"]
+        check(set(setup.hooks_installed(who="codex")) == set(setup.CODEX_EVENTS) and len(cstop) == 2 and cstop[0] == ctheirs["hooks"]["Stop"][0]
+              and cstop[1]["hooks"][0]["command"].endswith("--agent codex") and cstop[1]["hooks"][0]["additionalContextLimit"] == 0
+              and "async" not in cstop[1]["hooks"][0] and cdata["hooks"]["PreToolUse"][0]["hooks"][0]["async"] is True
+              and cdata["hooks"]["SessionEnd"][0]["hooks"][0]["timeout"] == 3 and setup.hooks_hand_over(who="codex")
+              and "codex" in setup.hooks_on() and not setup.claude_settings().exists(),
+              "Codex's hooks go into its own file beside the user's own, once, and Claude Code's settings are not touched")
+        setup.install_hooks(remove=True, who="codex")
+        check(json.loads(chooks.read_text(encoding="utf-8")) == ctheirs, "removing them puts Codex's file back")
+
+        cenv = dict(os.environ, STUDIO_REGISTRY=str(reg), LOCALAPPDATA=str(tmp / "local-codex"))
+
+        def codex(**event) -> dict:
+            run = subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "hook.py"), "--agent", "codex"],
+                                 input=json.dumps(event).encode(), capture_output=True, env=cenv)
+            assert run.returncode == 0 and not run.stderr, run
+            return json.loads(run.stdout) if run.stdout else {}
+
+        cstudio = Studio(cmade["home"])
+        codex(session_id="c-1", cwd=str(cproj), hook_event_name="SessionStart", source="startup", model="gpt")
+        codex(session_id="c-1", cwd=str(cproj), hook_event_name="UserPromptSubmit", turn_id="t1", prompt="Widen the door")
+        codex(session_id="c-1", cwd=str(cproj), hook_event_name="PreToolUse", turn_id="t1", tool_name="apply_patch",
+              tool_input={"command": "*** Begin Patch\n*** Update File: content/door.scene\n@@\n-a\n+b\n*** End Patch"})
+        one = board.sessions(cstudio)[0]
+        check(one["agent"] == "codex" and one["state"] == "working" and one["doing"] == "Editing door.scene" and one["prompt"] == "Widen the door",
+              "a Codex session shows on the Overview as Codex's, with what it is editing")
+        cnote = cstudio.add_note("door width to 0.9")["id"]
+        between = codex(session_id="c-1", cwd=str(cproj), hook_event_name="PostToolUse", turn_id="t1", tool_name="Bash", tool_input={"command": "ls"})
+        ended = codex(session_id="c-1", cwd=str(cproj), hook_event_name="Stop", turn_id="t1", stop_hook_active=False, last_assistant_message="Done.")
+        again = codex(session_id="c-1", cwd=str(cproj), hook_event_name="Stop", turn_id="t1", stop_hook_active=True, last_assistant_message="Done.")
+        check(between == {} and ended.get("decision") == "block" and cnote in ended.get("reason", "") and "> door width to 0.9" in ended.get("reason", "")
+              and "hookSpecificOutput" not in ended and again == {},
+              "a note reaches a Codex session as its turn ends, in the shape Codex carries on from, and only once")
+        codex(session_id="c-1", cwd=str(cproj), hook_event_name="PreToolUse", turn_id="t2", tool_name="Bash", tool_input={"command": ["bash", "-lc", "ls"]})
+        busy = board.sessions(cstudio)[0]
+        codex(session_id="c-1", cwd=str(cproj), hook_event_name="Interrupt", turn_id="t2")
+        check(busy["doing"] == "bash -lc ls" and board.sessions(cstudio)[0]["state"] == "waiting",
+              "a Codex turn the user stops goes back to waiting")
     print("\nAll good." if not FAILED else f"\n{len(FAILED)} step(s) failed.")
     return 1 if FAILED else 0
 

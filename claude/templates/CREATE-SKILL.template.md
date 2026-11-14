@@ -1,6 +1,6 @@
 ---
 name: studio-create
-description: Set up or plan a project in NocStudio - the local page where the user sees how far along a project is, what is running now, what waits on them, every asset it holds or needs and every ruling they have made, and where they judge what Claude Code produces. Use when the user says anything like "start a new project", "set up a studio for this project", "create a studio page for this", "move this project into its Studio", "plan this project in its Studio", "turn on the Studio's live reporting", or runs /studio-create.
+description: Set up or plan a project in NocStudio - the local page where the user sees how far along a project is, what is running now, what waits on them, every asset it holds or needs and every ruling they have made, and where they judge what their coding agent produces. Use when the user says anything like "start a new project", "set up a studio for this project", "create a studio page for this", "move this project into its Studio", "plan this project in its Studio", "turn on the Studio's live reporting", or runs /studio-create.
 ---
 
 # A project in NocStudio, organised from the start
@@ -29,11 +29,11 @@ keeps their projects, `git init` it, and write a README that says in their
 words what it is. Then:
 
 ```
-py -3.11 "{{KIT}}\tool\studio.py" create "<the project's repo>" [--project "<name as the page shows it>"]
+py -3.11 "{{KIT}}\tool\studio.py" create "<the project's repo>" [--project "<name as the page shows it>"]{{FOR}}
 ```
 
 It makes `<repo>-studio` beside the repo (its own git repo), picks a free
-port, puts `.claude/skills/studio/SKILL.md` in the project's repo, and prints
+port, puts `{{SKILLS}}/studio/SKILL.md` in the project's repo, and prints
 `S`, the command for everything after. It refuses if the project already has
 a Studio; `studio.py studios` lists them all. If the tool is missing or
 `py -3.11 tool\selftest.py` fails there, stop and say so; do not rebuild the
@@ -41,7 +41,7 @@ tool.
 
 ## 2. Teach the project's sessions
 
-- Merge `<home>\CLAUDE-section.md` into the repo's `CLAUDE.md` near the top
+- Merge `<home>\CLAUDE-section.md` into the repo's `{{DOC}}` near the top
   (create the file if there is none). Keep it short, and respect any length
   rule the file states for itself.
 - Replace standing instructions that send the user to folders, chat picks or
@@ -51,7 +51,7 @@ tool.
 
 ## 3. Read, propose, ask once
 
-Read what the project already has (README, CLAUDE.md, a plan or TODO, specs,
+Read what the project already has (README, {{DOC}}, a plan or TODO, specs,
 the code's shape, the asset folders, the git log) so you ask only what the
 files cannot answer. Then draft the whole plan yourself and show it to the
 user in chat as a short outline to correct, not a form to fill in. Ask the
@@ -128,22 +128,22 @@ must not commit or edit the project.
 
 ## 5. Live reporting
 
-`S hooks status` says whether Claude Code already reports what each session
+`S hooks status` says whether {{AGENT}} already reports what each session
 is doing to NocStudio, and whether sessions are handed the notes the user
 types in the Studio (an install from before the notes box does the first and
 not the second; installing again brings it up to date). If either is missing,
 tell the user in two lines what installing does (it adds one entry per event
-to their own Claude Code settings, `~/.claude/settings.json`, keeps a copy of
+to their own {{AGENT}} settings, `{{SETTINGS}}`, keeps a copy of
 the file from before, and applies to every project that has a Studio and to
 none that has not; two of the entries make a session wait a moment for the
 hook, when it finishes a turn and after each tool call, so their notes can
 reach it) and, when they agree, run:
 
 ```
-S hooks install
+S hooks install{{FOR}}
 ```
 
-It is once per machine. `S hooks remove` takes it out again.
+It is once per machine. `S hooks remove{{FOR}}` takes it out again.{{TRUST}}
 
 ## 6. Prove it and report
 

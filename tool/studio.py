@@ -93,13 +93,14 @@ def cmd_init(a):
 
 
 def cmd_create(a):
-    made = setup.create(a.repo, project=a.project, home=a.to, port=a.port)
+    made = setup.create(a.repo, project=a.project, home=a.to, port=a.port, agents=a.agents or ["claude"])
     print(f"Studio for {made['project']} is ready.")
     print(f"  home      {made['home']}" + ("" if made["git"] else "   (no git history: git init it by hand)"))
     print(f"  open it   {made['launcher']}   (port {made['port']})")
-    print(f"  skill     {made['skill']}")
+    for skill in made["skills"]:
+        print(f"  skill     {skill}")
     print(f"  S is      {made['s']}")
-    print(f"\nNext, in {made['repo']}: merge {made['section']} into CLAUDE.md, near the top,")
+    print(f"\nNext, in {made['repo']}: merge {made['section']} into {' and '.join(made['docs'])}, near the top,")
     print("then move the project in: milestones, the build in hand, slots, rulings (the studio-create skill has the steps).")
 
 
@@ -303,17 +304,15 @@ def reminders(s: Studio) -> None:
         print(f"\nThe Studio has {n} unsaved change{'s' if n != 1 else ''} (the user's verdicts and answers on the page count). "
               f"Before this session ends: studio.py save")
     root = s.repo_root()
-    copy = root / ".claude" / "skills" / "studio" / "SKILL.md" if root else None
-    if copy is None or not copy.is_file():
-        return
     own = s.home / "claude" / "skills" / "studio" / "SKILL.md"
-    try:
-        source = own.read_text(encoding="utf-8") if own.is_file() else setup.skill_text(s.config.get("project") or root.name, s.home, root)
-        if source.replace("\r\n", "\n") != copy.read_text(encoding="utf-8").replace("\r\n", "\n"):
-            print(f"\nThis repo's studio skill has fallen behind the Studio's. Copy it over, and commit it there:\n  "
-                  + (f"{own}  ->  {copy}" if own.is_file() else f"studio.py skill > {copy}"))
-    except OSError:
-        pass
+    for copy in setup.skill_copies(root) if root else []:  # one copy per agent that works in the project
+        try:
+            source = own.read_text(encoding="utf-8") if own.is_file() else setup.skill_text(s.config.get("project") or root.name, s.home, root)
+            if source.replace("\r\n", "\n") != copy.read_text(encoding="utf-8").replace("\r\n", "\n"):
+                print(f"\nThis repo's studio skill has fallen behind the Studio's. Copy it over, and commit it there:\n  "
+                      + (f"{own}  ->  {copy}" if own.is_file() else f"studio.py skill > {copy}"))
+        except OSError:
+            pass
 
 
 def cmd_save(a):
@@ -324,7 +323,8 @@ def cmd_save(a):
 
 
 def cmd_install_skill(a):
-    print(f"Wrote {setup.install_create_skill()}\nIn any project, say to Claude Code: create a studio page for this")
+    for who in a.agents or ["claude"]:
+        print(f"Wrote {setup.install_create_skill(who=who)}\nIn any project, say to {setup.agent(who)['name']}: create a studio page for this")
 
 
 def cmd_skill(a):
@@ -637,17 +637,22 @@ def cmd_plan(a):
 
 def cmd_hooks(a):
     if a.action == "status":
-        events = setup.hooks_installed()
-        print(f"Claude Code reports {len(events)} kinds of event to {setup.HOOK}" if events
-              else f"Not installed: studio.py hooks install   (it edits {setup.claude_settings()})")
-        if events and not setup.hooks_hand_over():
-            print("They were installed before the notes box, so sessions are not handed the user's notes: studio.py hooks install")
-        elif events and not setup.hooks_wake():
-            print("They were installed before the Send verdicts button, which cannot wake a session yet: studio.py hooks install")
+        for who in a.agents or list(setup.AGENTS):
+            name, flag = setup.agent(who)["name"], "" if who == "claude" else f" --for {who}"
+            events = setup.hooks_installed(who=who)
+            print(f"{name} reports {len(events)} kinds of event to {setup.HOOK}" if events
+                  else f"{name}: not installed: studio.py hooks install{flag}   (it edits {setup.hooks_file(who)})")
+            if events and not setup.hooks_hand_over(who=who):
+                print(f"They were installed before the notes box, so sessions are not handed the user's notes: studio.py hooks install{flag}")
+            elif events and who == "claude" and not setup.hooks_wake():
+                print("They were installed before the Send verdicts button, which cannot wake a session yet: studio.py hooks install")
         return
-    out = setup.install_hooks(remove=a.action == "remove")
-    print(f"{'Removed from' if a.action == 'remove' else 'Installed in'} {out['settings']}"
-          + (f"\n  as it was before: {out['backup']}" if out["backup"] else ""))
+    for who in a.agents or ["claude"]:
+        out = setup.install_hooks(remove=a.action == "remove", who=who)
+        print(f"{'Removed from' if a.action == 'remove' else 'Installed in'} {out['settings']}"
+              + (f"\n  as it was before: {out['backup']}" if out["backup"] else ""))
+        if who == "codex" and a.action == "install":
+            print("  Codex runs a new hook only after you have looked it over: type /hooks in Codex once and trust NocStudio's.")
     if a.action == "install":
         print("Every Claude Code session in a project that has a Studio now shows on its Overview while it works,\n"
               "and is handed the notes the user leaves for it in the notes box. The page's Send verdicts button\n"
@@ -786,6 +791,8 @@ def main(argv=None) -> int:
     c.add_argument("--project", default="", help="the project's name as the page shows it (default: the repo folder's name)")
     c.add_argument("--to", default="", help="the new studio home (default: <repo>-studio beside the repo)")
     c.add_argument("--port", type=int, default=0)
+    c.add_argument("--for", dest="agents", action="append", choices=tuple(setup.AGENTS),
+                   help="whose sessions work in the project: each gets the skill where it looks (default: claude; repeat for both)")
     c.set_defaults(fn=cmd_create)
 
     c = sub.add_parser("studios", help="every Studio on this machine"); c.set_defaults(fn=cmd_studios)
@@ -936,7 +943,8 @@ def main(argv=None) -> int:
     c.add_argument("-m", "--message", default="", help="what changed, one line (else the tool writes one)")
     c.set_defaults(fn=cmd_save)
 
-    c = sub.add_parser("install-skill", help="put the studio-create skill in your own Claude Code skills, so any project can ask for a Studio")
+    c = sub.add_parser("install-skill", help="put the studio-create skill in your own skills (Claude Code's, or Codex's with --for codex), so any project can ask for a Studio")
+    c.add_argument("--for", dest="agents", action="append", choices=tuple(setup.AGENTS), help="whose skills folder (default: claude; repeat for both)")
     c.set_defaults(fn=cmd_install_skill)
 
     c = sub.add_parser("skill", help="print the studio skill this project's repo should carry")
@@ -1002,8 +1010,10 @@ def main(argv=None) -> int:
     c.add_argument("file", nargs="?", default="", help="a plan to add or change: goal, milestones with steps, counters, asks, slots")
     c.set_defaults(fn=cmd_plan)
 
-    c = sub.add_parser("hooks", help="have Claude Code report what each session is doing, so the Overview shows it live")
+    c = sub.add_parser("hooks", help="have Claude Code (or Codex, with --for codex) report what each session is doing, so the Overview shows it live")
     c.add_argument("action", choices=("install", "remove", "status"))
+    c.add_argument("--for", dest="agents", action="append", choices=tuple(setup.AGENTS),
+                   help="whose hooks (default: claude; status shows both)")
     c.set_defaults(fn=cmd_hooks)
 
     c = sub.add_parser("now", help="the current build for the overview; with no flag, prints it")

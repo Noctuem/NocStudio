@@ -2,7 +2,7 @@
 
 # NocStudio
 
-**A local project hub for work you build with AI coding agents.**
+**A local review desk for work you build with AI coding agents: Claude Code or Codex.**
 
 See how far along the project is and what every session is doing right now, judge what the
 agent made, and keep every ruling you give it, in one window on your own machine.
@@ -279,8 +279,25 @@ work in the page. Between you is a folder of JSON and media files
 that either side can read, and that lives in its own git repository so the history of what you
 judged is kept.
 
+### With Codex
+
+The same skill and the same hook work with OpenAI's Codex, which reads skills from `.agents/skills`
+and keeps its hooks in `~/.codex/hooks.json`:
+
+```
+py -3.11 tool\studio.py install-skill --for codex
+py -3.11 tool\studio.py hooks install --for codex
+```
+
+Then type `/hooks` in Codex once and trust NocStudio's: Codex runs a new hook only after you have
+looked it over. `studio.py create <repo> --for codex` puts the skill where Codex looks (give `--for`
+twice for a project both agents work in), and the section for `CLAUDE.md` goes into `AGENTS.md`. A
+Codex session shows under Running now marked as Codex's and is handed your notes and verdicts the
+same way. Two things are Claude Code's alone for now: the Talk page, and waking an idle session with
+Send verdicts. The Codex side is covered by the self-test and is new: expect rough edges.
+
 The skill is plain markdown, so other agents that can run a command and follow written
-instructions can use it too. It has only been used with Claude Code.
+instructions can use it too.
 
 ## What it is made of
 

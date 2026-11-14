@@ -387,7 +387,7 @@ def advice(studio: Studio) -> list[str]:
 
 # ------------------------------------------------- the sessions, as they work
 def sessions(studio: Studio) -> list:
-    """What each Claude Code session in the project is doing, from the notes the hooks keep (tool/hook.py)."""
+    """What each session in the project is doing, Claude Code's or Codex's, from the notes the hooks keep (tool/hook.py)."""
     out, now = [], datetime.datetime.now(datetime.timezone.utc)
     for path in sorted((studio.home / "live").glob("*.json")):
         try:
@@ -400,7 +400,8 @@ def sessions(studio: Studio) -> list:
         if quiet > (600 if state == "ended" else 6 * 3600):
             continue  # ended a while ago, or went away without saying so
         tasks = list((rec.get("tasks") or {}).values())
-        out.append({"id": rec.get("id") or path.stem, "state": state, "since": rec.get("since") or rec.get("updated"),
+        out.append({"id": rec.get("id") or path.stem, "agent": rec.get("agent") or "claude", "state": state,
+                    "since": rec.get("since") or rec.get("updated"),
                     "started": rec.get("started"), "quiet": int(quiet), "title": rec.get("title") or "",
                     "where": os.path.basename(str(rec.get("cwd") or "").rstrip("\\/")), "prompt": rec.get("prompt") or "",
                     "doing": rec.get("doing") or "", "said": rec.get("said") or "",
@@ -424,7 +425,8 @@ def checklist(studio: Studio, hooks: bool) -> list:
     now, rows = studio.now(), studio.roadmap()
     current = next((m for m in rows if m.get("status") == "current"), None)
     root = studio.repo_root()
-    skill = bool(root and (root / ".claude" / "skills" / "studio" / "SKILL.md").is_file())
+    from . import setup
+    skill = bool(root and setup.skill_copies(root))
     return [
         {"id": "goal", "title": "A goal: what the project is and what done looks like", "done": bool(now.get("goal"))},
         {"id": "road", "title": "The milestones from here to done", "done": len(rows) >= 2},
