@@ -15,7 +15,9 @@ Use the `studio` skill; `S` is `{{S}}`.
   them to run on this PC, or a file for them to open, is a button: `S ask set <id> --button`.
 - Notes they type in the Studio are handed to you by the Studio's hooks; never poll for them. Sort
   each one (`S note sort`, or `S note reply` for a discussion), make no change for a directive or a
-  rule until they confirm it on the page, and close what you did with `S note done`.
+  rule until they confirm it on the page, and close what you did with `S note done`. When your
+  answer or your reading holds choices, give each as `--option "<name> :: <what it means>"`, never
+  inside the text: the page shows a card for each and their pick comes back as their reply.
 - Keep the Overview true as you work, not afterwards: `S step set` when a step moves, `S lane set`
   and `S lane done` for work in progress, `S log` for a merge, a publish or a setback, `S now` when a
   build is delivered. `S status` answers "where are we?" and "what is waiting on me?".

@@ -1825,8 +1825,35 @@ class Studio:
         return note
 
     @staticmethod
-    def _say(note: dict, who: str, text: str) -> None:
-        note.setdefault("thread", []).append({"who": who, "at": iso_now(), "text": text.strip()})
+    def _say(note: dict, who: str, text: str, options: list | None = None) -> None:
+        """One more entry on a note's thread. It is written once and never changed: the phone copy merges threads entry by entry."""
+        said = {"who": who, "at": iso_now(), "text": text.strip()}
+        if options:
+            said["options"] = options
+        note.setdefault("thread", []).append(said)
+
+    @staticmethod
+    def _options(options) -> list[dict]:
+        """The choices a session gives with a reading or an answer, each a short name and what it means."""
+        least, most = notebox.OPTIONS
+        out = []
+        for item in options or []:
+            name, _, what = str(item).partition("::")
+            name, what = " ".join(name.split()), " ".join(what.split())
+            if not name:
+                raise StudioError("a choice needs a name: --option \"<name> :: <what it means>\"")
+            if len(name) > notebox.OPTION_NAME:
+                raise StudioError(f"a choice's name is at most {notebox.OPTION_NAME} characters ({name[:24]}... has {len(name)}); "
+                                  "keep the name short and put the rest after \" :: \"")
+            if len(what) > notebox.OPTION_WHAT:
+                raise StudioError(f"what a choice means is at most {notebox.OPTION_WHAT} characters ({name} has {len(what)}); "
+                                  "say it in a line or two and put the rest in the text")
+            if any(name.lower() == o["name"].lower() for o in out):
+                raise StudioError(f"two choices are both named {name!r}; give each its own name")
+            out.append({"name": name, "what": what})
+        if out and not least <= len(out) <= most:
+            raise StudioError(f"give {least} to {most} choices, each as its own --option ({len(out)} given)")
+        return out
 
     def add_note(self, text: str, *, kind: str = "", urgent: bool = False, parent: str = "") -> dict:
         """What the user typed, as they typed it. A kind they chose themselves stands; otherwise a session sorts it."""
@@ -1841,9 +1868,10 @@ class Studio:
             note["from"] = parent
         return self._save_note(note)
 
-    def sort_note(self, nid: str, kind: str, *, reading: str = "", lane: str = "", session: str = "") -> dict:
-        """A session says what kind of note this is and what it takes it to mean."""
-        note = self.note(nid)
+    def sort_note(self, nid: str, kind: str, *, reading: str = "", lane: str = "", session: str = "", options=None) -> dict:
+        """A session says what kind of note this is and what it takes it to mean. Choices given with the reading
+        wait on the user's pick: the page shows each as a card."""
+        note, options = self.note(nid), self._options(options)
         if note["status"] != "new":
             raise StudioError(f"{nid} is already sorted ({note['kind']}, {note['status']})")
         if kind not in NOTE_KINDS:
@@ -1854,12 +1882,15 @@ class Studio:
             raise StudioError("a discussion is sorted by answering it: studio.py note reply <id> \"<your answer>\"")
         if kind != "later" and not reading.strip():
             raise StudioError("say what you take it to mean: --reading \"...\"")
+        if options and kind == "later":
+            raise StudioError("an idea kept for later asks the user nothing; leave --option off")
         if lane:
             from . import board
             if not any(r["id"] == lane for r in board.lanes(self)):
                 raise StudioError(f"no lane {lane!r} on the board; see: studio.py lane list")
         note.update(kind=kind, reading=reading.strip(), lane=lane, session="" if lane else session, anyone=False,
-                    status="later" if kind == "later" else "confirm" if kind in NOTE_CONFIRMED else "go")
+                    status="later" if kind == "later" else "confirm" if kind in NOTE_CONFIRMED else "go",
+                    reading_options=options, options_after=len(note.get("thread") or []))
         return self._save_note(note)
 
     def split_note(self, nid: str, text: str) -> dict:
@@ -1870,16 +1901,17 @@ class Studio:
             raise StudioError(f"the part must be the user's own words, as they stand in {nid}")
         return self.add_note(text, urgent=bool(note.get("urgent")), parent=nid)
 
-    def reply_note(self, nid: str, text: str, *, session: str = "") -> dict:
-        """A session's answer in a discussion. Answering a note nobody has sorted makes it a discussion."""
-        note = self.note(nid)
+    def reply_note(self, nid: str, text: str, *, session: str = "", options=None) -> dict:
+        """A session's answer in a discussion. Answering a note nobody has sorted makes it a discussion.
+        Choices given with the answer are kept on it, apart from its text."""
+        note, options = self.note(nid), self._options(options)
         if not text.strip():
             raise StudioError("a reply needs some words")
         if note["status"] == "new" and note.get("kind_by") == "you" and note["kind"] != "discussion":
             raise StudioError(f"the user marked {nid} as {note['kind']} themselves; sort it as that")
         if note["status"] not in ("new", "talk"):
             raise StudioError(f"{nid} is not a discussion ({note['kind']}, {note['status']})")
-        self._say(note, "claude", text)
+        self._say(note, "claude", text, options)
         note.update(kind="discussion", status="talk", session=session or note.get("session") or "")
         return self._save_note(note)
 
@@ -1906,6 +1938,8 @@ class Studio:
         if action == "confirm":
             if status != "confirm":
                 raise StudioError("there is nothing to confirm on that note")
+            if notebox.choices(note):
+                raise StudioError("that reading came with choices; pick one of them, or say what you meant instead")
             if text:
                 self._say(note, "you", text)
             note["status"] = "go"
@@ -1922,13 +1956,16 @@ class Studio:
             if not text:
                 raise StudioError("write your reply first")
             self._say(note, "you", text)
-        elif action == "kind":  # the user sorts it themselves, or says a session sorted it wrong
-            if kind not in NOTE_KINDS:
-                raise StudioError(f"a note is one of: {', '.join(NOTE_KINDS)}")
+        elif action == "kind":  # the user sorts it themselves, says a session sorted it wrong, or hands it back unsorted ("")
+            if kind and kind not in NOTE_KINDS:
+                raise StudioError(f"a note is one of: {', '.join(NOTE_KINDS)}, or nothing for a session to sort it")
             if status in ("done", "parked"):
                 raise StudioError("that note is closed; open it again first")
-            note.update(kind=kind, kind_by="you", reading="", lane="", session="", anyone=False,
-                        status="later" if kind == "later" else "new")
+            if kind == (note.get("kind") or "") and (kind or status == "new"):
+                return note  # the category it has already: nothing changes, and no session is handed it again
+            note.update(kind=kind, kind_by="you" if kind else "", reading="", lane="", session="", anyone=False,
+                        status="later" if kind == "later" else "new",
+                        reading_options=[], options_after=len(note.get("thread") or []))
         elif action == "send":  # to a session by hand, or to whichever comes first
             if status != "go":
                 raise StudioError("only a note that is to be worked in can be sent to a session")
@@ -1999,7 +2036,8 @@ class Studio:
             to, was = notebox.route(note, lane_rows, sessions), told.get(note["id"]) or {}
             handed = was if was.get("key") == notebox.key(note) and was.get("session") in sessions else None
             files = [dict(f, here=bool(notefiles.here(self.home, note["id"], f["name"]))) for f in note.get("files") or []]
-            out.append(dict(note, files=files, waits=notebox.waits(note), to=to,
+            asks = notebox.choices(note) if note["status"] in notebox.OPEN else None  # the set of choices that still takes a click
+            out.append(dict(note, files=files, waits=notebox.waits(note), to=to, choice_at=asks[0] if asks else None,
                             to_name=(lane_rows.get(note.get("lane")) or {}).get("name") or (name(to) if to not in ("", "*") else ""),
                             handed={"session": handed["session"], "name": name(handed["session"]), "at": stamp(handed["at"])} if handed else None))
         return out
@@ -2303,7 +2341,7 @@ max_mb = 64
 dirs = []
 
 # The notes box: how long a note you typed waits before it is handed to a session in the middle
-# of its work. A session that finishes a turn is handed it at once; an urgent note never waits.
+# of its work. A session that finishes a turn is handed it at once.
 [notes]
 after_minutes = 10
 

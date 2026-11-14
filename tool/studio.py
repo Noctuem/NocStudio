@@ -772,18 +772,22 @@ def cmd_note(a):
     elif a.action == "sort":
         if a.mine and not me:
             raise StudioError("could not tell which session this is: pass --session <id>, or name the work with --lane <id>")
-        note = s.sort_note(nid, a.kind, reading=a.reading, lane=a.lane, session=me if a.mine else "")
+        note = s.sort_note(nid, a.kind, reading=a.reading, lane=a.lane, session=me if a.mine else "", options=a.option)
         after = {"confirm": "the user confirms it on the page before anything is done; do not make the change yet",
                  "later": "kept for later; nothing more to do",
                  "go": "yours to do now; close it with: note done" if a.mine else
                        ("sent to the session on " + a.lane if a.lane else "no session is on that part, and the page says so")}[note["status"]]
+        if note.get("reading_options"):
+            after = (f"the user picks one of the {len(note['reading_options'])} choices on the page first; "
+                     + ("their pick sends it back to be sorted as what they picked" if note["status"] == "confirm" else "it goes on with their pick on it"))
         print(f"{nid}: {note['kind']}. {after[0].upper()}{after[1:]}.")
     elif a.action == "split":
         note = s.split_note(nid, text)
         print(f"{note['id']}: a note of its own, from {nid}. Sort both.")
     elif a.action == "reply":
-        s.reply_note(nid, text, session=me)
-        print(f"{nid}: answered. They read it on the page, and their reply comes back to you.")
+        said = s.reply_note(nid, text, session=me, options=a.option)["thread"][-1]
+        print(f"{nid}: answered" + (f", with {len(said['options'])} choices as cards" if said.get("options") else "")
+              + ". They read it on the page, and their " + ("pick" if said.get("options") else "reply") + " comes back to you.")
     elif a.action == "done":
         note = s.close_note(nid, result=a.result, ref=a.ref, parked=a.parked)
         print(f"{nid}: {'left with the user' if a.parked else 'done'}" + (f", on the record as {note['decision']}" if note.get("decision") else ""))
@@ -1079,6 +1083,8 @@ def main(argv=None) -> int:
     c.add_argument("--reading", default="", help="sort: what you take the note to mean, plainly; the user confirms a directive or a rule against it")
     c.add_argument("--mine", action="store_true", help="sort: it is in the part of the project this session works on, and this session will do it")
     c.add_argument("--lane", default="", help="sort: the piece of work on the board it belongs to")
+    c.add_argument("--option", action="append", default=[], metavar="\"<name> :: <what it means>\"",
+                   help="sort, reply: one choice for the user to pick from, shown as a card on the page; give it once per choice (two to six)")
     c.add_argument("--result", default="", help="done: what was done, in a sentence the user can read")
     c.add_argument("--ref", default="", help="done: a commit, or the batch filed for options")
     c.add_argument("--parked", action="store_true", help="done: it cannot or should not be done; --result says why")

@@ -711,6 +711,71 @@ def main() -> int:
               and "TO DO (1)" in handed(session_id="s-3", cwd=str(deep), hook_event_name="Stop"),
               "a note no session is on waits until the user sends it; an idea for later waits on nobody")
 
+        # the Category menu and Close: the same category changes nothing, Unsorted hands a note back, a new category brings a Later note back
+        def seen(nid: str) -> dict:
+            return next(n for n in http("GET", base + "/api/state")[1]["notes"] if n["id"] == nid)
+
+        later = made["note"]["id"]
+        status, same = http("POST", base + f"/api/note/{bug}", {"action": "kind", "kind": "bug"})
+        check(status == 200 and same["note"]["status"] == "go" and same["note"]["session"] == "s-3" and same["note"]["reading"],
+              "choosing the category a note already has changes nothing, and no session is handed it again")
+        status, back = http("POST", base + f"/api/note/{bug}", {"action": "kind", "kind": ""})
+        text = handed(session_id="s-4", cwd=str(deep), hook_event_name="Stop")
+        check(status == 200 and (back["note"]["kind"], back["note"]["kind_by"], back["note"]["status"], back["note"]["reading"]) == ("", "", "new", "")
+              and "TO SORT (1)" in text and bug in text and "the user marked it" not in text and '--option "<name> :: <what it means>"' in text,
+              "a note set to Unsorted goes back to a session to sort as it sees fit, and the session is told how to give choices")
+        asked = note_cli("sort", bug, "--kind", "bug", "--reading", "The front door's latch does not release.", "--mine",
+                         "--option", "Oil it :: Ten minutes; it may stick again.", "--option", "Replace it :: A new latch, an hour.", session="s-4")
+        row, quiet = seen(bug), handed(session_id="s-4", cwd=str(deep), hook_event_name="Stop")
+        http("POST", base + f"/api/note/{bug}", {"action": "reply", "text": "Replace it"})
+        text = handed(session_id="s-4", cwd=str(deep), hook_event_name="Stop")
+        check("picks one of the 2 choices" in asked and row["status"] == "go" and row["waits"] == "you" and row["choice_at"] == "reading" and quiet == ""
+              and seen(bug)["waits"] == "claude" and seen(bug)["choice_at"] is None
+              and "TO DO (1)" in text and "- Replace it: A new latch, an hour." in text and "They said: Replace it" in text,
+              "a bug sorted with choices waits on the user, and reaches the session only with their pick on it")
+        status, woke = http("POST", base + f"/api/note/{later}", {"action": "kind", "kind": "discussion"})
+        shut = http("POST", base + f"/api/note/{later}", {"action": "done"})[1]["note"]
+        again = http("POST", base + f"/api/note/{later}", {"action": "reopen"})[1]["note"]
+        check(status == 200 and woke["note"]["status"] == "new" and woke["note"]["kind_by"] == "you"
+              and shut["status"] == "done" and shut["closed_by"] == "you" and again["status"] == "new" and again["kind"] == "discussion",
+              "a new category brings a note kept for later back; Close closes a note from the page, and it opens again")
+
+        # choices: a session gives them apart from its text, the page shows a card each, and the user's pick comes back as their reply
+        few = note_cli("reply", later, "Yes.", "--option", "Copper :: Lasts longest.", session="s-3")
+        long = note_cli("reply", later, "Yes.", "--option", "x" * 61 + " :: too long a name", "--option", "Tin :: Cheap.", session="s-3")
+        wordy = note_cli("reply", later, "Yes.", "--option", "Copper :: " + "y" * 301, "--option", "Tin :: Cheap.", session="s-3")
+        twin = note_cli("reply", later, "Yes.", "--option", "Tin :: Cheap.", "--option", "tin :: Light.", session="s-3")
+        check("2 to 6" in few and "at most 60" in long and "at most 300" in wordy and "both named" in twin and studio.note(later)["thread"] == [],
+              "one choice alone, a name over 60 characters, a meaning over 300 and two choices of one name are refused, and nothing is written")
+        said = note_cli("reply", later, "Yes, and there are three ways to make it.", "--option", "Copper :: Lasts longest, costs most.",
+                        "--option", "Tin::Cheap and light.", "--option", "Wood", session="s-3")
+        row = seen(later)
+        first = dict(row["thread"][0])
+        check("3 choices" in said and first["text"] == "Yes, and there are three ways to make it." and row["waits"] == "you" and row["choice_at"] == 0
+              and first["options"] == [{"name": "Copper", "what": "Lasts longest, costs most."}, {"name": "Tin", "what": "Cheap and light."}, {"name": "Wood", "what": ""}],
+              "a session's answer keeps its choices apart from its text, a name and a meaning each, and the note waits on the user's pick")
+        http("POST", base + f"/api/note/{later}", {"action": "reply", "text": "Tin"})
+        row, text = seen(later), handed(session_id="s-3", cwd=str(deep), hook_event_name="Stop")
+        check(row["thread"][0] == first and row["thread"][1]["who"] == "you" and row["thread"][1]["text"] == "Tin" and row["choice_at"] is None
+              and row["waits"] == "claude" and "TO ANSWER (1)" in text and "- Tin: Cheap and light." in text and "They: Tin" in text and "--option" in text,
+              "the user's pick is their reply: it reaches the session with the choices it was picked from, and the session's own entry is not changed")
+        gate = http("POST", base + "/api/note", {"text": "make the gate wider"})[1]["note"]["id"]
+        note_cli("sort", gate, "--kind", "directive", "--reading", "Widen one of the two gates.",
+                 "--option", "Front gate :: To 1.2 m.", "--option", "Back gate :: To 1.0 m.", session="s-3")
+        row = seen(gate)
+        status, _ = http("POST", base + f"/api/note/{gate}", {"action": "confirm"})
+        check(row["status"] == "confirm" and row["choice_at"] == "reading" and [o["name"] for o in row["reading_options"]] == ["Front gate", "Back gate"]
+              and status == 400 and studio.note(gate)["status"] == "confirm",
+              "a reading given with choices waits on the user's pick, and is not confirmed as it stands")
+        http("POST", base + f"/api/note/{gate}", {"action": "back", "text": "Back gate"})
+        text = handed(session_id="s-4", cwd=str(deep), hook_event_name="Stop")
+        note_cli("sort", gate, "--kind", "directive", "--reading", "Widen the back gate to 1.0 m.", session="s-4")
+        row = seen(gate)
+        check("TO SORT (1)" in text and "- Back gate: To 1.0 m." in text and "They then said: Back gate" in text
+              and row["status"] == "confirm" and row["choice_at"] is None and row["reading_options"] == []
+              and http("POST", base + f"/api/note/{gate}", {"action": "confirm"})[0] == 200,
+              "a pick on a reading to confirm sends the note back to be sorted as what was picked; the plain reading that follows is confirmed as before")
+
         # files on a note: streamed to disk out of git, handed to a session by path, archived on close, back on reopen
         def put_file(nid: str, name: str, blob: bytes):
             req = urllib.request.Request(base + f"/api/note/{nid}/file?name=" + urllib.parse.quote(name), data=blob, method="PUT", headers={"X-Studio-File": "1"})

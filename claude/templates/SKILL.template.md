@@ -214,7 +214,7 @@ empty and say so in `--ruling`.
 The user types notes on the Studio's Notes page whenever a thought comes: an
 order, a bug, a question, a half-formed idea. **Never poll for them.** The
 Studio's hooks hand them to you when you finish a turn, and between tool calls
-once a note has waited a while or is marked urgent. What you are handed lists
+once a note has waited a while. What you are handed lists
 each note in their words and repeats the commands below. `S note waiting`
 prints the same when they ask ("process my notes").
 
@@ -223,10 +223,22 @@ kind it is and what you take it to mean:
 
 ```
 S note sort <id> --kind directive|rule|bug|options|later \
-       --reading "<what you take it to mean, plainly>" [--mine | --lane <lane id>]
-S note reply <id> "<your answer>"                  a discussion is sorted by answering it
+       --reading "<what you take it to mean, plainly>" [--mine | --lane <lane id>] \
+       [--option "<name> :: <what it means>" ...]
+S note reply <id> "<your answer>" [--option "<name> :: <what it means>" ...]
+                                                   a discussion is sorted by answering it
 S note split <id> "<part of their words, exact>"   one note holding two things; prints the new id
 ```
+
+**Choices go in `--option`, never in the text.** Whenever your answer or
+your reading holds choices for them to pick from, give each one as its own
+`--option`: a short name (60 characters at most), then ` :: `, then what it
+means in a line or two (300 at most). Two to six of them. The page shows
+each as a card, and they pick one with a click. Their pick comes back to you
+as their reply, by its name. A reading given with choices is not worked in
+yet: on a directive or a rule their pick sends the note back for you to sort
+again as what they picked; a bug or options goes on to the session with the
+pick on it.
 
 - **directive**: an order to change something ("jump height to 1.4"). The
   reading says exactly what you will change, with the names and numbers it
@@ -249,7 +261,9 @@ S note split <id> "<part of their words, exact>"   one note holding two things; 
 do it; `--lane <id>` names another piece of work on the board, and the note
 goes to that session; with neither, the page tells them no session is on that
 part and they send it themselves. A kind they chose themselves stands: sort
-it as that. One note that holds two things (a complaint and a question) is
+it as that. They choose it in the Category menu on the page, and can change
+it later; a note they set back to Unsorted is yours to sort again as you see
+fit. One note that holds two things (a complaint and a question) is
 split first, then each part sorted.
 
 A note that is yours to do (a confirmed directive or rule, a bug, options)

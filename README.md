@@ -55,11 +55,12 @@ The first page is a live board:
 
 Type whatever comes to mind on the Notes page, or behind the Note button on any page (press N),
 and carry on. Nothing polls for it. Claude Code's hooks hand your notes to a session when it
-finishes a turn, and between steps once a note has waited ten minutes or is marked urgent, so an
-empty box costs no tokens at all. The session that gets a note says what kind it is, and you can
-overrule it:
+finishes a turn, and between steps once a note has waited ten minutes, so an empty box costs no
+tokens at all. The box has three controls: **Send**, **Attach** and a **Category** menu. Leave the
+menu on Unsorted and the session that gets the note says what kind it is; pick a category and it
+stands. The same menu sits under every note, so you can overrule a session or change your mind:
 
-| Kind | What you typed | What happens |
+| Category | What you typed | What happens |
 |---|---|---|
 | Change | "jump height to 1.4, same as the ledge" | The session says exactly what it will change. Nothing is done until you confirm. Then it is worked in and recorded as a decision in your words. |
 | Discussion | "could saves be plain text? how much work?" | A thread on the page. Your replies reach the session the same way the note did. |
@@ -70,7 +71,18 @@ overrule it:
 
 A note about work another session is doing goes to that session. If no session is on that part
 of the project, the page says so and you send it yourself. What waits on you (a reading to
-confirm, an answer to read) shows in Needs you.
+confirm, an answer to read, choices to pick from) shows in Needs you.
+
+Under a note there is **Reply**, **Close**, **Attach** and the Category menu. Setting a note back
+to Unsorted hands it to a session to sort again, and giving a Later note another category brings
+it back. The row of filters shows three statuses (Open, Needs you, Closed), then the seven
+categories by the same names as the menu.
+
+When a session's answer holds choices, each one is a card of its own with a short name and a line
+or two on what it means, so you never dig them out of a paragraph. Click a card and your pick goes
+back to the session as your reply. A reading that could mean two things comes the same way: pick
+the one you meant. The session gives them apart from its text
+(`S note reply <id> "<text>" --option "<name> :: <what it means>"`, once per choice).
 
 A note can carry files: paste a screenshot into the box, drop files on it, or press **Attach**.
 Any kind and any size. Pictures show on the note and the rest are links, and the session handed
