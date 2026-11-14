@@ -363,7 +363,20 @@ main > section > .say { max-width: 980px; flex-wrap: wrap; }
 .jot .msg > span { color: var(--muted); font-size: 12px; line-height: 1.5; }
 .jot .msg .said { white-space: pre-wrap; overflow-wrap: anywhere; }
 .jot .msg.claude > .md { padding-left: 12px; border-left: 2px solid var(--line); overflow-wrap: anywhere; display: flex; flex-direction: column; gap: 6px; }
-.jot select { background: var(--surface); color: inherit; border: 1px solid var(--line); border-radius: var(--radius); padding: 4px 8px; font-size: 12px; max-width: 260px; }
+.jot select, .notebox select { background: var(--surface); color: inherit; border: 1px solid var(--line); border-radius: var(--radius); padding: 4px 8px; font-size: 12px; max-width: 260px; }
+.cat { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+.filters .split { align-self: stretch; width: 1px; margin: 0 4px; background: var(--line); }
+/* the choices a session gave with an answer or a reading: a card each */
+.choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(210px, 100%), 1fr)); gap: 8px; min-width: 0; }
+.jot .msg .choices { grid-column: 2; }
+.choice { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-content: start; align-items: center; gap: 4px 8px; min-width: 0; padding: 9px 11px; text-align: left; font: inherit; color: inherit; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+button.choice { cursor: pointer; background: var(--raised); }
+button.choice:hover { border-color: var(--accent); background: var(--accent-soft); }
+.choice .ck { font: 600 11px/1 var(--font-mono); color: var(--muted); border: 1px solid var(--line); border-radius: calc(var(--radius) - 2px); padding: 4px 6px; }
+button.choice .ck { color: var(--accent-fg); border-color: color-mix(in srgb, var(--accent) 50%, transparent); }
+.choice .cn { font-weight: 600; font-size: 14px; overflow-wrap: anywhere; }
+.choice .cw { grid-column: 2 / -1; color: var(--muted); font-size: 13px; line-height: 1.45; overflow-wrap: anywhere; }
+.choice.picked { border-color: var(--accent); background: var(--accent-soft); }
 .jot textarea { min-height: 34px; padding: 6px 9px; font-size: 14px; }
 .answer { background: var(--bg); border: 1px solid var(--line-soft); border-radius: var(--radius); padding: 9px 11px; display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
 
@@ -514,6 +527,7 @@ details.setup > :not(summary) { margin: 0 14px 12px; }
   .row.lack .gname, .row.lack .gcount { flex: 1 1 100%; text-align: left; }
   .msbody { padding-left: 14px; }
   .handact { flex: 1 1 100%; }
+  .jot .msg .choices { grid-column: 1 / -1; }  /* a phone: the cards take the note's whole width */
   /* a phone: the sections on one line that scrolls sideways, and its own pinch for the page size */
   .top .nav { flex: 1 1 100%; order: 1; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin: 0 calc(-1 * var(--gutter)); padding: 0 var(--gutter); }
   .top .nav::-webkit-scrollbar { display: none; }

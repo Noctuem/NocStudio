@@ -9,7 +9,7 @@ finds the Studio of the project the session is working in, and updates that sess
 
 It watches, and it does one thing more: it hands over what the user left in the Studio for a session.
 Notes from the notes box go when the session finishes a turn (it carries on and deals with them), when
-the user sends it a message, and between tool calls once a note has waited a while or is marked urgent.
+the user sends it a message, and between tool calls once a note has waited a while.
 Verdicts on batches and answers to what only the user could do go only when it finishes a turn or is
 sent a message, never in the middle of work. An idle session is woken only when the user presses Send
 verdicts on the page (`hook.py --wait`, below, and studiolib/wake.py). With

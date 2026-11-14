@@ -14,6 +14,11 @@ A note is one file, notes/N-0001.json (the store writes them). Its status says w
     later    an idea kept for when the next stretch is planned
     done, parked
 
+A session can give choices with a reading or an answer (--option). They are kept apart from its text:
+with a reading on the note (reading_options), with an answer on its own entry in the thread (options).
+The page shows each as a card, and the user's pick comes back as their reply. A thread entry is never
+changed once written, so which set is open is worked out from what was said after it (choices, below).
+
 Kept free of the store, so the hook stays quick. What was handed to whom is under live/, and is not
 history.
 """
@@ -29,6 +34,8 @@ KINDS = ("directive", "bug", "discussion", "options", "rule", "later")
 STATUS = ("new", "confirm", "go", "talk", "later", "done", "parked")
 CONFIRMED = ("directive", "rule")  # the user confirms what a session took these to mean before anything changes
 OPEN = ("new", "confirm", "go", "talk")
+OPTIONS = (2, 6)   # a set of choices holds at least two and at most six
+OPTION_NAME, OPTION_WHAT = 60, 300  # the most characters in a choice's name, and in what it means
 SAID = {"directive": "a change to make", "bug": "something broken", "discussion": "something to talk through",
         "options": "something to see options for", "rule": "a standing rule", "later": "an idea for later"}
 AFTER = 600    # seconds a note waits before it is handed to a session in the middle of its work
@@ -70,10 +77,29 @@ def load(home) -> list:
     return out
 
 
+def choices(note: dict):
+    """The choices a session gave that the user has not answered: (where, the choices), where is "reading" or the
+    place of the answer in the thread. None when there are none, or the user spoke after the latest set."""
+    thread = note.get("thread") or []
+    try:
+        start = max(0, int(note.get("options_after") or 0))  # a set given before the note was last sorted asks nothing any more
+    except (TypeError, ValueError):
+        start = 0
+    for at in range(len(thread) - 1, start - 1, -1):
+        said = thread[at] if isinstance(thread[at], dict) else {}
+        if said.get("who") == "you":
+            return None
+        if said.get("options"):
+            return at, said["options"]
+    return ("reading", note["reading_options"]) if note.get("reading_options") else None
+
+
 def waits(note: dict) -> str:
     """Who the note waits on: 'you' (the user), 'claude', or '' when nothing waits on it."""
     status = note.get("status")
-    if status in ("new", "go"):
+    if status == "go":  # a reading that came with choices waits on the user's pick before it is worked in
+        return "you" if choices(note) else "claude"
+    if status == "new":
         return "claude"
     if status == "confirm":
         return "you"
@@ -253,6 +279,37 @@ def _files(note: dict, home) -> list:
     return out
 
 
+PICK = "(a reply that is one of these names is their pick)"
+
+
+def _offered(options, lead: str) -> list:
+    """The choices a session gave with a reading or an answer, so whoever is handed the note knows what a pick means."""
+    if not options:
+        return []
+    return [f"      {lead} {PICK}:"] + [f"        - {o.get('name')}" + (f": {o.get('what')}" if o.get("what") else "") for o in options]
+
+
+def _thread(note: dict, they: str, you: str) -> list:
+    """What was said on a note after it was typed, each line with the choices given with it."""
+    out = []
+    for m in note.get("thread") or []:
+        out.append(f"      {they if m.get('who') == 'you' else you} {m.get('text')}")
+        out += _offered(m.get("options"), "The choices given with that, as cards on the page")
+    return out
+
+
+def _option_help(sort: bool = False) -> list:
+    """How a session gives choices: said once in what it is handed, under the first commands that take them."""
+    out = ["  --option: whenever your answer" + (" or your reading" if sort else "") + " holds choices for them to pick from, give each one as its own",
+           "  --option (two to six of them): a short name, then \" :: \", then what it means in a line or two. Never leave",
+           "  choices inside the text. The page shows each as a card they pick with a click, and the pick comes back to",
+           "  you as their reply, by its name."]
+    if sort:
+        out += ["  A reading given with choices is not worked in yet: on a directive or a rule their pick sends the note back",
+                "  for you to sort again as what they picked; on a bug or options it goes on to the session with the pick on it."]
+    return out
+
+
 def wording(notes: list, home, lane_rows: dict | None = None, midwork: bool = False) -> str:
     """What a session is told, complete in itself: a session that never read the skill can still act on it."""
     s = command(home)
@@ -274,10 +331,10 @@ def wording(notes: list, home, lane_rows: dict | None = None, midwork: bool = Fa
             if n.get("kind"):
                 head += f"  (the user marked it: {SAID.get(n['kind'], n['kind'])}; sort it as `{n['kind']}`)"
             out += [head, _quote(n.get("text"))] + _files(n, home)
-            for m in n.get("thread") or []:
-                out.append(f"      {'They' if m.get('who') == 'you' else 'You'} then said: {m.get('text')}")
             if n.get("reading"):
                 out.append(f"      An earlier reading, which they sent back: {n['reading']}")
+                out += _offered(n.get("reading_options"), "The choices given with that reading")
+            out += _thread(n, "They then said:", "You then said:")
             out.append("")
         out += ["  The kinds, and what each sets off:",
                 "    directive   an order to change something. Say exactly what you will change; they confirm on the page",
@@ -289,15 +346,16 @@ def wording(notes: list, home, lane_rows: dict | None = None, midwork: bool = Fa
                 "    discussion  a question, or a point they want to talk through. You sort it by answering it (below).",
                 "",
                 f"    S note sort <id> --kind directive|rule|bug|options|later --reading \"<what you take it to mean, plainly>\" \\",
-                "           [--mine | --lane <lane id>]",
-                f"    S note reply <id> \"<your answer>\"          a discussion: answer what they asked, with what you found",
+                "           [--mine | --lane <lane id>] [--option \"<name> :: <what it means>\" ...]",
+                f"    S note reply <id> \"<your answer>\" [--option \"<name> :: <what it means>\" ...]",
+                "                                              a discussion: answer what they asked, with what you found",
                 f"    S note split <id> \"<part of their words, exact>\"   one note that holds two things: prints a new id for that part",
                 "",
                 "  --reading is shown to them under \"Claude takes this to mean\": the change or the rule itself, in a sentence",
                 "  or two, with the names and numbers it touches. Nothing about what happens next.",
                 "  --mine: the work is in the part of the project you are on, and you will do it. --lane <id>: it belongs to",
                 "  another piece of work on the board. Neither: no session is on that part, and the page will say so.",
-                "  If you sorted a bug or options as --mine, it is yours to do now (as under TO DO)."]
+                "  If you sorted a bug or options as --mine, it is yours to do now (as under TO DO)."] + _option_help(sort=True)
         if lane_rows:
             out.append("  Work on the board now: " + "; ".join(f"{lid} ({r.get('name') or lid})" for lid, r in lane_rows.items()))
         out.append("")
@@ -307,8 +365,8 @@ def wording(notes: list, home, lane_rows: dict | None = None, midwork: bool = Fa
             out += [f"  {n['id']}  {n.get('kind')}" + ("  URGENT" if n.get("urgent") else ""), _quote(n.get("text"))] + _files(n, home)
             if n.get("reading"):
                 out.append(f"      Taken to mean: {n['reading']}")
-            for m in n.get("thread") or []:
-                out.append(f"      {'They' if m.get('who') == 'you' else 'You'} said: {m.get('text')}")
+                out += _offered(n.get("reading_options"), "The choices given with that reading")
+            out += _thread(n, "They said:", "You said:")
             out.append("")
         out += ["  Do each one, then close it with what was done, in a sentence they can read on the page:",
                 f"    S note done <id> --result \"<what was done>\" [--ref <commit, or the batch id for options>]",
@@ -321,12 +379,12 @@ def wording(notes: list, home, lane_rows: dict | None = None, midwork: bool = Fa
         out += [f"TO ANSWER ({len(talk)}): a discussion where the user spoke last.", ""]
         for n in talk:
             out += [f"  {n['id']}" + ("  URGENT" if n.get("urgent") else ""), _quote(n.get("text"))] + _files(n, home)
-            for m in n.get("thread") or []:
-                out.append(f"      {'They' if m.get('who') == 'you' else 'You'}: {m.get('text')}")
+            out += _thread(n, "They:", "You:")
             out.append("")
-        out += [f"    S note reply <id> \"<your answer>\"",
+        out += [f"    S note reply <id> \"<your answer>\" [--option \"<name> :: <what it means>\" ...]",
                 "  Answer what was asked, with what you looked up to answer it. Do not change the project because of a",
-                "  discussion: when it turns into something to do, they will say so on the page.", ""]
+                "  discussion: when it turns into something to do, they will say so on the page."]
+        out += ([] if new else _option_help()) + [""]
     out.append("When you have dealt with them, go back to what you were doing. Do not ask the user in chat about these notes; "
                "they read your answers on the page.")
     return "\n".join(out)

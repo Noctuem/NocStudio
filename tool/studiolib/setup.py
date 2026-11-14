@@ -76,7 +76,7 @@ max_mb = 256
 dirs = []
 
 # The notes box: how long a note you typed waits before it is handed to a session in the middle
-# of its work. A session that finishes a turn is handed it at once; an urgent note never waits.
+# of its work. A session that finishes a turn is handed it at once.
 [notes]
 after_minutes = 10
 

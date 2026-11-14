@@ -135,7 +135,7 @@ workflows are running. Sessions in a git worktree of the project are found too.
 
 The same hook hands a session the notes you type on the Studio's **Notes** page: when the
 session finishes a turn, and between tool calls once a note has waited ten minutes (`[notes]
-after_minutes` in `studio.toml`) or is marked urgent. Nothing polls, so an empty notes box costs
+after_minutes` in `studio.toml`). Nothing polls, so an empty notes box costs
 no tokens. For that, the session waits a moment for the hook at those two points; every other
 entry runs in the background.
 
@@ -151,7 +151,7 @@ installed the hook before the notes box existed, run `hooks install` once more.
 | Open NocStudio and look at the Overview instead of asking for a status update | Moves steps as they land, keeps a lane with an ETA for each piece of work in progress, logs merges, publishes and setbacks |
 | Answer what is in Needs you, or leave it and let the default stand | Puts every question there with the default it will use, and goes on working |
 | Judge what is in the Inbox | Files batches; the checks hold back what breaks a rule |
-| Type a note whenever a thought comes; confirm a change, answer a thread | Is handed your notes at its next break, says what it takes each to mean, works in what you confirm |
+| Type a note whenever a thought comes; confirm a change, answer a thread, pick one of the choices it gives | Is handed your notes at its next break, says what it takes each to mean, works in what you confirm |
 | Say "process my studio verdicts" | Runs `studio.py todo`, acts on each verdict and each answer, closes it with a decision |
 | | Ends its work with `studio.py save`, which commits the Studio's record (and pushes, if you gave the home a remote) |
 
@@ -170,6 +170,7 @@ S milestone set / step set / plan the road and its steps; the whole plan as one 
 S lane set / lane done / log      work in progress with an ETA; merges, publishes and setbacks
 S ask set / ask answered          what waits on you: a chore, a build to try, a question with a default
 S note sort / reply / done        your notes: say what one means, answer a discussion, close what was done
+                                  (--option on sort and reply gives you choices as cards to pick from)
 S now                             the build in hand, the goal, counters, what comes next
 S hooks install / remove / status live reporting from Claude Code's sessions
 S motion bake / set / link        motions that loop in the 3D viewer
