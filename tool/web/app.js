@@ -702,7 +702,7 @@
   }
 
   // painting on a model in a 3D view, still or moving. The paint is kept as strokes: points on the surface in the
-  // model's own space, each with the brush's size and the way the surface faced, and it is drawn as a see-through
+  // model's own space, each with the brush's size and the way to the eye from it, and it is drawn as a see-through
   // layer over the texture, so it moves with a posed body. On a motion the brush stops it, the bar scrubs to the
   // frame, and each colour keeps the clip and the moment it was painted at: "the elbow folds wrong here".
   const PAINT_W = 1024;  // the stroke points sit in a texture this wide: three rows for every 1024 of them
@@ -775,7 +775,11 @@
       });
       // the primitives of one glTF mesh are separate meshes in one space: paint laid on one goes on them all, so a seam between two materials does not cut it
       const same = (a, b) => a.elements.every((x, i) => Math.abs(x - b.elements[i]) < 1e-6);
-      for (const m of meshes) m.group = meshes.filter((o) => o.mesh.parent === m.mesh.parent && o.sk === m.sk && (!m.sk || o.mesh.skeleton === m.mesh.skeleton) && same(o.mesh.matrixWorld, m.mesh.matrixWorld));
+      // a mesh a motion moves by itself is never in one space with another, so the meshes go together the same way whatever pose this opened in
+      const moved = new Set();
+      for (const c of v.clips) for (const t of c.tracks) { const i = t.name.lastIndexOf('.'); if (/^(position|quaternion|scale)$/.test(t.name.slice(i + 1))) moved.add(t.name.slice(0, i)); }
+      const own = (x) => moved.has(x.mesh.name || x.mesh.uuid);
+      for (const m of meshes) m.group = meshes.filter((o) => o === m || (!own(o) && !own(m) && o.mesh.parent === m.mesh.parent && o.sk === m.sk && (!m.sk || o.mesh.skeleton === m.mesh.skeleton) && same(o.mesh.matrixWorld, m.mesh.matrixWorld)));
       const destroy = v.destroy;
       v.destroy = () => {  // the view drops the geometry; the layers' textures and materials are dropped here
         for (const m of meshes) { if (m.tex) m.tex.dispose(); if (m.over) m.over.material.dispose(); }
@@ -833,9 +837,9 @@
       else if (rest) { v.set({ clip: '' }); poseKey = null; }
       try { return fn(); } finally { if ((mo || rest) && was) { show(was); v.set({ playing }); } else if (mo && !was && v.action) v.set({ clip: '' }); poseKey = null; }
     }
-    // where a stroke point sits in the layer's texture: row 0 its place and size, row 1 the way it faced and its colour, row 2 the balls
+    // where a stroke point sits in the layer's texture: row 0 its place and size, row 1 the way to the eye and its colour, row 2 the balls
     const off = (i, row) => (((i >> 10) * 3 + row) * PAINT_W + (i & (PAINT_W - 1))) * 4;
-    // the strokes set out for the layer, mesh by mesh: every point with its size, the way it faced and its colour, in
+    // the strokes set out for the layer, mesh by mesh: every point with its size, the way to the eye and its colour, in
     // the order painted; then a ball round each sixteen of them, and the faces near a ball, which are all the layer draws
     function lay(full) {
       stale = false; total = 0;
@@ -1076,7 +1080,8 @@
       if (!hit) { drag.recs.clear(); return; }
       const depth = hit.t * ray.ray.direction.dot(v.cam.getWorldDirection(V)), size = rad * 2 * depth * Math.tan(THREE.MathUtils.degToRad(v.cam.fov) / 2) / (r.height || 1);
       const here = ray.ray.at(hit.t, new THREE.Vector3()), eye = ray.ray.origin, q = new THREE.Vector3(), bary = new THREE.Vector3(), done = new Set([hit.m.group[0]]);
-      put(hit.m, hit.f, hit.u, hit.w, size, hit.back);
+      const sight = new THREE.Vector3().subVectors(eye, here);
+      put(hit.m, hit.f, hit.u, hit.w, size, hit.back, sight);
       for (const m of meshes) {
         const home = m.group[0];
         if (done.has(home) || m !== home) continue;
@@ -1092,13 +1097,33 @@
             if (d < 0.95 * size && (!best || d < best.d)) { tri.getBarycoord(q, bary); best = { o, f, d, u: bary.y, w: bary.z, back: side < 0 }; }  // a mesh the brush only grazes is left alone
           }
         }
-        if (best) { done.add(home); put(best.o, best.f, best.u, best.w, Math.sqrt(size * size - best.d * best.d), best.back); }
+        if (best) { done.add(home); put(best.o, best.f, best.u, best.w, Math.sqrt(size * size - best.d * best.d), best.back, sight); }
       }
       for (const home of [...drag.recs.keys()]) if (!done.has(home)) drag.recs.delete(home);  // the brush has left that mesh: its stroke ends there
     }
+    // the way from a point on a face to the eye, carried into the mesh's own space, unposed: what faces the eye on the screen faces
+    // this way there, so paint does not go round a rounded part to the side that faced away. Where the surface is seen nearly
+    // edge on, it leans toward the way the surface faces (nx, ny, nz), just far enough that the point under the brush takes the paint
+    function toEye(m, a, b, c, sight, nx, ny, nz) {
+      const q = new THREE.Vector3();
+      if (!m.sk) q.copy(sight).transformDirection(M.copy(m.mesh.matrixWorld).invert());
+      else {  // a posed body: through the face's own frame, its two edges and the way it faces, as it stands now and unposed
+        const e1 = new THREE.Vector3(), e2 = new THREE.Vector3(), np = new THREE.Vector3(), E1 = new THREE.Vector3(), E2 = new THREE.Vector3(), nu = new THREE.Vector3();
+        e1.fromArray(m.PW, b).sub(q.fromArray(m.PW, a)); e2.fromArray(m.PW, c).sub(q); np.crossVectors(e1, e2);
+        E1.fromArray(m.P0, b).sub(q.fromArray(m.P0, a)); E2.fromArray(m.P0, c).sub(q); nu.crossVectors(E1, E2);
+        const lp = np.lengthSq(), lu = nu.lengthSq(), t1 = sight.dot(e1), t2 = sight.dot(e2), d11 = e1.dot(e1), d12 = e1.dot(e2), d22 = e2.dot(e2);
+        q.set(0, 0, 0);
+        if (lp > 0 && lu > 0) q.addScaledVector(E1, (t1 * d22 - t2 * d12) / lp).addScaledVector(E2, (t2 * d11 - t1 * d12) / lp).addScaledVector(nu, sight.dot(np) / lp * m.flip * Math.pow(lp / lu, 0.25)).normalize();
+      }
+      const dn = q.x * nx + q.y * ny + q.z * nz, lean = 0.35;
+      if (dn >= lean) return q;
+      q.x -= dn * nx; q.y -= dn * ny; q.z -= dn * nz;
+      const l = q.length(), k = Math.sqrt(1 - lean * lean) / l;
+      return l > 1e-9 ? q.set(lean * nx + k * q.x, lean * ny + k * q.y, lean * nz + k * q.z) : q.set(nx, ny, nz);
+    }
     // a point of a stroke on one mesh: on a face, at a place on it, with the brush's size in the scene. It is kept in
-    // the mesh's own space, unposed, with the way the surface faces there
-    function put(m, f, u, w, size, back) {
+    // the mesh's own space, unposed, with the way to the eye from there
+    function put(m, f, u, w, size, back, sight) {
       const home = m.group[0], P = m.P0, N = m.NB, a = 3 * m.ix[3 * f], b = 3 * m.ix[3 * f + 1], c = 3 * m.ix[3 * f + 2], w0 = 1 - u - w;
       const mix = (A, i) => w0 * A[a + i] + u * A[b + i] + w * A[c + i];
       const area = (A) => { const ux = A[b] - A[a], uy = A[b + 1] - A[a + 1], uz = A[b + 2] - A[a + 2], wx = A[c] - A[a], wy = A[c + 1] - A[a + 1], wz = A[c + 2] - A[a + 2]; return Math.hypot(uy * wz - uz * wy, uz * wx - ux * wz, ux * wy - uy * wx) / 2; };
@@ -1108,6 +1133,7 @@
       if (!(size > 0)) return;
       let nx = mix(N, 0), ny = mix(N, 1), nz = mix(N, 2);
       const l = Math.hypot(nx, ny, nz) * (back ? -1 : 1) || 1; nx /= l; ny /= l; nz /= l;
+      const way = toEye(m, a, b, c, sight, nx, ny, nz);
       const full = () => { if (!fullSaid) toast('This model holds no more paint. Undo or Clear all to make room.'); fullSaid = true; drag.recs.delete(home); };
       let rec = drag.recs.get(home), carry = null;
       if (rec) {
@@ -1122,7 +1148,7 @@
         drag.recs.set(home, rec); ink.strokes.push(rec); total += rec.p.length / 6;
       }
       const q = rec.p, n = q.length, k = Math.pow(10, Math.min(7, Math.max(0, 2 - Math.floor(Math.log10(rec.r))))), r2 = (z) => Math.round(z * 100) / 100;
-      const pt = [Math.round(mix(P, 0) * k) / k, Math.round(mix(P, 1) * k) / k, Math.round(mix(P, 2) * k) / k, r2(nx), r2(ny), r2(nz)];
+      const pt = [Math.round(mix(P, 0) * k) / k, Math.round(mix(P, 1) * k) / k, Math.round(mix(P, 2) * k) / k, r2(way.x), r2(way.y), r2(way.z)];
       // points closer than about half the brush's width are thinned: the last one goes on with the brush until it is far
       // enough from the one before. When the brush turns back the last point stays, so paint already laid is not pulled away
       const gap = (i) => Math.hypot(pt[0] - q[i], pt[1] - q[i + 1], pt[2] - q[i + 2]);
