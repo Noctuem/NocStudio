@@ -1084,11 +1084,12 @@
   const WK = { data: null, busy: false, timer: 0 };
   async function wakeLoad() {
     if (document.hidden && WK.data) return;
-    try { WK.data = await call('GET', '/api/wake'); } catch (e) { return; }
+    try { WK.data = await call('GET', '/api/wake'); WK.old = false; } catch (e) { WK.old = /no such route/.test(e.message); if (!WK.old) return; }
     for (const b of document.querySelectorAll('.wake-btn')) b.replaceWith(wakeButton());
     if ($('.wakepop')) drawWakePop();
   }
   function wakeWhy(d) {
+    if (WK.old) return 'The Studio running now started before this button: close the NocStudio app and open it again';
     if (!d) return 'Checking for verdicts…';
     if (!d.waiting) return 'No verdicts are waiting for a session';
     if (!d.sessions.length) return d.hooks ? 'No session can be told now: it has to sit idle at its prompt, and have started or finished a turn since the Studio’s hooks were installed'
@@ -1098,7 +1099,7 @@
       : 'Every verdict waiting was already handed to a session. Press to tell one again';
   }
   function wakeButton() {
-    const d = WK.data, can = !!(d && d.waiting && d.sessions.length), armed = can && d.unseen > 0;
+    const d = WK.old ? null : WK.data, can = !!(d && d.waiting && d.sessions.length), armed = can && d.unseen > 0;
     return h('button', { class: 'btn small wake-btn' + (armed ? ' primary' : ''), type: 'button', disabled: !can || WK.busy, title: wakeWhy(d), onclick: toggleWake },
       WK.busy ? 'Sending…' : 'Send verdicts', armed ? h('span', { class: 'count' }, String(d.unseen)) : null);
   }
