@@ -138,9 +138,14 @@ every text they edited in the Library (see Slots: working copies).
 A candidate may carry **marks**: parts of a picture or a model they painted in
 colours, a note for each colour. `todo` names the picture of them
 (`batches/<batch>/marks/<candidate>.png`, the marks painted on with a legend)
-and says where each colour sits; on a motion, the clip and the second. Open
-the picture before you act: a colour's note is about that part only. A note
-sent from the Library's Mark button carries the same picture as its file.
+and says where each colour sits; on a motion, the clip and the second. On a
+model the paint is strokes over its surface, finer than a face: you get the
+parts it is on, its centre and span in metres in the model's own space (Y
+up, its front faces +Z) and its share of the surface, and the picture shows
+the model from six sides with the paint on it, or posed at each moment they
+marked. Open the picture before you act: a colour's note is about that part
+only. A note sent from the Library's Mark button carries the same picture as
+its file.
 On a **sound** or a **clip** the marks are on its time instead: each is a
 moment or a stretch with its own note, numbered in time order. You cannot
 hear a sound or watch a clip, so `todo` gives you what you can read: the

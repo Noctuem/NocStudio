@@ -215,6 +215,27 @@ def main() -> int:
         check(moved["faces"] == {"3": {"red": [4, 9]}} and moved["meshes"] == {"3": "arm_l"}
               and moved["moments"] == {"red": {"clip": "walk", "t": 0.42, "length": 1.2}, "blue": {"clip": "walk", "t": 0.1, "length": 1.2}},
               "marks on a moving model keep the faces, and for each colour the motion and the second it was painted at")
+        # paint over a model: strokes of points in the mesh's own space, six numbers each, beside any marks made by faces
+        from studiolib.store import MARK_LIMIT
+        point = [0.12345678, 1.5, -0.25, 0.004, 0.999, 0]
+        painted = clean_marks({"kind": "model", "notes": {"red": "the seam shows"}, "where": {"red": 'on "body"; high; centre at (0.12, 1.50, -0.25) m'},
+                               "faces": {"0": {"red": [2]}}, "meshes": {"0": "body", "1": "head", "9": "gone"},
+                               "strokes": [{"c": "red", "r": 0.0123456, "m": "1", "p": point + [0.13, 1.5, -0.25, 0, 1, 0, 7]},
+                                           {"c": "erase", "r": 0.01, "m": "1", "j": 1, "p": [0.1, 1.5, -0.2, 0, 1, 0]},
+                                           {"c": "pink", "r": 0.01, "m": "1", "p": point}, {"c": "blue", "r": -1, "m": "1", "p": point},
+                                           {"c": "blue", "r": 0.01, "m": "1", "p": [0, 0, "x", 0, 1, 0]}, {"c": "blue", "r": 0.01, "p": point}]})
+        check(painted["strokes"] == [{"c": "red", "r": 0.01235, "m": "1", "p": [0.1234568, 1.5, -0.25, 0, 1, 0, 0.13, 1.5, -0.25, 0, 1, 0]},
+                                     {"c": "erase", "r": 0.01, "m": "1", "p": [0.1, 1.5, -0.2, 0, 1, 0], "j": 1}]
+              and painted["faces"] == {"0": {"red": [2]}} and painted["meshes"] == {"0": "body", "1": "head"},
+              "paint over a model is kept as strokes: each point in the mesh's own space with the way it faced, rounded, beside marks made by faces")
+        long = clean_marks({"kind": "model", "notes": {"red": "all of it"}, "strokes": [{"c": "red", "r": 1, "m": "0", "p": [0, 0, 0, 0, 1, 0] * (MARK_LIMIT + 1)},
+                                                                                      {"c": "red", "r": 1, "m": "0", "p": [0, 0, 0, 0, 1, 0]}]})
+        check(len(long["strokes"]) == 1 and len(long["strokes"][0]["p"]) == 6 * MARK_LIMIT, "paint past the limit of points is cut off")
+        status, _ = http("PUT", base + f"/api/batch/{marked['id']}/draft", {"candidates": {"a": {"score": 7, "marks": {"kind": "model", "notes": {}, "where": {"green": 'on "body"'},
+                         "strokes": [{"c": "green", "r": 0.02, "m": "0", "p": [0, 1, 0, 0, 0, 1, 0.01, 1, 0, 0, 0, 1]}], "meshes": {"0": "body"}}}}})
+        drafted = (json.loads((studio.batch_dir(marked["id"]) / "draft.json").read_text(encoding="utf-8"))["candidates"]["a"].get("marks") or {})
+        check(status == 200 and drafted.get("strokes") == [{"c": "green", "r": 0.02, "m": "0", "p": [0, 1, 0, 0, 0, 1, 0.01, 1, 0, 0, 0, 1]}] and drafted.get("meshes") == {"0": "body"},
+              "paint on a model is kept in the draft as the page sent it, so it is there when the closer look opens again")
         studio.reopen(marked["id"])
         check(put_pic("a", b"") == 200 and not studio.marks_picture(marked["id"], "a").exists(), "an empty picture takes the marks away")
         shutil.rmtree(studio.batch_dir(marked["id"]))

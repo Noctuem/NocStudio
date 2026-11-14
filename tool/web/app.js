@@ -556,11 +556,12 @@
   }
 
   // ------------------------------------------------------------------ marks
-  // The user paints on a picture or on a model's faces in up to five colours, and writes a note for each colour.
+  // The user paints on a picture or over a model's surface in up to five colours, and writes a note for each colour.
   // What Claude gets: the marks as data, a sentence per colour on where they sit, and one picture of it all.
   const MARK = [['red', '#ff453a'], ['yellow', '#ffd60a'], ['green', '#30d158'], ['blue', '#0a84ff'], ['purple', '#bf5af2']];
   const MARK_HEX = Object.fromEntries(MARK);
   const BRUSH = [6, 14, 30];  // the brush's radius on the screen, in pixels: small, medium, large
+  const MODEL_POINTS = 8000;  // the stroke points one model keeps; past this the brush lays no more
   function newInk(saved, kind) {
     saved = saved || {};
     const ink = { kind, notes: Object.assign({}, saved.notes || {}), strokes: (saved.strokes || []).map((s) => Object.assign({}, s)),
@@ -578,6 +579,7 @@
     const used = new Set();
     if (ink.kind === 'image') { for (const s of ink.strokes) if (s.c !== 'erase') used.add(s.c); for (const c of Object.keys(ink.where)) if (!ink.where[c]) used.delete(c); }
     else for (const m of Object.values(ink.faces)) for (const c of m.values()) used.add(c);
+    if (ink.kind === 'model') for (const s of ink.strokes) if (s.c !== 'erase' && ink.where[s.c] !== '') used.add(s.c);  // '' is a colour wholly rubbed out
     return MARK.map(([c]) => c).filter((c) => used.has(c));
   }
   // the marks as they are saved: plain lists, nothing the server has to work out
@@ -589,6 +591,8 @@
     if (ink.kind === 'image') { out.strokes = ink.strokes; out.size = ink.imageSize || null; }
     else {
       out.faces = {}; out.meshes = {}; out.moments = {};
+      const lead = ink.strokes.findIndex((s) => s.c !== 'erase');  // rubbing out with nothing under it is not kept
+      if (lead >= 0 && ink.strokes.some((s) => used.includes(s.c))) { out.strokes = ink.strokes.slice(lead); for (const s of out.strokes) out.meshes[s.m] = ink.meshes[s.m] || s.m; }
       for (const c of used) if (ink.moments[c]) out.moments[c] = ink.moments[c];
       for (const [key, m] of Object.entries(ink.faces)) {
         const by = {};
@@ -697,29 +701,100 @@
     return api;
   }
 
-  // painting faces of a model in a 3D view, still or moving. On a motion the brush stops it, the bar scrubs to the
+  // painting on a model in a 3D view, still or moving. The paint is kept as strokes: points on the surface in the
+  // model's own space, each with the brush's size and the way the surface faced, and it is drawn as a see-through
+  // layer over the texture, so it moves with a posed body. On a motion the brush stops it, the bar scrubs to the
   // frame, and each colour keeps the clip and the moment it was painted at: "the elbow folds wrong here".
+  const PAINT_W = 1024;  // the stroke points sit in a texture this wide: three rows for every 1024 of them
+  const PAINT_VS = ['#include <skinning_pars_vertex>', 'varying vec3 vBind;', 'varying vec3 vSide;', 'void main() {',
+    '  vBind = position;', '  vSide = normal;', '  #include <skinbase_vertex>', '  #include <begin_vertex>', '  #include <skinning_vertex>', '  #include <project_vertex>', '}'].join('\n');
+  // the newest stroke is tried first: paint covers what is under it and rubbing out hides it, each with a soft edge one pixel wide.
+  // The loops end by their own tests alone: a continue or a break in them hung the graphics driver under Direct3D
+  const PAINT_FS = ['uniform highp sampler2D pts;', 'uniform int count;', 'uniform float opacity;', 'varying vec3 vBind;', 'varying vec3 vSide;',
+    'const vec3 COLS[6] = vec3[6](vec3(0.0), ' + MARK.map(([, hex]) => 'vec3(' + [1, 3, 5].map((i) => (parseInt(hex.slice(i, i + 2), 16) / 255).toFixed(4)).join(', ') + ')').join(', ') + ');',
+    'vec4 pt(int i, int row) { return texelFetch(pts, ivec2(i & ' + (PAINT_W - 1) + ', (i >> 10) * 3 + row), 0); }',
+    'void main() {',
+    '  vec3 n = normalize(vSide) * (gl_FrontFacing ? 1.0 : -1.0);',
+    '  float px = max(length(dFdx(vBind)), length(dFdy(vBind))) + 1e-9;',
+    '  vec3 sum = vec3(0.0);',
+    '  float cover = 0.0, through = 1.0;',
+    '  for (int k = ((count + 15) >> 4) - 1; k >= 0 && through > 0.01; k--) {',
+    '    vec4 ball = pt(k, 2);',
+    '    if (distance(vBind, ball.xyz) <= ball.w + px) {',
+    '      for (int i = min(count, (k + 1) << 4) - 1; i >= (k << 4) && through > 0.01; i--) {',
+    '        vec4 p = pt(i, 0), q = pt(i, 1);',
+    '        int code = int(q.w + 0.5);',
+    '        vec3 c = p.xyz;',
+    '        float side = dot(n, q.xyz);',
+    '        if (code >= 8) {',
+    '          vec3 a = pt(i - 1, 0).xyz, ab = p.xyz - a;',
+    '          c = a + ab * clamp(dot(vBind - a, ab) / max(dot(ab, ab), 1e-12), 0.0, 1.0);',
+    '          side = max(side, dot(n, pt(i - 1, 1).xyz));',
+    '        }',
+    '        float a = clamp((p.w - distance(vBind, c)) / px + 0.5, 0.0, 1.0) * smoothstep(0.1, 0.3, side);',
+    '        int col = code & 7;',
+    '        if (col > 0) { sum += through * a * COLS[col]; cover += through * a; }',
+    '        through *= 1.0 - a;',
+    '      }',
+    '    }',
+    '  }',
+    '  if (cover < 0.004) discard;',
+    '  gl_FragColor = vec4(sum / cover, opacity * cover);',
+    '}'].join('\n');
+  // the layer needs WebGL2; without it the brush paints whole faces, as it did before there were strokes
+  const paintsFine = () => { const r = renderer3(); return !!(r && r.capabilities.isWebGL2); };
+  const modelHint = () => (paintsFine() ? 'Paint over it' : 'Paint faces') + ' · right-drag turns it · scroll zooms';
   function markModel(v, ink) {
-    const meshes = [], overlays = new Map(), V = new THREE.Vector3(), M = new THREE.Matrix4();
-    let ready = false, painting = false, dirty = new Set(), raf = 0, poseKey = null;
+    const meshes = [], byKey = {}, overlays = new Map(), drags = [], V = new THREE.Vector3(), M = new THREE.Matrix4(), ray = new THREE.Raycaster(), tri = new THREE.Triangle();
+    const fine = paintsFine();
+    let ready = false, painting = false, dirty = new Set(), raf = 0, poseKey = null, stale = false, total = 0, drag = null, fullSaid = false;
     const brush = h('div', { class: 'brush', hidden: true });
     const scrub = h('div', { class: 'grp scrub', hidden: true });
     const r3 = (x) => Math.round(x * 1000) / 1000;
     function start() {
       let key = 0;
+      v.model.updateMatrixWorld(true);
       v.model.traverse((n) => {
         if (!n.isMesh || n.userData.mark || !n.geometry || !n.geometry.attributes.position) return;
         const k = String(key++), g = n.geometry, pos = g.attributes.position, idx = g.index;
         const count = idx ? idx.count / 3 : pos.count / 3;
         const mats = Array.isArray(n.material) ? n.material : [n.material];
-        meshes.push({ key: k, mesh: n, count, vi: (f, j) => (idx ? idx.getX(3 * f + j) : 3 * f + j),
+        const m = { key: k, mesh: n, count, vi: (f, j) => (idx ? idx.getX(3 * f + j) : 3 * f + j),
           PW: new Float32Array(pos.count * 3), C: new Float32Array(count * 3), N: new Float32Array(count * 3), A: new Float32Array(count),
-          both: mats.some((m) => m && m.side === THREE.DoubleSide), name: n.name || (n.parent && n.parent.name) || 'mesh ' + k });
-        ink.meshes[k] = meshes[meshes.length - 1].name;
+          both: mats.some((x) => x && x.side === THREE.DoubleSide), name: n.name || (n.parent && n.parent.name) || 'mesh ' + k,
+          // for the strokes: the mesh as the file has it, unposed (its points, the way each faces, its faces), and what the layer draws
+          sk: !!n.isSkinnedMesh, P0: new Float32Array(pos.count * 3), NB: new Float32Array(pos.count * 3), ix: new Uint32Array(Math.floor(count) * 3), flag: new Uint8Array(Math.floor(count)),
+          flip: 1, box: new THREE.Box3(), n: 0, was: 0, fill: 0, rmin: Infinity, data: null, tex: null, over: null, oi: null, group: null };
+        for (let i = 0; i < pos.count; i++) { m.P0[3 * i] = pos.getX(i); m.P0[3 * i + 1] = pos.getY(i); m.P0[3 * i + 2] = pos.getZ(i); }
+        for (let i = 0; i < m.ix.length; i++) m.ix[i] = idx ? idx.getX(i) : i;
+        sides(m, g.attributes.normal);
+        meshes.push(m); byKey[k] = m;
+        ink.meshes[k] = m.name;
         if (!ink.faces[k]) ink.faces[k] = new Map();
         dirty.add(k);
       });
-      ready = true; buildScrub(); rebuild(); measure();
+      // the primitives of one glTF mesh are separate meshes in one space: paint laid on one goes on them all, so a seam between two materials does not cut it
+      const same = (a, b) => a.elements.every((x, i) => Math.abs(x - b.elements[i]) < 1e-6);
+      for (const m of meshes) m.group = meshes.filter((o) => o.mesh.parent === m.mesh.parent && o.sk === m.sk && (!m.sk || o.mesh.skeleton === m.mesh.skeleton) && same(o.mesh.matrixWorld, m.mesh.matrixWorld));
+      const destroy = v.destroy;
+      v.destroy = () => {  // the view drops the geometry; the layers' textures and materials are dropped here
+        for (const m of meshes) { if (m.tex) m.tex.dispose(); if (m.over) m.over.material.dispose(); }
+        for (const o of overlays.values()) o.material.dispose();
+        destroy();
+      };
+      ready = true; buildScrub(); lay(true); rebuild(); measure();
+    }
+    // the way the surface faces at each point of a mesh, unposed: the file's own normals, or worked out from the faces when it has none
+    function sides(m, na) {
+      const N = m.NB, P = m.P0;
+      if (na) { for (let i = 0; 3 * i < N.length && i < na.count; i++) { N[3 * i] = na.getX(i); N[3 * i + 1] = na.getY(i); N[3 * i + 2] = na.getZ(i); } return; }
+      for (let f = 0; 3 * f < m.ix.length; f++) {
+        const a = 3 * m.ix[3 * f], b = 3 * m.ix[3 * f + 1], c = 3 * m.ix[3 * f + 2];
+        const ux = P[b] - P[a], uy = P[b + 1] - P[a + 1], uz = P[b + 2] - P[a + 2], wx = P[c] - P[a], wy = P[c + 1] - P[a + 1], wz = P[c + 2] - P[a + 2];
+        const x = uy * wz - uz * wy, y = uz * wx - ux * wz, z = ux * wy - uy * wx;
+        for (const i of [a, b, c]) { N[i] += x; N[i + 1] += y; N[i + 2] += z; }
+      }
+      for (let i = 0; i < N.length; i += 3) { const l = Math.hypot(N[i], N[i + 1], N[i + 2]) || 1; N[i] /= l; N[i + 1] /= l; N[i + 2] /= l; }
     }
     const moving = () => !!(v.action && v.clips.length);
     // every face where it stands now, in the scene's space: a moving mesh is posed again for each new moment
@@ -731,9 +806,10 @@
       const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), e1 = new THREE.Vector3(), e2 = new THREE.Vector3();
       for (const m of meshes) {
         const pos = m.mesh.geometry.attributes.position, mw = m.mesh.matrixWorld;
+        m.flip = mw.determinant() < 0 ? -1 : 1; m.box.makeEmpty();
         for (let i = 0; i < pos.count; i++) {
           V.fromBufferAttribute(pos, i); if (m.mesh.isSkinnedMesh) m.mesh.boneTransform(i, V); V.applyMatrix4(mw);
-          m.PW[3 * i] = V.x; m.PW[3 * i + 1] = V.y; m.PW[3 * i + 2] = V.z;
+          m.PW[3 * i] = V.x; m.PW[3 * i + 1] = V.y; m.PW[3 * i + 2] = V.z; m.box.expandByPoint(V);
         }
         for (let f = 0; f < m.count; f++) {
           a.fromArray(m.PW, 3 * m.vi(f, 0)); b.fromArray(m.PW, 3 * m.vi(f, 1)); c.fromArray(m.PW, 3 * m.vi(f, 2));
@@ -751,15 +827,112 @@
       if (v.action) { v.action.time = Math.min(mo.t, v.action.getClip().duration); v.mixer.update(0); }
       v.dirty = true; syncScrub();
     }
-    function at(mo, fn) {  // do fn with the model in the pose of moment mo, then put it back
-      const was = now(), playing = v.playing;
+    function at(mo, fn) {  // do fn with the model in the pose of moment mo (with none: at rest), then put it back
+      const was = now(), playing = v.playing, rest = !mo && was && !v.fixed;
       if (mo) { v.set({ playing: false }); show(mo); }
-      try { return fn(); } finally { if (mo && was) { show(was); v.set({ playing }); } else if (mo && !was && v.action) v.set({ clip: '' }); poseKey = null; }
+      else if (rest) { v.set({ clip: '' }); poseKey = null; }
+      try { return fn(); } finally { if ((mo || rest) && was) { show(was); v.set({ playing }); } else if (mo && !was && v.action) v.set({ clip: '' }); poseKey = null; }
     }
-    // one see-through mesh per colour over each mesh, holding only the faces painted that colour; on a skinned
-    // mesh it is skinned too, so the marks move with the motion
+    // where a stroke point sits in the layer's texture: row 0 its place and size, row 1 the way it faced and its colour, row 2 the balls
+    const off = (i, row) => (((i >> 10) * 3 + row) * PAINT_W + (i & (PAINT_W - 1))) * 4;
+    // the strokes set out for the layer, mesh by mesh: every point with its size, the way it faced and its colour, in
+    // the order painted; then a ball round each sixteen of them, and the faces near a ball, which are all the layer draws
+    function lay(full) {
+      stale = false; total = 0;
+      for (const m of meshes) { m.was = full ? 0 : m.n; m.n = 0; m.fill = 0; m.rmin = Infinity; }
+      const known = (s) => byKey[s.m] && s.p && (s.c === 'erase' || MARK_HEX[s.c]);
+      for (const s of ink.strokes) if (known(s)) { total += s.p.length / 6; for (const m of byKey[s.m].group) m.n += s.p.length / 6; }
+      for (const m of meshes) {
+        const size = 3 * Math.max(1, Math.ceil(m.n / PAINT_W)) * PAINT_W * 4;
+        if (m.n && (!m.data || m.data.length !== size)) { m.data = new Float32Array(size); m.was = 0; if (m.tex) m.tex.dispose(); m.tex = null; }
+      }
+      for (const s of ink.strokes) {
+        if (!known(s)) continue;
+        const code = s.c === 'erase' ? 0 : 1 + MARK.findIndex(([c]) => c === s.c);
+        for (const m of byKey[s.m].group) {
+          m.rmin = Math.min(m.rmin, s.r);
+          for (let i = 0; i < s.p.length; i += 6) {
+            const d = m.data, a = off(m.fill, 0), b = off(m.fill, 1); m.fill++;
+            d[a] = s.p[i]; d[a + 1] = s.p[i + 1]; d[a + 2] = s.p[i + 2]; d[a + 3] = s.r;
+            d[b] = s.p[i + 3]; d[b + 1] = s.p[i + 4]; d[b + 2] = s.p[i + 5]; d[b + 3] = code + (i ? 8 : 0);  // 8: it joins the point before it
+          }
+        }
+      }
+      for (const m of meshes) {
+        if (!m.n) { if (m.over) m.over.visible = false; m.flag.fill(0); continue; }
+        const d = m.data, P = m.P0, ix = m.ix;
+        let grew = full;
+        if (full) m.flag.fill(0);
+        for (let k = Math.max(0, m.was - 1) >> 4; k < (m.n + 15) >> 4; k++) {
+          const lo = k << 4, hi = Math.min(m.n, lo + 16);
+          let x0 = Infinity, y0 = Infinity, z0 = Infinity, x1 = -Infinity, y1 = -Infinity, z1 = -Infinity, r = 0;
+          for (let i = lo && d[off(lo, 1) + 3] >= 8 ? lo - 1 : lo; i < hi; i++) {
+            const a = off(i, 0);
+            x0 = Math.min(x0, d[a]); y0 = Math.min(y0, d[a + 1]); z0 = Math.min(z0, d[a + 2]); x1 = Math.max(x1, d[a]); y1 = Math.max(y1, d[a + 1]); z1 = Math.max(z1, d[a + 2]); r = Math.max(r, d[a + 3]);
+          }
+          const c = off(k, 2), bx = d[c] = (x0 + x1) / 2, by = d[c + 1] = (y0 + y1) / 2, bz = d[c + 2] = (z0 + z1) / 2, R = d[c + 3] = Math.hypot(x1 - x0, y1 - y0, z1 - z0) / 2 + r;
+          for (let f = 0; f < m.flag.length; f++) {
+            if (m.flag[f]) continue;
+            const a = 3 * ix[3 * f], b = 3 * ix[3 * f + 1], e = 3 * ix[3 * f + 2];
+            const dx = Math.max(Math.min(P[a], P[b], P[e]) - bx, 0, bx - Math.max(P[a], P[b], P[e]));
+            const dy = Math.max(Math.min(P[a + 1], P[b + 1], P[e + 1]) - by, 0, by - Math.max(P[a + 1], P[b + 1], P[e + 1]));
+            const dz = Math.max(Math.min(P[a + 2], P[b + 2], P[e + 2]) - bz, 0, bz - Math.max(P[a + 2], P[b + 2], P[e + 2]));
+            if (dx * dx + dy * dy + dz * dz <= R * R) { m.flag[f] = 1; grew = true; }
+          }
+        }
+        if (!fine) continue;
+        if (!m.over) m.over = overlay(m);
+        if (grew) {
+          const o = m.oi.array; let j = 0;
+          for (let f = 0; f < m.flag.length; f++) if (m.flag[f]) { o[j++] = ix[3 * f]; o[j++] = ix[3 * f + 1]; o[j++] = ix[3 * f + 2]; }
+          m.oi.needsUpdate = true; m.over.geometry.setDrawRange(0, j);
+        }
+        if (!m.tex) m.tex = m.over.material.uniforms.pts.value = new THREE.DataTexture(d, PAINT_W, d.length / (PAINT_W * 4), THREE.RGBAFormat, THREE.FloatType);
+        m.tex.needsUpdate = true; m.over.material.uniforms.count.value = m.n; m.over.visible = true;
+      }
+      v.dirty = true;
+    }
+    // the layer over one mesh: the mesh's own points drawn again by a shader that colours only what the strokes cover.
+    // On a skinned mesh it is skinned too, and the paint is looked up where the point was before posing, so it moves with the body
+    function overlay(m) {
+      const g = new THREE.BufferGeometry(), src = m.mesh.geometry;
+      g.setAttribute('position', src.attributes.position);
+      g.setAttribute('normal', src.attributes.normal || new THREE.BufferAttribute(m.NB, 3));
+      if (m.sk) { g.setAttribute('skinIndex', src.attributes.skinIndex); g.setAttribute('skinWeight', src.attributes.skinWeight); }
+      m.oi = new THREE.BufferAttribute(new Uint32Array(m.ix.length), 1); m.oi.setUsage(THREE.DynamicDrawUsage); g.setIndex(m.oi);
+      const mat = new THREE.ShaderMaterial({ uniforms: { pts: { value: null }, count: { value: 0 }, opacity: { value: 0.62 } }, vertexShader: PAINT_VS, fragmentShader: PAINT_FS,
+        transparent: true, depthWrite: false, side: m.both ? THREE.DoubleSide : THREE.FrontSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+      const o = m.sk ? new THREE.SkinnedMesh(g, mat) : new THREE.Mesh(g, mat);
+      if (m.sk) o.bind(m.mesh.skeleton, m.mesh.bindMatrix);
+      o.userData.mark = true; o.frustumCulled = false; o.renderOrder = 3; o.raycast = () => {};
+      m.mesh.add(o);
+      return o;
+    }
+    // what shows at a point of a mesh that faces a given way: a colour's number, 0 where it is rubbed out, -1 where nothing was painted. The shader's rule, worked here
+    function top(m, x, y, z, nx, ny, nz) {
+      const d = m.data;
+      for (let k = ((m.n + 15) >> 4) - 1; k >= 0; k--) {
+        const c = off(k, 2);
+        if ((x - d[c]) * (x - d[c]) + (y - d[c + 1]) * (y - d[c + 1]) + (z - d[c + 2]) * (z - d[c + 2]) > d[c + 3] * d[c + 3]) continue;
+        for (let i = Math.min(m.n, (k + 1) << 4) - 1; i >= k << 4; i--) {
+          const a = off(i, 0), b = off(i, 1), code = d[b + 3];
+          let px = d[a], py = d[a + 1], pz = d[a + 2], side = nx * d[b] + ny * d[b + 1] + nz * d[b + 2];
+          if (code >= 8) {
+            const a0 = off(i - 1, 0), b0 = off(i - 1, 1), ex = px - d[a0], ey = py - d[a0 + 1], ez = pz - d[a0 + 2];
+            const t = Math.min(1, Math.max(0, ((x - d[a0]) * ex + (y - d[a0 + 1]) * ey + (z - d[a0 + 2]) * ez) / (ex * ex + ey * ey + ez * ez || 1e-12)));
+            px = d[a0] + ex * t; py = d[a0 + 1] + ey * t; pz = d[a0 + 2] + ez * t;
+            side = Math.max(side, nx * d[b0] + ny * d[b0 + 1] + nz * d[b0 + 2]);
+          }
+          if (side > 0.2 && (x - px) * (x - px) + (y - py) * (y - py) + (z - pz) * (z - pz) < d[a + 3] * d[a + 3]) return code & 7;
+        }
+      }
+      return -1;
+    }
+    // one see-through mesh per colour over each mesh, holding only the faces painted that colour (marks made before
+    // there were strokes, and all marks without WebGL2); on a skinned mesh it is skinned too, so the marks move with the motion
     function rebuild() {
       raf = 0;
+      if (stale) lay(false);
       for (const k of dirty) {
         const m = meshes.find((x) => x.key === k); if (!m) continue;
         const lists = {};
@@ -786,35 +959,199 @@
       }
       dirty = new Set(); v.dirty = true;
     }
+    // the surface the strokes cover, found by trying points on every face near them, closer together than the smallest
+    // brush used: for each one painted, its mesh, its face, where on the face, its colour and its share of the face
+    function covered() {
+      const out = [];
+      const cuts = (m, f) => {
+        const P = m.P0, a = 3 * m.ix[3 * f], b = 3 * m.ix[3 * f + 1], c = 3 * m.ix[3 * f + 2], edge = (i, j) => Math.hypot(P[i] - P[j], P[i + 1] - P[j + 1], P[i + 2] - P[j + 2]);
+        return Math.min(512, Math.max(1, Math.ceil(1.5 * Math.max(edge(a, b), edge(b, c), edge(c, a)) / m.rmin)));
+      };
+      let want = 0;
+      for (const m of meshes) if (m.n) for (let f = 0; f < m.flag.length; f++) if (m.flag[f]) want += cuts(m, f) ** 2;
+      const less = want > 300000 ? Math.sqrt(300000 / want) : 1;  // a very large face under a very small brush is tried more thinly
+      for (const m of meshes) {
+        if (!m.n) continue;
+        const P = m.P0, N = m.NB;
+        for (let f = 0; f < m.flag.length; f++) {
+          if (!m.flag[f]) continue;
+          const a = 3 * m.ix[3 * f], b = 3 * m.ix[3 * f + 1], c = 3 * m.ix[3 * f + 2], n = Math.max(1, Math.floor(cuts(m, f) * less));
+          for (let i = 0; i < n; i++) for (let j = 0; j < 2 * (n - i) - 1; j++) {  // the face cut into n × n small triangles; the middle of each is tried
+            const t = (j % 2 ? 2 : 1) / 3, u = (i + t) / n, w = ((j >> 1) + t) / n, w0 = 1 - u - w;
+            const x = w0 * P[a] + u * P[b] + w * P[c], y = w0 * P[a + 1] + u * P[b + 1] + w * P[c + 1], z = w0 * P[a + 2] + u * P[b + 2] + w * P[c + 2];
+            let nx = w0 * N[a] + u * N[b] + w * N[c], ny = w0 * N[a + 1] + u * N[b + 1] + w * N[c + 1], nz = w0 * N[a + 2] + u * N[b + 2] + w * N[c + 2];
+            const l = Math.hypot(nx, ny, nz) || 1; nx /= l; ny /= l; nz /= l;
+            let code = top(m, x, y, z, nx, ny, nz);
+            if (code < 1 && m.both) code = top(m, x, y, z, -nx, -ny, -nz);
+            if (code > 0) out.push(m, f, u, w, code, 1 / (n * n));
+          }
+        }
+      }
+      return out;
+    }
+    // the face of these meshes nearest a point in the model's own space, and where on it
+    function locate(group, x, y, z) {
+      const p = new THREE.Vector3(x, y, z), q = new THREE.Vector3(), bary = new THREE.Vector3();
+      let best = null;
+      for (const m of group) for (let f = 0; f < m.flag.length; f++) {
+        if (!m.flag[f]) continue;
+        tri.a.fromArray(m.P0, 3 * m.ix[3 * f]); tri.b.fromArray(m.P0, 3 * m.ix[3 * f + 1]); tri.c.fromArray(m.P0, 3 * m.ix[3 * f + 2]);
+        const d = tri.closestPointToPoint(p, q).distanceToSquared(p);
+        if (!best || d < best.d) { tri.getBarycoord(q, bary); best = { m, f, d, u: bary.y, w: bary.z, stretch: m.A[f] / (tri.getArea() || 1) }; }
+      }
+      return best;
+    }
     // where each colour sits, measured in the pose it was painted in: Y is up, the model's front faces +Z
     function measure() {
       ink.where = {};
-      const used = new Set();
+      const used = new Set(), cover = covered();
       for (const m of meshes) for (const c of ink.faces[m.key].values()) used.add(c);
+      for (const st of ink.strokes) if (st.c !== 'erase' && MARK_HEX[st.c] && byKey[st.m]) used.add(st.c);
       for (const c of used) at(ink.moments[c], () => {
         pose();
-        const box = v.box, size = box.getSize(new THREE.Vector3());
-        const s = { n: 0, area: 0, total: 0, sum: new THREE.Vector3(), box: new THREE.Box3(), names: new Set() };
+        const box = v.box, size = box.getSize(new THREE.Vector3()), code = 1 + MARK.findIndex(([x]) => x === c);
+        const s = { area: 0, total: 0, sum: new THREE.Vector3(), box: new THREE.Box3(), names: new Set() };
+        const add = (m, a, pad) => { s.area += a; s.sum.addScaledVector(V, a || 1e-9); s.box.expandByPoint(V); s.names.add(m.name); if (pad) { s.box.expandByPoint(V.addScalar(pad)); s.box.expandByPoint(V.addScalar(-2 * pad)); } };
+        // a point of a face as it stands now, from where it is on the face
+        const spot = (m, f, u, w) => { const W = m.PW, a = 3 * m.ix[3 * f], b = 3 * m.ix[3 * f + 1], e = 3 * m.ix[3 * f + 2], w0 = 1 - u - w; return V.set(w0 * W[a] + u * W[b] + w * W[e], w0 * W[a + 1] + u * W[b + 1] + w * W[e + 1], w0 * W[a + 2] + u * W[b + 2] + w * W[e + 2]); };
         for (const m of meshes) {
           for (let f = 0; f < m.count; f++) s.total += m.A[f];
-          for (const [f, col] of ink.faces[m.key]) {
-            if (col !== c) continue;
-            V.fromArray(m.C, 3 * f); s.n++; s.area += m.A[f]; s.sum.addScaledVector(V, m.A[f] || 1e-9); s.box.expandByPoint(V); s.names.add(m.name);
+          for (const [f, col] of ink.faces[m.key]) if (col === c) { V.fromArray(m.C, 3 * f); add(m, m.A[f]); }  // marks made by faces count too
+        }
+        for (let i = 0; i < cover.length; i += 6) if (cover[i + 4] === code) { spot(cover[i], cover[i + 1], cover[i + 2], cover[i + 3]); add(cover[i], cover[i].A[cover[i + 1]] * cover[i + 5]); }
+        // a dab too small for the points tried, on a very large face: measured from the stroke's own points, where they still show
+        if (!s.names.size) for (const st of ink.strokes) {
+          const home = byKey[st.m]; if (st.c !== c || !home || !st.p) continue;
+          for (let i = 0; i < st.p.length; i += 6) {
+            if (top(home, st.p[i], st.p[i + 1], st.p[i + 2], st.p[i + 3], st.p[i + 4], st.p[i + 5]) !== code) continue;
+            const on = locate(home.group, st.p[i], st.p[i + 1], st.p[i + 2]); if (!on) continue;
+            spot(on.m, on.f, on.u, on.w); add(on.m, Math.PI * st.r * st.r * on.stretch, st.r * Math.sqrt(on.stretch));
           }
         }
+        if (!s.names.size) { ink.where[c] = ''; return; }  // every stroke of it is rubbed out or painted over
         const mid = s.sum.divideScalar(s.area || 1e-9), span = s.box.getSize(new THREE.Vector3()), f2 = (x) => x.toFixed(2);
         const fx = size.x ? (mid.x - box.min.x) / size.x : 0.5, fy = size.y ? (mid.y - box.min.y) / size.y : 0.5, fz = size.z ? (mid.z - box.min.z) / size.z : 0.5;
         const place = [thirds(fy, ['low', 'at mid height', 'high']), thirds(fz, ['toward the back', '', 'toward the front']),
           thirds(fx, ['on the left as seen from the front', 'centred left to right', 'on the right as seen from the front'])].filter(Boolean).join(', ');
         const mo = ink.moments[c];
         ink.where[c] = (mo ? 'in the motion "' + mo.clip + '" at ' + mo.t.toFixed(2) + ' s of ' + mo.length.toFixed(2) + ' s (' + Math.round(100 * mo.t / (mo.length || 1)) + '% through); ' : '') +
-          s.n + ' face' + (s.n === 1 ? '' : 's') + ' on ' + [...s.names].map((x) => '"' + x + '"').join(', ') + '; ' + place +
+          'on ' + [...s.names].map((x) => '"' + x + '"').join(', ') + '; ' + place +
           '; centre at (' + f2(mid.x) + ', ' + f2(mid.y) + ', ' + f2(mid.z) + ') m in the model\'s space (Y up, its front faces +Z)' + (mo ? ', in that pose' : '') +
           '; spans ' + f2(span.x) + ' × ' + f2(span.y) + ' × ' + f2(span.z) + ' m; ' + pct(s.area / (s.total || 1)) + ' of its surface';
       });
     }
-    // the faces under the brush: the nearest face under it sets the depth, and only faces that face you count
-    function brushAt(e) {
+    // a colour painted on a moving model keeps the moment of its last stroke; the one before is kept for Undo
+    function moment() {
+      if (ink.erase) return;
+      const mo = now();
+      if (!drag.mo) drag.mo = [ink.colour, ink.moments[ink.colour]];
+      if (mo) ink.moments[ink.colour] = mo; else delete ink.moments[ink.colour];
+    }
+    // what is under a point on the screen: the nearest face the line of sight meets as the model stands now, and where on it
+    function cast(x, y, r) {
+      ray.setFromCamera(V.set((x - r.left) / r.width * 2 - 1, 1 - (y - r.top) / r.height * 2, 0), v.cam);
+      const o = ray.ray.origin, d = ray.ray.direction;
+      let best = null;
+      for (const m of meshes) {
+        const P = m.PW, ix = m.ix;
+        for (let f = 0; f < m.flag.length; f++) {
+          const a = 3 * ix[3 * f], b = 3 * ix[3 * f + 1], c = 3 * ix[3 * f + 2];
+          const ux = P[b] - P[a], uy = P[b + 1] - P[a + 1], uz = P[b + 2] - P[a + 2], wx = P[c] - P[a], wy = P[c + 1] - P[a + 1], wz = P[c + 2] - P[a + 2];
+          const px = d.y * wz - d.z * wy, py = d.z * wx - d.x * wz, pz = d.x * wy - d.y * wx, det = ux * px + uy * py + uz * pz;
+          if (!det || (!m.both && det * m.flip < 0)) continue;  // a face seen from behind is not there to paint
+          const tx = o.x - P[a], ty = o.y - P[a + 1], tz = o.z - P[a + 2], u = (tx * px + ty * py + tz * pz) / det;
+          if (u < 0 || u > 1) continue;
+          const qx = ty * uz - tz * uy, qy = tz * ux - tx * uz, qz = tx * uy - ty * ux, w = (d.x * qx + d.y * qy + d.z * qz) / det;
+          if (w < 0 || u + w > 1) continue;
+          const t = (wx * qx + wy * qy + wz * qz) / det;
+          if (t > 0 && (!best || t < best.t)) best = { m, f, u, w, t, back: det * m.flip < 0 };
+        }
+      }
+      return best;
+    }
+    // one touch of the brush where the line of sight meets the model. The mesh it lands on takes the paint, and so does
+    // any other mesh the brush reaches there, so a figure built of separate parts is not cut at each part's edge
+    function dab(x, y, r, rad) {
+      const hit = cast(x, y, r);
+      if (!hit) { drag.recs.clear(); return; }
+      const depth = hit.t * ray.ray.direction.dot(v.cam.getWorldDirection(V)), size = rad * 2 * depth * Math.tan(THREE.MathUtils.degToRad(v.cam.fov) / 2) / (r.height || 1);
+      const here = ray.ray.at(hit.t, new THREE.Vector3()), eye = ray.ray.origin, q = new THREE.Vector3(), bary = new THREE.Vector3(), done = new Set([hit.m.group[0]]);
+      put(hit.m, hit.f, hit.u, hit.w, size, hit.back);
+      for (const m of meshes) {
+        const home = m.group[0];
+        if (done.has(home) || m !== home) continue;
+        let best = null;
+        for (const o of m.group) {
+          if (o.box.distanceToPoint(here) > size) continue;
+          for (let f = 0; f < o.flag.length; f++) {
+            const side = o.flip * (o.N[3 * f] * (eye.x - o.C[3 * f]) + o.N[3 * f + 1] * (eye.y - o.C[3 * f + 1]) + o.N[3 * f + 2] * (eye.z - o.C[3 * f + 2]));
+            if (!o.both && side <= 0) continue;  // it faces away
+            if (Math.abs(o.N[3 * f] * (here.x - o.C[3 * f]) + o.N[3 * f + 1] * (here.y - o.C[3 * f + 1]) + o.N[3 * f + 2] * (here.z - o.C[3 * f + 2])) > size) continue;
+            tri.a.fromArray(o.PW, 3 * o.ix[3 * f]); tri.b.fromArray(o.PW, 3 * o.ix[3 * f + 1]); tri.c.fromArray(o.PW, 3 * o.ix[3 * f + 2]);
+            const d = tri.closestPointToPoint(here, q).distanceTo(here);
+            if (d < 0.95 * size && (!best || d < best.d)) { tri.getBarycoord(q, bary); best = { o, f, d, u: bary.y, w: bary.z, back: side < 0 }; }  // a mesh the brush only grazes is left alone
+          }
+        }
+        if (best) { done.add(home); put(best.o, best.f, best.u, best.w, Math.sqrt(size * size - best.d * best.d), best.back); }
+      }
+      for (const home of [...drag.recs.keys()]) if (!done.has(home)) drag.recs.delete(home);  // the brush has left that mesh: its stroke ends there
+    }
+    // a point of a stroke on one mesh: on a face, at a place on it, with the brush's size in the scene. It is kept in
+    // the mesh's own space, unposed, with the way the surface faces there
+    function put(m, f, u, w, size, back) {
+      const home = m.group[0], P = m.P0, N = m.NB, a = 3 * m.ix[3 * f], b = 3 * m.ix[3 * f + 1], c = 3 * m.ix[3 * f + 2], w0 = 1 - u - w;
+      const mix = (A, i) => w0 * A[a + i] + u * A[b + i] + w * A[c + i];
+      const area = (A) => { const ux = A[b] - A[a], uy = A[b + 1] - A[a + 1], uz = A[b + 2] - A[a + 2], wx = A[c] - A[a], wy = A[c + 1] - A[a + 1], wz = A[c + 2] - A[a + 2]; return Math.hypot(uy * wz - uz * wy, uz * wx - ux * wz, ux * wy - uy * wx) / 2; };
+      // the brush's size in the mesh's own units: a posed or scaled mesh is measured by how far the face has stretched
+      const flat = area(P), posed = area(m.PW);
+      if (flat > 0 && posed > 0) size *= Math.sqrt(flat / posed);
+      if (!(size > 0)) return;
+      let nx = mix(N, 0), ny = mix(N, 1), nz = mix(N, 2);
+      const l = Math.hypot(nx, ny, nz) * (back ? -1 : 1) || 1; nx /= l; ny /= l; nz /= l;
+      const full = () => { if (!fullSaid) toast('This model holds no more paint. Undo or Clear all to make room.'); fullSaid = true; drag.recs.delete(home); };
+      let rec = drag.recs.get(home), carry = null;
+      if (rec) {
+        const q = rec.p, n = q.length;
+        if (Math.hypot(mix(P, 0) - q[n - 6], mix(P, 1) - q[n - 5], mix(P, 2) - q[n - 4]) > 3 * Math.max(rec.r, size)) rec = null;  // a jump across a gap: a new stroke
+        else if (Math.abs(size - rec.r) > 0.2 * rec.r) { carry = q.slice(n - 6); rec = null; }  // nearer or further, so the brush is another size there
+      }
+      if (!rec) {
+        if (total >= MODEL_POINTS) { full(); return; }
+        rec = { c: ink.erase ? 'erase' : ink.colour, r: +size.toPrecision(3), m: home.key, p: carry || [] };
+        if (drag.n++) rec.j = 1;  // more of the same drag: Undo takes it all
+        drag.recs.set(home, rec); ink.strokes.push(rec); total += rec.p.length / 6;
+      }
+      const q = rec.p, n = q.length, k = Math.pow(10, Math.min(7, Math.max(0, 2 - Math.floor(Math.log10(rec.r))))), r2 = (z) => Math.round(z * 100) / 100;
+      const pt = [Math.round(mix(P, 0) * k) / k, Math.round(mix(P, 1) * k) / k, Math.round(mix(P, 2) * k) / k, r2(nx), r2(ny), r2(nz)];
+      // points closer than about half the brush's width are thinned: the last one goes on with the brush until it is far
+      // enough from the one before. When the brush turns back the last point stays, so paint already laid is not pulled away
+      const gap = (i) => Math.hypot(pt[0] - q[i], pt[1] - q[i + 1], pt[2] - q[i + 2]);
+      const reach = n >= 12 ? Math.hypot(q[n - 6] - q[n - 12], q[n - 5] - q[n - 11], q[n - 4] - q[n - 10]) : Infinity;
+      if (reach < 0.8 * rec.r && gap(n - 12) >= reach) q.splice(n - 6, 6, ...pt);
+      else if (n && gap(n - 6) < (reach < 0.8 * rec.r ? rec.r / 4 : rec.r / 20)) { /* it has hardly moved: nothing new */ }
+      else { if (total >= MODEL_POINTS) { full(); return; } q.push(...pt); total++; }
+      // rubbing out takes marks made by faces too: the face under the brush, and any whose middle is inside it
+      if (ink.erase) for (const o of home.group) {
+        for (const [g, col] of ink.faces[o.key]) {
+          const i0 = 3 * o.ix[3 * g], i1 = 3 * o.ix[3 * g + 1], i2 = 3 * o.ix[3 * g + 2], Q = o.P0;
+          if (!(o === m && g === f) && Math.hypot((Q[i0] + Q[i1] + Q[i2]) / 3 - pt[0], (Q[i0 + 1] + Q[i1 + 1] + Q[i2 + 1]) / 3 - pt[1], (Q[i0 + 2] + Q[i1 + 2] + Q[i2 + 2]) / 3 - pt[2]) > rec.r) continue;
+          ink.faces[o.key].delete(g); drag.faces.push([o.key, g, col]); dirty.add(o.key);
+        }
+      }
+    }
+    // the brush over the texture: where it passes is laid as a stroke, tried often enough that a quick hand leaves no gaps
+    function strokeAt(e) {
+      pose(); v.cam.updateMatrixWorld();
+      const r = v.canvas.getBoundingClientRect(), rad = BRUSH[ink.size] * (r.width / (v.canvas.clientWidth || r.width));
+      const to = [e.clientX, e.clientY], from = drag.last || to, steps = Math.min(32, Math.max(1, Math.ceil(Math.hypot(to[0] - from[0], to[1] - from[1]) / (rad / 2))));
+      for (let i = 1; i <= steps; i++) dab(from[0] + (to[0] - from[0]) * i / steps, from[1] + (to[1] - from[1]) * i / steps, r, rad);
+      drag.last = to;
+      if (drag.n) moment();
+      stale = true;
+      if (!raf) raf = requestAnimationFrame(rebuild);
+    }
+    // without WebGL2, the faces under the brush: the nearest face under it sets the depth, and only faces that face you count
+    function facesAt(e) {
       pose();
       const r = v.canvas.getBoundingClientRect(), px = e.clientX - r.left, py = e.clientY - r.top, rad = BRUSH[ink.size] * (r.width / (v.canvas.clientWidth || r.width));
       M.multiplyMatrices(v.cam.projectionMatrix, v.cam.matrixWorldInverse);
@@ -833,16 +1170,18 @@
       }
       if (!near) return;
       const R = rad * 2 * near[2] * Math.tan(THREE.MathUtils.degToRad(v.cam.fov) / 2) / (r.height || 1);
-      const nx = near[0].C[3 * near[1]], ny = near[0].C[3 * near[1] + 1], nz = near[0].C[3 * near[1] + 2], mo = now();
+      const nx = near[0].C[3 * near[1]], ny = near[0].C[3 * near[1] + 1], nz = near[0].C[3 * near[1] + 2];
       for (const [m, f] of hits) {
         if (Math.hypot(m.C[3 * f] - nx, m.C[3 * f + 1] - ny, m.C[3 * f + 2] - nz) > Math.max(R, 1e-6)) continue;  // behind what you are painting
-        const map = ink.faces[m.key];
-        if (ink.erase) { if (map.delete(f)) dirty.add(m.key); }
-        else if (map.get(f) !== ink.colour) { map.set(f, ink.colour); dirty.add(m.key); }
+        const map = ink.faces[m.key], was = map.get(f);
+        if (ink.erase ? !was : was === ink.colour) continue;
+        drag.faces.push([m.key, f, was]); dirty.add(m.key);
+        if (ink.erase) map.delete(f); else map.set(f, ink.colour);
       }
-      if (!ink.erase) { if (mo) ink.moments[ink.colour] = mo; else delete ink.moments[ink.colour]; }
+      moment();
       if (dirty.size && !raf) raf = requestAnimationFrame(rebuild);
     }
+    const brushAt = (e) => (fine ? strokeAt(e) : facesAt(e));
     // the bar under the tools for a model that moves: which motion, play or hold, and the frame
     let rng = null, label = null, pick = null, play = null;
     function buildScrub() {
@@ -857,7 +1196,7 @@
       rng = h('input', { type: 'range', min: 0, max: 1, step: 0.001, value: 0, 'aria-label': 'Moment in the motion', oninput: () => {
         if (!v.action) return; v.set({ playing: false }); v.action.time = +rng.value * v.action.getClip().duration; v.mixer.update(0); v.dirty = true; syncScrub(); } });
       label = h('span', { class: 'mono t' });
-      scrub.replaceChildren(h('span', { class: 'hint' }, 'Motion'), pick, play, step(-1), rng, step(1), label);
+      scrub.replaceChildren(...[h('span', { class: 'hint' }, 'Motion'), pick, play, step(-1), rng, step(1), label].filter(Boolean));  // a motion candidate has no picker
       scrub.hidden = false; syncScrub();
       (function tick() { if (!scrub.isConnected && ready && tickN++ > 50) return; if (v.playing) syncScrub(); requestAnimationFrame(tick); })();
     }
@@ -877,14 +1216,21 @@
       if (!ink.on || !ready || e.button !== 0 || painting) return;
       e.stopImmediatePropagation(); e.preventDefault();
       if (moving() && v.playing) { v.set({ playing: false }); syncScrub(); }  // a moving model is marked on a held frame
-      v.canvas.setPointerCapture(e.pointerId); painting = e.pointerId; v.moved = true; brushAt(e);
+      v.canvas.setPointerCapture(e.pointerId); painting = e.pointerId; v.moved = true;
+      drag = { n: 0, faces: [], recs: new Map(), last: null, mo: null };  // what this drag lays or takes away, so Undo can put it back
+      brushAt(e);
     };
     const move = (e) => {
       if (ink.on) hover(e);
       if (e.pointerId !== painting) return;
       e.stopImmediatePropagation(); brushAt(e);
     };
-    const up = (e) => { if (e.pointerId !== painting) return; painting = false; e.stopImmediatePropagation(); if (dirty.size) rebuild(); measure(); ink.changed('marks'); };
+    const up = (e) => {
+      if (e.pointerId !== painting) return;
+      painting = false; e.stopImmediatePropagation();
+      if (drag && (drag.n || drag.faces.length)) drags.push(drag);
+      drag = null; rebuild(); measure(); ink.changed('marks');
+    };
     function hover(e) {
       const host = v.canvas.parentElement; if (!host) return;
       if (!brush.isConnected) { host.style.position = host.style.position || 'relative'; host.append(brush); }
@@ -915,8 +1261,23 @@
     }
     return {
       scrub,
-      undo() {},
-      clear() { for (const m of meshes) { ink.faces[m.key].clear(); dirty.add(m.key); } ink.moments = {}; rebuild(); measure(); ink.changed('marks'); },
+      // the last drag of the brush is taken back: what it laid, what it rubbed out, and the moment its colour had before
+      undo() {
+        if (!ready || painting) return;
+        const d = drags.pop();
+        if (d) {
+          ink.strokes.splice(ink.strokes.length - d.n, d.n);
+          for (const [key, f, c] of d.faces.reverse()) { if (c) ink.faces[key].set(f, c); else ink.faces[key].delete(f); dirty.add(key); }
+          if (d.mo) { if (d.mo[1]) ink.moments[d.mo[0]] = d.mo[1]; else delete ink.moments[d.mo[0]]; }
+        } else if (ink.strokes.length) { while (ink.strokes.pop().j && ink.strokes.length); }  // paint from an earlier sitting: its last stroke goes
+        else return;
+        lay(true); rebuild(); measure(); ink.changed('marks');
+      },
+      clear() {
+        for (const m of meshes) { ink.faces[m.key].clear(); dirty.add(m.key); }
+        ink.strokes = []; ink.moments = {}; drags.length = 0; fullSaid = false;
+        lay(true); rebuild(); measure(); ink.changed('marks');
+      },
       mode(on) {
         v.canvas.classList.toggle('pen', on); if (!on) brush.hidden = true;
         v.controls.mouseButtons.RIGHT = on ? THREE.MOUSE.ROTATE : THREE.MOUSE.PAN;
@@ -925,6 +1286,7 @@
       goto(mo) { if (!mo) return; v.set({ playing: false }); show(mo); poseKey = null; },
       async picture() {
         if (!ready) return null;
+        rebuild();  // the paint is all on the model before it is drawn
         const rows = shots(), T = rows[0].cols === 3 ? 400 : 300, band = rows[0].label ? 30 : 0;
         const perRow = rows[0].cols === 3 ? 2 : 1, H = rows.length * perRow * T + rows.length * band;
         const r = v.renderer, out = h('canvas', { width: T * rows[0].cols, height: H }), ctx = out.getContext('2d');
@@ -985,7 +1347,7 @@
     const sizes = ['S', 'M', 'L'].map((label, i) => h('button', { class: 'btn small', type: 'button', title: ['Small', 'Medium', 'Large'][i] + ' brush', onclick: () => { ink.size = i; draw(); } }, label));
     const pen = h('button', { class: 'btn small', type: 'button', title: 'Paint on it. Right-drag turns or moves it; the wheel zooms.', onclick: () => toggle(!ink.on) }, 'Mark');
     const rub = h('button', { class: 'btn small', type: 'button', onclick: () => { ink.erase = !ink.erase; if (!ink.on) toggle(true); draw(); } }, 'Rub out');
-    const undo = ink.kind === 'image' ? h('button', { class: 'btn small', type: 'button', onclick: () => marker.undo() }, 'Undo') : null;
+    const undo = ink.kind === 'image' || ink.kind === 'model' ? h('button', { class: 'btn small', type: 'button', onclick: () => marker.undo() }, 'Undo') : null;
     const clear = h('button', { class: 'btn small', type: 'button', onclick: () => { if (inkUsed(ink).length) marker.clear(); } }, 'Clear all');
     function toggle(on) { ink.on = on; marker.mode(on); draw(); }
     function draw() {
@@ -3520,7 +3882,7 @@
     });
     S.markFlush = send;
     if (editable()) bar.after(h('div', { class: 'tools overtools' }, markTools(ink, live),
-      h('span', { class: 'hint' }, isModel ? 'Paint faces · right-drag turns it · scroll zooms · a motion holds on its frame while you paint' : 'Paint areas · right-drag moves it · scroll zooms')));
+      h('span', { class: 'hint' }, isModel ? modelHint() + ' · a motion holds on its frame while you paint' : 'Paint areas · right-drag moves it · scroll zooms')));
     return markNotes(ink, editable, (mo) => live().goto && live().goto(mo));
   }
 
@@ -3555,7 +3917,7 @@
     const bar = h('div', { class: 'bar' }, h('h3', {}, 'Mark ' + s.title), h('span', { class: 'hint' }, f.label),
       h('button', { class: 'btn small', type: 'button', onclick: close }, 'Close (Esc)'));
     const el = h('div', { class: 'over marking', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Mark ' + s.title }, bar,
-      h('div', { class: 'tools overtools' }, markTools(ink, () => marker), h('span', { class: 'hint' }, isModel ? 'Paint faces · right-drag turns it · scroll zooms' : 'Paint areas · right-drag moves it · scroll zooms')),
+      h('div', { class: 'tools overtools' }, markTools(ink, () => marker), h('span', { class: 'hint' }, isModel ? modelHint() : 'Paint areas · right-drag moves it · scroll zooms')),
       h('div', { class: 'panes' }, stage),
       h('div', { class: 'side marking' }, h('div', {}, markNotes(ink, () => true, (mo) => marker.goto && marker.goto(mo))), h('div', {}, words, h('div', { class: 'jf' }, send))));
     document.body.append(el); document.body.style.overflow = 'hidden';
