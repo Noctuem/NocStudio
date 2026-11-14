@@ -1466,8 +1466,9 @@
     return pos < 0 ? null : { bar: Math.floor(pos / tempo.beats) + 1, beat: Math.floor(pos % tempo.beats) + 1 };
   }
   const barText = (tempo, t) => { const at = barAt(tempo, t); return at ? 'bar ' + at.bar + ' beat ' + at.beat : 'before bar 1'; };
-  // the bars a mark covers: "bar 2 beat 3 to bar 3 beat 3", or "in bar 2 beat 3" when it starts and ends in one beat
-  const barSpan = (tempo, s) => { const a = barText(tempo, s.t0), b = barText(tempo, s.t1); return !(s.t1 > s.t0) ? a : a === b ? 'in ' + a : a + ' to ' + b; };
+  // the bars a mark covers: "bar 2 beat 3 to bar 3 beat 3", or "in bar 2 beat 3" when it starts and ends in one beat;
+  // a stretch that ends before the first beat is "before bar 1"
+  const barSpan = (tempo, s) => { const a = barText(tempo, s.t0), b = barText(tempo, s.t1); return !(s.t1 > s.t0) ? a : a !== b ? a + ' to ' + b : a.startsWith('bar') ? 'in ' + a : a; };
   const spanWhen = (s) => (s.t1 > s.t0 ? clock(s.t0) + ' to ' + clock(s.t1) + ' (' + (s.t1 - s.t0).toFixed(2) + ' s)' : 'at ' + clock(s.t0));
   const tagWord = (s) => (s.tag === 'keep' ? 'KEEP' : s.tag === 'cut' ? 'CUT' : 'change');
   // what a mark's play button loops: the stretch itself, or the second around a moment
@@ -1584,7 +1585,7 @@
         try { if (Math.abs((el.currentTime || 0) - t) > 1e-4) el.currentTime = t; } catch (e) { /* not loaded yet */ }  // going where it already is can end a clip on its last frame
         tell('time');
       },
-      rate(r) { el.playbackRate = r || 1; },  // an <audio> or <video> keeps its pitch when slowed
+      rate(r) { el.defaultPlaybackRate = el.playbackRate = r || 1; },  // an <audio> or <video> keeps its pitch when slowed; a file loaded later starts at the default speed, so that is set as well
       loopAll(on) { el.loop = !!on; },
       // play one stretch round and round: id names it, range() says where it is now (it may be dragged meanwhile)
       loopSpan(id, rangeFn) { loop = id ? { id, range: rangeFn } : null; tell('state'); },
@@ -1601,10 +1602,11 @@
   }
 
   // the list beside the media: every mark in time order with its number, colour, time, kind, its own note, and
-  // what Claude is told about where it is. opts: editable(), when(span) -> text, goto(span), loop(span), looping() -> id
+  // what Claude is told about where it is. opts: editable(), when(span) -> text, goto(span), loop(span), looping() -> id,
+  // none() -> the line shown while there are no marks
   function spanList(tl, opts) {
     const box = h('div', { class: 'timemarks' }), rows = new Map();
-    const none = h('p', { class: 'hint' }, opts.none || 'No marks yet.');
+    const none = h('p', { class: 'hint' });
     function make(id) {
       const get = () => tl.get(id);
       const num = h('span', { class: 'num' });
@@ -1643,7 +1645,7 @@
         r.play.classList.toggle('on', s.id === looping); r.play.innerHTML = s.id === looping ? ICON_STOP : ICON_PLAY;
         if (box.children[i] !== r.el) box.insertBefore(r.el, box.children[i] || null);
       });
-      if (!list.length) box.append(none); else none.remove();
+      if (!list.length) { none.textContent = opts.none ? opts.none() : 'No marks yet.'; box.append(none); } else none.remove();
       if ((what === 'chosen' || what === 'marks') && rows.get(tl.chosen)) rows.get(tl.chosen).el.scrollIntoView({ block: 'nearest' });
     }
     tl.subs.push((what) => { if (what !== 'notes') draw(what); });
@@ -1651,13 +1653,15 @@
     return { el: box, draw, focus(id) { const r = rows.get(id); if (r && !r.note.disabled) r.note.focus(); } };
   }
 
-  // the tools over the media: drop a moment where the playhead is, undo, clear
-  function spanTools(tl, tp, editable) {
-    const act = (label, title, fn) => h('button', { class: 'btn small', type: 'button', title, onclick: (e) => { e.currentTarget.blur(); if (editable()) fn(); } }, label);
+  // the tools over the media: drop a moment where the playhead is, undo, clear. can() is the view's own word on whether
+  // its marks can be changed now, as for the keys and the lane; canClear() is asked for Clear all, which also works
+  // while the marks are on another file than the one on screen
+  function spanTools(tl, tp, can, canClear) {
+    const act = (label, title, ok, fn) => h('button', { class: 'btn small', type: 'button', title, onclick: (e) => { e.currentTarget.blur(); if (ok()) fn(); } }, label);
     return h('div', { class: 'grp marktools' },
-      act('Moment', 'Mark the moment the playhead is at (M)', () => tl.add(tp.time())),
-      act('Undo', 'Undo the last change to the marks (Ctrl+Z)', () => { if (!tl.undo()) toast('Nothing to undo'); }),
-      act('Clear all', 'Take every mark away', () => tl.clear()));
+      act('Moment', 'Mark the moment the playhead is at (M)', can, () => tl.add(tp.time())),
+      act('Undo', 'Undo the last change to the marks (Ctrl+Z)', can, () => { if (!tl.undo()) toast('Nothing to undo'); }),
+      act('Clear all', 'Take every mark away', canClear || can, () => tl.clear()));
   }
 
   // the keys both views share: Space plays and holds, Home and End, M drops a moment, [ and ] step through the marks,
@@ -1672,10 +1676,10 @@
       if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && key === 'z') { if (can && !tl.undo()) toast('Nothing to undo'); return mine(); }
       if (e.ctrlKey || e.metaKey || e.altKey) return false;
       if (opts.more && opts.more(e, key)) return mine();
-      if (key === ' ') { tp.toggle(); return mine(); }
+      if (key === ' ') { if (!e.repeat) tp.toggle(); return mine(); }  // a key held down plays or marks once
       if (key === 'Home') { tp.seek(0); return mine(); }
       if (key === 'End') { tp.seek(tp.length()); return mine(); }
-      if (key === 'm') { if (can) tl.add(tp.time()); return mine(); }
+      if (key === 'm') { if (can && !e.repeat) tl.add(tp.time()); return mine(); }
       if (key === '[' || key === ']') { const s = tl.beside(key === ']' ? 1 : -1, tp.time()); if (s) { tl.choose(s); tp.seek(s.t0); } return mine(); }
       if (key === 'Delete' || key === 'Backspace') { const s = tl.get(tl.chosen); if (s && can) tl.remove(s); return mine(); }
       if (key === 'Enter' && tl.chosen && opts.note) { opts.note(tl.chosen); return mine(); }
@@ -1686,7 +1690,8 @@
   // dragging on a lane of marks: across empty time makes a stretch, a mark's edge stretches it, its middle moves it
   // (Shift makes a new one there instead), a click moves the playhead, a double click drops a moment.
   // map.time(clientX) -> seconds and map.x(seconds) -> clientX say where the lane's times are on the screen.
-  // opts: editable(), seek(t), drag(on) is told when a drag starts and ends
+  // opts: editable(), seek(t), drag(on) is told when a drag starts and ends, fixed(span) gives the words to say when
+  // a mark's start must stay where it is (a clip's paint lies on its first frame): then only its end drags
   function spanLane(host, tl, map, opts) {
     let d = null;
     // what of which mark is under the pointer: the chosen mark first, then the shortest
@@ -1709,24 +1714,26 @@
     };
     const move = (e) => {
       if (!d) { const at = opts.editable() ? hit(e.clientX) : null; host.style.cursor = at ? (at.part === 'move' ? 'grab' : 'ew-resize') : ''; return; }
-      if (e.pointerId !== d.id) return;
+      if (e.pointerId !== d.id || d.part === 'held') return;
       const t = map.time(e.clientX);
       if (!d.moved) {
         if (Math.abs(e.clientX - d.x) < 4 || !opts.editable()) return;
+        const why = (d.part === 'start' || d.part === 'move') && opts.fixed ? opts.fixed(tl.get(d.span)) : '';
+        if (why) { d.part = 'held'; toast(why); return; }  // said once; the press still ends as a click on the mark
         d.moved = true; if (opts.drag) opts.drag(true);
         if (d.part === 'new') { const s = tl.add(d.t, t); if (!s) { d = null; return; } d.span = s.id; d.a = d.b = tl.fit(d.t); d.part = 'end'; }
         else { tl.keep(); tl.choose(tl.get(d.span)); }
       }
       const s = tl.get(d.span); if (!s) return;
       if (d.part === 'start') tl.move(s, t, d.b);
-      else if (d.part === 'end') tl.move(s, d.a, t);
+      else if (d.part === 'end') tl.move(s, d.a, opts.fixed && opts.fixed(s) ? Math.max(d.a, t) : t);  // the end of a mark whose start is fixed does not cross it
       else { const len = d.b - d.a, top = (tl.length || Infinity) - len, a = Math.min(top, Math.max(0, d.a + t - d.t)); tl.move(s, a, a + len); }
     };
     const up = (e) => {
       if (!d || e.pointerId !== d.id) return;
       const was = d; d = null;
       if (was.moved) { if (opts.drag) opts.drag(false); tl.changed('marks'); return; }
-      const at = hit(e.clientX);
+      const at = was.part === 'held' ? { s: tl.get(was.span) } : hit(e.clientX);  // a mark that would not drag is chosen all the same
       tl.choose(at ? at.s : null); opts.seek(was.t);
     };
     const twice = (e) => { if (!opts.editable()) return; const at = hit(e.clientX); if (at && !(at.s.t1 > at.s.t0)) return; tl.add(map.time(e.clientX)); };
@@ -1883,16 +1890,16 @@
   // read a sound file into samples the page can draw and measure: any kind the browser plays, not only 16-bit WAV
   async function decodeSound(url) {
     const buf = await API.bytes(url);
-    let rate = 44100;  // a WAV is read at its own rate, so its samples are measured as they are
+    let rate = 44100, own = false;  // a WAV is read at its own rate, so its samples are measured as they are; `own` says the rate is the file's
     try {
       const dv = new DataView(buf);
       if (dv.byteLength > 44 && dv.getUint32(0, false) === 0x52494646) for (let pos = 12; pos + 16 <= dv.byteLength;) {
         const id = dv.getUint32(pos, false), size = dv.getUint32(pos + 4, true);
-        if (id === 0x666d7420) { rate = dv.getUint32(pos + 12, true); break; }
+        if (id === 0x666d7420) { rate = dv.getUint32(pos + 12, true); own = true; break; }
         pos += 8 + size + (size % 2);
       }
     } catch (e) { /* not a WAV */ }
-    if (!(rate >= 8000 && rate <= 96000)) rate = 44100;
+    if (!(rate >= 8000 && rate <= 96000)) { rate = 44100; own = false; }
     const Ctx = window.OfflineAudioContext || window.webkitOfflineAudioContext;
     if (!Ctx) throw new Error('this browser cannot read a sound into samples');
     const ab = await new Ctx(1, 1, rate).decodeAudioData(buf), n = ab.length, chans = [];
@@ -1907,7 +1914,7 @@
       for (let i = b * WAVE_BLOCK, end = Math.min(n, i + WAVE_BLOCK); i < end; i++) { const x = mono[i]; if (x < a) a = x; if (x > z) z = x; }
       lo[b] = a; hi[b] = z; top = Math.max(top, -a, z);
     }
-    const snd = { rate: ab.sampleRate, n, seconds: n / ab.sampleRate, channels: chans.length, chans, mono, lo, hi, top };
+    const snd = { rate: ab.sampleRate, own: own && ab.sampleRate === rate, n, seconds: n / ab.sampleRate, channels: chans.length, chans, mono, lo, hi, top };
     snd.whole = soundFacts(snd, 0, n);
     return snd;
   }
@@ -1965,7 +1972,7 @@
   function soundView(files, opts) {
     opts = opts || {};
     const a = new Audio(); a.preload = 'auto';
-    let cur = null, snd = null, tl = null, list = null, lane = null, alive = true, editable = () => false, hover = null, busy = false, thin = false, pan = null, grab = null;
+    let cur = null, snd = null, tl = null, list = null, lane = null, alive = true, editable = () => false, hover = null, busy = false, thin = false, pan = null, grab = null, flush = null;
     const v = { t0: 0, span: 1 };  // the stretch of time on screen: where it starts, and how many seconds it shows
     const tp = transport(a, { length: () => (snd ? snd.seconds : 0) });
     const len = () => tp.length(), inside = () => tp.time() >= v.t0 - 1e-6 && tp.time() <= v.t0 + v.span + 1e-6;
@@ -2023,18 +2030,21 @@
     const centre = () => (hover !== null ? hover : (tp.time() >= v.t0 && tp.time() <= v.t0 + v.span) ? tp.time() : v.t0 + v.span / 2);
     function say() {
       const w = snd && snd.whole, n = tl && !mine() ? 'The marks are on ' + tl.file + '. Take them away to mark this file instead.' : '';
-      status.textContent = n || (snd ? 'peak ' + w.peak.toFixed(1) + ' dBFS · RMS ' + w.rms.toFixed(1) + ' dBFS · ' + (snd.rate / 1000) + ' kHz' + (snd.channels > 1 ? ' · ' + snd.channels + ' channels, mixed' : '') + ' · the wave is drawn to fill'
+      // the rate is said only when it is the file's own: any sound but a WAV is read at 44.1 kHz whatever its rate
+      status.textContent = n || (snd ? 'peak ' + w.peak.toFixed(1) + ' dBFS · RMS ' + w.rms.toFixed(1) + ' dBFS' + (snd.own ? ' · ' + (snd.rate / 1000) + ' kHz' : '') + (snd.channels > 1 ? ' · ' + snd.channels + ' channels, mixed' : '') + ' · the wave is drawn to its full height, however quiet the sound is'
         : busy ? 'Reading the sound' : cur ? 'The browser could not read this file to draw it. It may still play, and marks keep their times.' : '');
     }
     // the length is known: from the samples, or from the player when the file could not be read into samples
     function ready() {
       const d = len(); if (!d) return;
-      if (tl && mine()) { tl.file = cur.name; tl.length = sec3(d); }
+      if (tl && tl.spans.length && mine()) { tl.file = cur.name; tl.length = sec3(d); }  // with no marks yet, the first one made takes the file on screen (attach)
       setView(0, d); say();
       if (list) list.draw();
       if (snd && thin && tl && tl.spans.length && editable()) { thin = false; tl.stale(); tl.changed('marks'); }  // marks made before the samples were in get their numbers now
+      if (flush && !busy && tl && tl.spans.length && mine()) flush();  // a picture that waited for this file to be read can be made now
     }
     function load(f) {
+      if (cur && cur !== f && flush) flush();  // the picture of the marks is drawn from the file on screen: it is sent before that changes
       cur = f; snd = null; busy = true; tp.hold(); tp.loopSpan(null);
       a.src = rel(API.src(f.url)); v.t0 = 0; v.span = 1;
       if (pick) [...pick.children].forEach((b, i) => b.classList.toggle('on', files[i] === f));
@@ -2076,7 +2086,10 @@
     if (ro) ro.observe(box);
     // the picture Claude reads: the whole wave with every mark coloured and numbered on it, the ruler, and a legend
     function picture() {
-      if (!tl || !tl.spans.length || !len()) return Promise.resolve(null);
+      if (!alive) return Promise.resolve(undefined);  // thrown away: there is nothing to send
+      if (!tl || !tl.spans.length) return Promise.resolve(null);
+      if (!mine() || !len()) return Promise.resolve(undefined);  // the marks are on another file, or the length is not known: no picture of them can be made now
+      if (!snd && busy) thin = true;  // drawn before the samples are in: it is made again with the wave once they are (ready)
       const W = 1600, pad = 16, title = 34, rh = RULER + (opts.tempo ? RULER_BARS : 0), wh = 300, w = W - 2 * pad, all = { t0: 0, span: len() };
       const top = h('canvas', { width: W, height: title + rh + wh + 8 }), ctx = top.getContext('2d');
       ctx.fillStyle = '#111114'; ctx.fillRect(0, 0, W, top.height);
@@ -2096,19 +2109,32 @@
     }
     const api = {
       el, kind: 'sound', tp, keys: null, picture,
+      can: () => editable(),  // whether the marks can be changed now: the batch takes them, they are on the file on screen, and its length is known
+      shown: () => alive && mine() && !!len(),  // whether a picture of the marks can be made now
       hint: ['Drag across the wave: a stretch · ', h('kbd', {}, 'M'), ' or a double click: a moment · ', h('kbd', {}, 'Space'), ' plays · ', h('kbd', {}, '['), ' ', h('kbd', {}, ']'),
         ' step · ', h('kbd', {}, 'Enter'), ' its note · ', h('kbd', {}, 'Del'), ' takes it away · scroll or ', h('kbd', {}, '+'), ' ', h('kbd', {}, '−'), ' zooms'],
       // put a set of marks on the sound: they are drawn on the wave, listed beside it, and the keys work them
       attach(marks, o) {
         if (lane) lane.destroy();
-        tl = marks; editable = () => !!(o.editable() && mine() && len());
+        tl = marks; editable = () => !!(o.editable() && mine() && len()); flush = o.flush || null;  // o.flush() sends a picture of the marks that is waiting to go
         tl.tempo = opts.tempo || null;
+        // the first mark of an empty set is made on the file on screen: the set takes that file and its length, and the
+        // marks of another file can no longer be brought back by Undo, where they would be saved as this file's
+        const add = tl.add;
+        tl.add = (t0, t1, more) => {
+          if (!tl.spans.length && cur) { if (tl.file && tl.file !== cur.name) { tl.past.length = 0; tl.stale(); } tl.file = cur.name; tl.length = sec3(len()); }
+          return add(t0, t1, more);
+        };
         tl.describe = (s) => { if (!snd) thin = true; return soundWhere(s, tl, snd); };
         list = spanList(tl, { editable, when: spanWhen, goto: (s) => tp.seek(s.t0), loop: spanLoop(tl, tp), looping: () => tp.looping(),
-          none: 'No marks yet. Drag across the wave to mark a stretch, or press M to mark the moment the playhead is at.' });
+          none: () => (o.editable() ? 'No marks yet. Drag across the wave to mark a stretch, or press M to mark the moment the playhead is at.' : 'No marks on this sound.') });
         side.replaceChildren(list.el);
         lane = spanLane(strip, tl, map, { editable, seek: (t) => tp.seek(t) });
-        tl.subs.push((what) => { if (what !== 'notes') drawMarks(); if (what === 'marks') say(); });
+        tl.subs.push((what) => {
+          if (what === 'marks' && tl.spans.length && !mine()) { const on = files.find((f) => f.name === tl.file); if (on) load(on); }  // Undo brought back marks made on another file: the view goes to that file
+          if (what !== 'notes') drawMarks();
+          if (what === 'marks') say();
+        });
         api.keys = spanKeys(tl, tp, { editable, note: (id) => list.focus(id),
           more: (e, key) => { if (key === '+' || key === '=') { zoomAt(centre(), 1.6); return true; } if (key === '-' || key === '_') { zoomAt(centre(), 1 / 1.6); return true; } return false; } });
         const on = tl.spans.length && files.find((f) => f.name === tl.file);
@@ -2223,7 +2249,8 @@
     const video = h('video', { src, playsinline: true, preload: 'auto' });
     let copy = null;  // the second copy of the clip, made when a frame is first wanted: a clip only looked at is read once
     const frames = () => copy || (copy = clipFrames(src));
-    let tl = null, list = null, lane = null, alive = true, editable = () => false;
+    let tl = null, list = null, lane = null, alive = true, editable = () => false, broke = null;
+    let bad = '', lost = false;  // bad: why the clip cannot be marked, once that is known; lost: its file does not say how long it is
     let fps = facts.fps > 0 ? facts.fps : 0, measured = false, asked = false, vw = 0, vh = 0, shown = 1, seen = null, pin = null;
     let stroke = null, drawing = null, scrub = false, press = null, inkKey = '';
     const pen = { on: false, size: 1, erase: false, colour: '' };  // the brush: what newInk keeps for a picture
@@ -2232,9 +2259,10 @@
     const tp = transport(video, { length: () => facts.seconds || 0, snap });
     const len = () => tp.length();
     // Seconds are the truth; a frame's number is worked out from them. Frames count from 0: frame n starts at n / fps
-    // seconds. With no frame rate known a step is 1/30 s and no frame is named
+    // seconds. With no frame rate known a step is 1/30 s and no frame is named. A time is taken to the millisecond, as a
+    // mark keeps it, so the frame the playhead is on and the frame of a mark made there are always the same one
     const count = () => (!fps ? 0 : facts.frames && facts.fps === fps ? facts.frames : Math.max(1, Math.round(len() * fps)));
-    const frameOf = (t) => { const c = count(), n = Math.max(0, Math.floor(t * (fps || 30) + 1e-3)); return c ? Math.min(c - 1, n) : n; };
+    const frameOf = (t) => { const c = count(), n = Math.max(0, Math.floor(sec3(t) * (fps || 30) + 1e-3)); return c ? Math.min(c - 1, n) : n; };
     const mid = (n) => (n + 0.5) / (fps || 30);  // the middle of a frame: going there shows that frame and no other
     function snap(t) { return fps && len() ? Math.min(len(), mid(frameOf(t))) : t; }
     // the frame on screen: the one last shown when the browser says which, else the one the time falls in
@@ -2319,8 +2347,27 @@
       Object.assign(ink.style, { left: (bw - vw * shown) / 2 + 'px', top: (bh - vh * shown) / 2 + 'px', width: vw * shown + 'px', height: vh * shown + 'px' });
     }
     function say() {
-      status.textContent = !vw ? 'Reading the clip' : vw + ' x ' + vh + (fps ? ' · ' + fps + ' frames a second' + (measured ? ', measured here' : '') : asked === 'busy' ? ' · measuring its frames a second' : ' · its frames a second are not known: a step is 1/30 s');
+      status.textContent = bad || (!vw ? (lost ? 'This clip does not say how long it is. Play it through once and marks can be made on it.' : 'Reading the clip') : vw + ' x ' + vh + (fps ? ' · ' + fps + ' frames a second' + (measured ? ', measured here' : '') : asked === 'busy' ? ' · measuring its frames a second' : ' · its frames a second are not known: a step is 1/30 s'));
     }
+    // the clip cannot be read (the browser gave up on it, or it has no picture): the status line and the list say so
+    // plainly, and the tools and the hint that tell the user to mark it are taken away
+    function unread() {
+      if (!alive || bad || vw) return;
+      bad = 'The browser could not read this clip, so marks cannot be made on it.';
+      say(); if (list) list.draw(); if (broke) broke();
+    }
+    video.addEventListener('error', unread);
+    // a clip whose file does not say how long it is (one a browser recorded): sent far past its end, the browser finds
+    // the length, and the clip is put back at its start
+    video.addEventListener('loadedmetadata', () => {
+      if (!alive) return;
+      if (!video.videoWidth) { unread(); return; }
+      if (lost || len()) return;
+      lost = true; say();
+      const back = () => { if (!isFinite(video.duration)) return; video.removeEventListener('durationchange', back); if (alive) video.currentTime = 0; };
+      video.addEventListener('durationchange', back);
+      try { video.currentTime = 1e101; } catch (e) { /* its length stays unknown: the status line says what to do */ }
+    });
     // the clip's size and length are known: the marks take them, and everything is drawn
     function ready() {
       if (!alive || !video.videoWidth || !len()) return;
@@ -2343,7 +2390,7 @@
     // a step of frames: the clip is held, and goes to the middle of the frame so many on or back
     function step(d) {
       if (!len()) return;
-      const to = fps ? mid(Math.max(0, Math.min(count() - 1, nowFrame() + d))) : tp.time() + d / 30;
+      const n = nowFrame() + d, to = mid(Math.max(0, fps ? Math.min(count() - 1, n) : n));  // with no frame rate known, the middle of a frame of 1/30 s
       if (tp.playing()) { pin = to; tp.hold(); }
       tp.seek(to);
     }
@@ -2353,8 +2400,19 @@
       const t = tl.fit(snap(tp.time())), s = tl.get(tl.chosen);
       if (!s || (start ? t > s.t1 : t < s.t0)) { tl.add(t); return; }
       if ((start ? s.t0 : s.t1) === t) return;
+      if (start && frameOf(t) !== frameOf(s.t0) && pinned(s)) { toast(pinned(s)); return; }
       tl.keep(); tl.move(s, start ? t : s.t0, start ? s.t1 : t); tl.changed('marks');
     }
+    // whether a mark has paint that shows (paint rubbed out again is none); looked at once for each change to its strokes
+    function painted(s) {
+      const c = s ? layerOf(s) : null, L = c && layers.get(s.id);
+      if (!L) return false;
+      if (L.looked !== L.sig) { L.looked = L.sig; L.any = !!inkPlace(c, vw, vh); }
+      return L.any;
+    }
+    // paint lies on the frame its mark starts at, and that is the frame Claude is shown it on: the start of a painted
+    // mark stays where it is. These are the words said when the user tries to move it; nothing for a mark with no paint
+    const pinned = (s) => (painted(s) ? 'Its paint is on its first frame, so its start stays where it is. Rub the paint out to move it.' : '');
     // the mark the brush paints on: the chosen one when the playhead is on its first frame, else one that starts on this frame
     function target(n) {
       const c = tl.get(tl.chosen);
@@ -2448,11 +2506,14 @@
     // marks a band (its number, kind and time) over its frame, or over the frames at its start, middle and end, the
     // paint on the first at half strength; then the legend with the notes. 1600 across
     function picture() {
-      if (!tl || !tl.spans.length || !len() || !vw) return Promise.resolve(null);
+      if (!alive) return Promise.resolve(undefined);  // thrown away: there is nothing to send, where a sheet of frames that could not be read would be worse
+      if (!tl || !tl.spans.length) return Promise.resolve(null);
+      if (!len() || !vw) return Promise.resolve(undefined);
       const c = count(), near = fps ? 1.01 / fps : 0, get = (t) => frames().frame(fps ? mid(frameOf(t)) : t, 'small', near);
       const whole = Array.from({ length: 8 }, (_, i) => (c ? mid(Math.round(i * (c - 1) / 7)) : (i + 0.5) / 8 * len()));
       const cells = tl.sorted().slice(0, CLIP_ROWS).map((s) => { const ts = s.t1 > s.t0 ? [s.t0, (s.t0 + s.t1) / 2, s.t1] : [s.t0]; return { s, ts, got: ts.map(get), layer: layerOf(s) }; });
       return Promise.all([Promise.all(whole.map(get)), Promise.all(cells.map((x) => Promise.all(x.got)))]).then(([top8, rows]) => {
+        if (!alive) return undefined;  // thrown away while its frames were read
         const W = 1600, pad = 16, gap = 6, title = 34, cap = 20, band = 26;
         const sw = Math.floor((W - 2 * pad - 7 * gap) / 8), sh = Math.round(sw * vh / vw);
         const k = Math.min(356 / vw, 220 / vh), fw = Math.round(vw * k), fh = Math.round(vh * k);
@@ -2466,7 +2527,7 @@
         const top = h('canvas', { width: W, height: y + (cells.length ? band + fh + cap : 0) + 4 }), ctx = top.getContext('2d');
         ctx.fillStyle = '#111114'; ctx.fillRect(0, 0, W, top.height);
         ctx.fillStyle = '#fff'; ctx.font = '600 15px system-ui, sans-serif';
-        ctx.fillText([file.name, secs(len()) + ' long', vw + ' x ' + vh, fps ? fps + ' frames a second, ' + c + ' frames counted from 0' : 'frames a second not known',
+        ctx.fillText([file.name, secs(len()) + ' long', vw + ' x ' + vh, fps ? fps + ' frames a second, ' + count() + ' frames counted from 0' : 'frames a second not known',
           'the top row is the whole clip; then each mark'].join(' · '), pad, 22, W - 2 * pad);
         const put = (img, px, py, w, hh) => {
           if (img) ctx.drawImage(img, px, py, w, hh);
@@ -2496,15 +2557,17 @@
       });
     }
     // each mark's own picture, for the first twelve: the frame at its start at the clip's own size, its paint burned in.
-    // Only those that changed since they were last asked for; nothing for a mark takes its picture away
-    function shots() {
+    // Only those that changed since they were last asked for, or with `all` every one; nothing for a mark takes its
+    // picture away. A view thrown away answers with nothing at all
+    function shots(all) {
+      if (!alive) return Promise.resolve(undefined);
       if (!tl || !len() || !vw) return Promise.resolve([]);
       const jobs = [], near = fps ? 1.01 / fps : 0;
       tl.sorted().forEach((s, i) => {
         if (i >= CLIP_ROWS) { if (!bare.has(s.id)) { bare.add(s.id); sent.delete(s.id); jobs.push(Promise.resolve([s.id, null])); } return; }
         const t = fps ? mid(frameOf(s.t0)) : s.t0, sig = Math.round(t * 1000) + '|' + sigOf(s);
         bare.delete(s.id);
-        if (sent.get(s.id) === sig) return;
+        if (!all && sent.get(s.id) === sig) return;
         sent.set(s.id, sig);
         const layer = layerOf(s);
         jobs.push(frames().frame(t, 'full', near).then((img) => {
@@ -2512,25 +2575,28 @@
           const out = h('canvas', { width: img.width, height: img.height }), ctx = out.getContext('2d');
           ctx.drawImage(img, 0, 0);
           if (layer) burn(ctx, layer, 0, 0, out.width, out.height);
-          return new Promise((ok) => out.toBlob((blob) => ok(blob ? [s.id, blob] : null), 'image/png'));
+          return new Promise((ok) => out.toBlob((blob) => { if (!blob) sent.delete(s.id); ok(blob ? [s.id, blob] : null); }, 'image/png'));
         }));
       });
-      return Promise.all(jobs).then((made) => made.filter(Boolean));
+      return Promise.all(jobs).then((made) => (alive ? made.filter(Boolean) : undefined));
     }
     const api = {
       el, kind: 'video', tp, keys: null, tools, picture, shots,
+      can: () => editable(),  // whether the marks can be changed now: the batch takes them, and the clip has been read
+      shown: () => alive && !!len() && !!vw,  // whether pictures of the marks can be made now
+      unsent(id) { sent.delete(id); bare.delete(id); },  // a mark's own picture did not arrive: it is made again at the next send
       slow: true,  // its pictures are frames read from the clip: it must not be thrown away until they are sent
       hint: ['Drag along the lane: a stretch · ', h('kbd', {}, 'M'), ' a moment · ', h('kbd', {}, 'I'), ' ', h('kbd', {}, 'O'), ' its start and end · ', h('kbd', {}, ','), ' ', h('kbd', {}, '.'),
         ' a frame, with Shift ten · ', h('kbd', {}, 'B'), ' paints · ', h('kbd', {}, 'Space'), ' plays · ', h('kbd', {}, '['), ' ', h('kbd', {}, ']'), ' step · ', h('kbd', {}, 'Enter'), ' its note · ', h('kbd', {}, 'Del'), ' takes it away'],
       // put a set of marks on the clip: they are drawn on the lane, listed beside it, painted on, and the keys work them
       attach(marks, o) {
         if (lane) lane.destroy();
-        tl = marks; editable = () => !!(o.editable() && len() && vw);
+        tl = marks; editable = () => !!(o.editable() && len() && vw); broke = o.broken || null;
         tl.describe = clipWhere;
         list = spanList(tl, { editable, when: listWhen, goto: (s) => tp.seek(s.t0), loop: spanLoop(tl, tp), looping: () => tp.looping(),
-          none: 'No marks yet. Press M to mark the frame the clip is on, I and O for the start and end of a stretch, or drag along the lane under the bar.' });
+          none: () => bad || (o.editable() ? 'No marks yet. Press M to mark the frame the clip is on, I and O for the start and end of a stretch, or drag along the lane under the bar.' : 'No marks on this clip.') });
         side.replaceChildren(list.el);
-        lane = spanLane(strip, tl, map, { editable, seek: (t) => tp.seek(t) });
+        lane = spanLane(strip, tl, map, { editable, seek: (t) => tp.seek(t), fixed: pinned });
         tl.subs.push((what) => {
           if (what === 'notes') return;
           if (what === 'marks') {
@@ -2544,10 +2610,11 @@
         api.keys = spanKeys(tl, tp, { editable, note: (id) => list.focus(id), more: (e, key) => {
           if (e.code === 'Comma' || key === ',' || key === '<') { step(e.shiftKey ? -10 : -1); return true; }
           if (e.code === 'Period' || key === '.' || key === '>') { step(e.shiftKey ? 10 : 1); return true; }
-          if (key === 'i' || key === 'o') { if (editable()) edge(key === 'i'); return true; }
-          if (key === 'b') { setPen(!pen.on); return true; }
+          if (key === 'i' || key === 'o') { if (editable() && !e.repeat) edge(key === 'i'); return true; }
+          if (key === 'b') { if (!e.repeat) setPen(!pen.on); return true; }
           return false;
         } });
+        if (bad && broke) broke();
         ready();
       },
       set() { tp.rate(S.opts.rate); tp.loopAll(S.opts.loop); },
@@ -2558,27 +2625,39 @@
   }
 
 
+  // the pictures of marks on sounds and clips go to the server one after another, in the order they were made
+  let markSends = Promise.resolve();
   // marks on a sound or a clip in the closer look: kept on the verdict, with a picture of them beside the batch for Claude
   function markTimed(cand, m, el, bar) {
     const b = S.batch, view = m.timed, tl = newSpans(entry(cand.id).marks, view.kind);
-    view.attach(tl, { editable });
-    let timer = 0, pending = false;
-    const failed = (e) => toast('The picture of the marks was not saved: ' + e.message);
-    const send = async () => {
+    let timer = 0, pending = false, tools = null;
+    const failed = (e) => { pending = true; toast('The picture of the marks was not saved: ' + e.message); };  // it goes again with the next send, not on a timer
+    // send the pictures of the marks as they are now. They are made at once, from the view as it is: it may be closed, or
+    // show another file, before they have gone. They go to the server after any that are still on their way. What is
+    // handed back settles once every picture asked for so far has arrived, also when this call had nothing new to
+    // send: a clip is held until then, and so is Submit
+    const send = () => {
       clearTimeout(timer); timer = 0;
-      if (!pending) return;
+      if (!pending || (tl.spans.length && !view.shown())) return markSends;  // marks the view cannot draw now (another file is on screen, or it is gone) wait for a later send
       pending = false;
-      const sheet = tl.spans.length ? view.picture() : null, shots = view.shots ? view.shots() : null;  // both start now: the view may be closed before they are sent
-      await API.putMarks(b.id, cand.id, await sheet).catch(failed);
-      for (const [id, blob] of (await shots) || []) await API.putMark(b.id, cand.id, id, blob).catch(failed);  // a mark's own picture; none takes it away
+      const sheet = tl.spans.length ? view.picture() : null, shots = view.shots ? view.shots() : null;
+      return (markSends = markSends.then(async () => {
+        const pic = await sheet, own = await shots;
+        if (pic === undefined) return;  // the view was thrown away under its pictures: nothing is sent, where a sheet of empty frames would be
+        await API.putMarks(b.id, cand.id, pic).catch(failed);
+        for (const [id, blob] of own || []) await API.putMark(b.id, cand.id, id, blob).catch((e) => { if (view.unsent) view.unsent(id); failed(e); });  // a mark's own picture; none takes it away
+      }).catch(failed));
     };
+    view.attach(tl, { editable, flush: send, broken: () => { if (tools) tools.hidden = true; } });
     tl.subs.push((what) => {
-      if ((what !== 'marks' && what !== 'notes') || !editable()) return;
+      // a change can come late, from a clip held after its closer look was closed (its frames a second, measured then): it
+      // is dropped once the page has gone to another batch or another closer look has opened, which may be of this same clip
+      if ((what !== 'marks' && what !== 'notes') || S.batch !== b || S.markFlush !== send || !editable()) return;
       entry(cand.id).marks = tl.data(); changed(cand.id);
       pending = true; clearTimeout(timer); timer = setTimeout(send, 1500);
     });
     S.markFlush = send;
-    if (editable()) bar.after(h('div', { class: 'tools overtools' }, spanTools(tl, view.tp, editable), view.tools || null, h('span', { class: 'hint' }, view.hint)));
+    if (editable()) bar.after(tools = h('div', { class: 'tools overtools' }, spanTools(tl, view.tp, () => view.can(), editable), view.tools || null, h('span', { class: 'hint' }, view.hint)));
     return null;
   }
 
@@ -2586,12 +2665,17 @@
   // them on it and, for a clip, the picture of each mark's own frame
   function markTimedOver(f, s) {
     const prev = $('.over.marking'); if (prev) prev.remove();
-    const clip = f.kind === 'video', named = { url: f.url, label: f.label, name: decodeURIComponent(String(f.url).split('/').pop()) };
+    const clip = f.kind === 'video', named = { url: f.url, label: f.label, name: String(f.url).split('/').pop() };  // the address is not encoded: its last part is the file's name as it is
     const view = clip ? clipView(named, {}) : soundView([named], {});
     const tl = newSpans(null, view.kind);
-    view.attach(tl, { editable: () => true });
+    let busy = false, tools = null;  // busy: the note is being sent
+    view.attach(tl, { editable: () => true, broken: () => { if (tools) tools.hidden = true; } });
     const words = h('textarea', { class: 'field', rows: 2, placeholder: 'Anything else about it (optional)', 'aria-label': 'A note on the whole thing' });
-    const close = () => { document.removeEventListener('keydown', key); view.destroy(); el.remove(); document.body.style.overflow = ''; };
+    // while the note is being sent the view stays: a clip's pictures are frames read from the clip itself
+    const close = () => {
+      if (busy) { toast('Still sending the note'); return; }
+      document.removeEventListener('keydown', key); view.destroy(); el.remove(); document.body.style.overflow = '';
+    };
     const key = (e) => {
       if (e.key === 'Escape') { if (!/^(TEXTAREA|INPUT)$/.test((e.target || {}).tagName || '')) { close(); e.stopPropagation(); } return; }
       if (view.keys && view.keys(e)) e.stopPropagation();
@@ -2599,10 +2683,11 @@
     const send = h('button', { class: 'btn primary', type: 'button', onclick: async () => {
       const data = tl.data();
       if (!data) { toast('Mark something first'); return; }
-      send.disabled = true;
+      busy = true; send.disabled = true;
       try {
-        const sheet = view.picture(), each = view.shots ? view.shots() : null;  // both start now, so a clip's frames are read in one go
+        const sheet = view.picture(), each = view.shots ? view.shots(true) : null;  // both start now, so a clip's frames are read in one go; every note carries each mark's own picture
         const blob = await sheet, own = new Map(((await each) || []).filter(([, pic]) => pic));
+        if (blob === undefined) throw new Error('The pictures of the marks could not be made, so the note was not sent');
         const ownName = (i) => 'marks ' + s.id + ' mark ' + (i + 1) + '.png';
         const lines = ['Marks on ' + s.title + ' (' + s.id + ', ' + f.label + '), ' + (clip ? 'a clip ' + tl.length.toFixed(2) + ' s' : 'a sound ' + clock(tl.length)) + ' long. The picture of them is attached; each mark is quoted with when it is. KEEP: that part must stay as it is. CUT: that stretch goes.'];
         if (words.value.trim()) lines.push('', words.value.trim());
@@ -2612,13 +2697,13 @@
         data.spans.forEach((m, i) => { if (own.has(m.id)) files.push(new File([own.get(m.id)], ownName(i), { type: 'image/png' })); });
         const made = (await API.addNote(lines.join('\n'), '', false)).note;
         await sendFiles(made.id, files);
-        close(); await afterNote(files.length > 1 ? 'Noted, with the pictures of the marks' : 'Noted, with the picture of the marks');
-      } catch (e) { toast(e.message); send.disabled = false; }
+        busy = false; close(); await afterNote(files.length > 1 ? 'Noted, with the pictures of the marks' : 'Noted, with the picture of the marks');
+      } catch (e) { toast(e.message); busy = false; send.disabled = false; }
     } }, 'Send as a note');
     const bar = h('div', { class: 'bar' }, h('h3', {}, 'Mark ' + s.title), h('span', { class: 'hint' }, f.label),
       h('button', { class: 'btn small', type: 'button', onclick: close }, 'Close (Esc)'));
     const el = h('div', { class: 'over marking', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Mark ' + s.title }, bar,
-      h('div', { class: 'tools overtools' }, spanTools(tl, view.tp, () => true), view.tools || null, h('span', { class: 'hint' }, view.hint)),
+      tools = h('div', { class: 'tools overtools' }, spanTools(tl, view.tp, () => view.can(), () => true), view.tools || null, h('span', { class: 'hint' }, view.hint)),
       h('div', { class: 'panes' }, h('div', { class: 'pane' }, view.el)),
       h('div', { class: 'side marking' }, h('div', {}, h('p', { class: 'hint' }, 'Each mark has its own note, in the list beside the ' + (clip ? 'clip' : 'wave') + '.')), h('div', {}, words, h('div', { class: 'jf' }, send))));
     document.body.append(el); document.body.style.overflow = 'hidden';
@@ -3800,8 +3885,11 @@
   // ---------------------------------------------------- look closer, compare
   function closeOver() {
     if (!S.over) return;
-    const sent = S.markFlush ? S.markFlush() : null;
-    if (S.over.keep && sent && sent.then) { const gone = S.over.destroy; S.over.keep(); sent.then(gone, gone); S.over.destroy = () => {}; }  // a clip's pictures are grabbed from the clip itself: it is held, and thrown away once they are sent
+    const flush = S.markFlush, sent = flush ? flush() : null;
+    // a clip's pictures are frames read from the clip itself: it is held until those on their way have gone. A change made
+    // meanwhile (its frames a second, measured late) is then sent from the clip while it still stands, and only then is
+    // the clip thrown away
+    if (S.over.keep && sent && sent.then) { const gone = S.over.destroy, last = () => flush(); S.over.keep(); sent.then(last, last).then(gone, gone); S.over.destroy = () => {}; }
     S.over.destroy(); S.over.el.remove(); S.over = null;
     document.body.style.overflow = '';
     if (S.batch) for (const c of S.batch.candidates) S.ui[c.id] = (S.ui[c.id] || []).filter((fn) => !fn.over);

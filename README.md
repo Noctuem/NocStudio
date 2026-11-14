@@ -206,7 +206,8 @@ frame the clip is on, `I` and `O` to set the start and the end of a stretch, or 
 lane under the bar. **Paint** (`B`) turns the pointer into the brush from the picture marks:
 paint on the frame to show where, in the colour of its mark. Painting holds the clip; the paint
 goes on the chosen mark when the clip is on that mark's first frame, and starts a new moment
-otherwise. The agent cannot watch a clip, so it gets pictures: one sheet (the whole clip in
+otherwise. A mark with paint keeps its start on the frame that was painted: its end still
+moves, and rubbing the paint out lets the start move again. The agent cannot watch a clip, so it gets pictures: one sheet (the whole clip in
 eight frames, then the frames of each mark with its paint, then a legend with your notes) and,
 for each of the first twelve marks, its first frame at the clip's own size with the paint on
 it. With them go each note, its times and frame numbers, and where on the frame the paint sits.
