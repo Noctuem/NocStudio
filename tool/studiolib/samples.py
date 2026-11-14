@@ -10,9 +10,12 @@ here and baked the way a project's own samples are; with no such model, a blocky
 """
 from __future__ import annotations
 
+import array
 import math
 import shutil
+import sys
 import tempfile
+import wave
 from pathlib import Path
 
 from . import bake
@@ -217,7 +220,74 @@ def _sounds(studio, _):
     return _from_set(studio, "sounds", title="Sounds: play them in turn",
                       ask="Which shot would you keep?", brief=SAY,
                       look_at=["Play them in turn runs down the row; Loop repeats one",
-                               "Each tile shows its length and how loud it peaks"])
+                               "Each tile shows its length and how loud it peaks",
+                               "Mark on a tile opens it large: mark a moment or a stretch of it, with a note for each"])
+
+
+TUNE = {"bpm": 120.0, "beats": 4, "first": 0.0}  # the made-up tune's tempo: it is filed with it, so the page counts bars
+TUNE_BARS = 6
+
+
+def tune_wav(path: Path) -> None:
+    """Write the made-up tune: six bars at 120, a thump on each beat, a low line, ticks and a melody that come in
+    at bar 3, and a harsh buzz across bar 5 for the user to mark. Mono, 16-bit, peaking just under -20 dBFS."""
+    rate, beat = 22050, 60 / TUNE["bpm"]
+    n = int(rate * beat * TUNE["beats"] * TUNE_BARS)
+    out = [0.0] * n
+    tau = 2 * math.pi
+
+    def put(at: float, seconds: float, fn) -> None:
+        start = int(at * rate)
+        for i in range(max(0, min(int(seconds * rate), n - start))):
+            out[start + i] += fn(i / rate)
+
+    seed = [20240]
+
+    def hiss(_t: float) -> float:
+        seed[0] = (seed[0] * 1103515245 + 12345) & 0x7FFFFFFF
+        return seed[0] / 0x3FFFFFFF - 1.0
+
+    for k in range(TUNE["beats"] * TUNE_BARS):  # the thump: a low note that falls and dies away
+        put(k * beat, 0.2, lambda t: 0.9 * math.sin(tau * (45 * t + 6.5 * (1 - math.exp(-t * 28)))) * math.exp(-t * 16))
+    low = [55.0, 55.0, 65.41, 49.0, 55.0, 55.0]  # the low line: one note a bar
+    for bar, hz in enumerate(low):
+        put(bar * 4 * beat, 4 * beat, lambda t, hz=hz: 0.32 * math.sin(tau * hz * t) * min(1.0, t * 40, (4 * beat - t) * 40))
+    for k in range(2 * TUNE["beats"], TUNE["beats"] * TUNE_BARS):  # ticks between the beats, from bar 3
+        put((k + 0.5) * beat, 0.03, lambda t: 0.35 * hiss(t) * math.exp(-t * 120))
+    notes = [440.0, 523.25, 659.25, 523.25, 587.33, 493.88, 440.0, 392.0]  # the melody: a note a beat, bars 3, 4 and 6
+    for bar in (2, 3, 5):
+        for k in range(4):
+            hz = notes[(k + (4 if bar == 3 else 0)) % len(notes)]
+            put((bar * 4 + k) * beat, beat * 0.9, lambda t, hz=hz: 0.3 * (math.sin(tau * hz * t) + 0.3 * math.sin(tau * 2 * hz * t)) * math.exp(-t * 5))
+    put(4 * 4 * beat, 4 * beat,  # bar 5: the fault to find, a bright buzz over everything
+        lambda t: 0.55 * (1 if math.sin(tau * 1760 * t) > 0 else -1) * (0.6 + 0.4 * math.sin(tau * 9 * t)) * min(1.0, t * 30, (4 * beat - t) * 30))
+    fade = int(rate * beat)
+    for i in range(fade):  # the last beat dies away
+        out[n - fade + i] *= 1 - i / fade
+    top = max(abs(x) for x in out) or 1.0
+    gain = 10 ** (-20.5 / 20) * 32767 / top
+    data = array.array("h", (int(x * gain) for x in out))
+    if sys.byteorder == "big":
+        data.byteswap()
+    with wave.open(str(path), "wb") as wav:
+        wav.setnchannels(1); wav.setsampwidth(2); wav.setframerate(rate); wav.writeframes(data.tobytes())
+
+
+def _tune(studio, _):
+    seconds = 60 / TUNE["bpm"] * TUNE["beats"] * TUNE_BARS
+    bid = studio.new_batch("tune", sample=True, filed_by=BY, kind="audio", mode="rate", title="A longer sound: mark parts of it",
+                           ask="Approve it, or mark what must change.", targets={"max_seconds": 30},
+                           brief=SAY + f" The tune is written by script: {TUNE_BARS} bars at {TUNE['bpm']:g} beats a minute, with a harsh buzz across bar 5.",
+                           look_at=["Press Mark, or Enter: drag across the wave to mark a stretch, press M to drop a moment while it plays",
+                                    "Each mark has its own note, and is a Change, a Cut or a Keep",
+                                    "It was filed with its tempo, so the ruler counts bars as well as seconds",
+                                    "Bar 5 has a buzz over it: mark it and see what the page measures there"])["id"]
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "tune.wav"
+        tune_wav(path)
+        studio.add_candidate(bid, [path], title="Six bars", summary=f"{seconds:g} s, {TUNE['bpm']:g} beats a minute, 4 to the bar", tempo=dict(TUNE),
+                             made_with={"tool": "synth (script)", "source": "studio.py samples"})
+    return bid
 
 
 def _held(studio, _):
@@ -281,7 +351,7 @@ def _writing(studio, _):
 
 
 SAMPLES = [("motions", _motions), ("models", _models), ("pictures", _pictures), ("textures", _textures),
-           ("sounds", _sounds), ("video", _video), ("in-app", _in_app), ("question", _question),
+           ("sounds", _sounds), ("tune", _tune), ("video", _video), ("in-app", _in_app), ("question", _question),
            ("writing", _writing), ("held", _held)]
 
 

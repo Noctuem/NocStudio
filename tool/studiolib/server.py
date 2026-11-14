@@ -367,6 +367,14 @@ def make_handler(home: Path, allowed_hosts: set[str], quiet: bool = False, hub: 
                     with LOCK:
                         self.studio().put_marks_picture(parts[2], parts[4], data)
                     return self.send_json({"ok": True})
+                if len(parts) == 6 and parts[:2] == ["api", "batch"] and parts[3] == "marks" and self.command == "PUT":
+                    length = int(self.headers.get("Content-Length") or 0)  # the picture of one mark on a clip or a sound
+                    if length > 16 * 1024 * 1024:
+                        raise StudioError("the mark's picture is over 16 MB")
+                    data = self.rfile.read(length)
+                    with LOCK:
+                        self.studio().put_mark_picture(parts[2], parts[4], parts[5], data)
+                    return self.send_json({"ok": True})
                 if parts[:2] == ["api", "talk"]:
                     return self.talk_post(self.studio(), parts[2:], self.body())
                 if parts == ["api", "idea"]:

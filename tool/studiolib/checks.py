@@ -70,9 +70,10 @@ def check_image(path: Path, kind: str, rules: dict):
 
 
 # ---------------------------------------------------------------------- audio
-def check_audio(path: Path, rules: dict):
+def check_audio(path: Path, rules: dict, targets: dict | None = None):
     facts, out = {}, []
-    r = rules.get("audio", {})
+    # a batch may set its own limits (--target max_seconds=90): music is longer than a shot
+    r = dict(rules.get("audio", {}), **{k: v for k, v in (targets or {}).items() if k in ("max_seconds", "max_peak_dbfs")})
     if path.suffix.lower() != ".wav":
         return facts, [_chk("warn", "audio.format", f"{path.suffix} is not WAV; level and length were not checked")]
     try:
@@ -114,6 +115,93 @@ def check_audio(path: Path, rules: dict):
     if peak == 0:
         out.append(_chk("error", "audio.silent", "the file is silent"))
     return facts, out
+
+
+# ---------------------------------------------------------------------- video
+def _boxes(fh, start: int, end: int):
+    """Each box of an MP4 between two places in the file: its name, and where its body starts and ends."""
+    pos = start
+    while pos + 8 <= end:
+        fh.seek(pos)
+        head = fh.read(8)
+        if len(head) < 8:
+            return
+        size, name = struct.unpack(">I4s", head)
+        body = pos + 8
+        if size == 1:  # a box over 4 GB carries its size after its name
+            big = fh.read(8)
+            if len(big) < 8:
+                return
+            size, body = struct.unpack(">Q", big)[0], pos + 16
+        elif size == 0:  # the last box runs to the end
+            size = end - pos
+        if size < body - pos or pos + size > end:
+            return
+        yield name, body, pos + size
+        pos += size
+
+
+def _box(fh, start: int, end: int, *path: bytes):
+    """Where the first box at this path sits, as (start, end) of its body, or None."""
+    for name, a, b in _boxes(fh, start, end):
+        if name == path[0]:
+            return (a, b) if len(path) == 1 else _box(fh, a, b, *path[1:])
+    return None
+
+
+def _mp4_time(fh, at) -> tuple[int, int]:
+    """The time scale and the length an mvhd or mdhd box holds."""
+    fh.seek(at[0])
+    raw = fh.read(32)
+    if raw[:1] == b"\x01":
+        scale, length = struct.unpack(">IQ", raw[20:32])
+    else:
+        scale, length = struct.unpack(">II", raw[12:20])
+    return scale, length
+
+
+def video_facts(path: Path) -> dict:
+    """What an MP4 says about its picture track: seconds, frames a second, width, height and the count of frames."""
+    with open(path, "rb") as fh:
+        end = fh.seek(0, 2)
+        moov = _box(fh, 0, end, b"moov")
+        if not moov:
+            return {}
+        for name, a, b in _boxes(fh, *moov):
+            if name != b"trak":
+                continue
+            hdlr, tkhd, mdhd = _box(fh, a, b, b"mdia", b"hdlr"), _box(fh, a, b, b"tkhd"), _box(fh, a, b, b"mdia", b"mdhd")
+            stts = _box(fh, a, b, b"mdia", b"minf", b"stbl", b"stts")
+            if not (hdlr and tkhd and mdhd and stts):
+                continue
+            fh.seek(hdlr[0] + 8)
+            if fh.read(4) != b"vide":
+                continue
+            fh.seek(tkhd[1] - 8)  # the width and the height end the box, as 16.16 fixed point
+            width, height = (x >> 16 for x in struct.unpack(">II", fh.read(8)))
+            scale, length = _mp4_time(fh, mdhd)
+            fh.seek(stts[0] + 4)
+            (count,) = struct.unpack(">I", fh.read(4))
+            raw = fh.read(8 * min(count, (stts[1] - stts[0] - 8) // 8))
+            runs = [struct.unpack_from(">II", raw, i) for i in range(0, len(raw) - 7, 8)]  # so many frames, each this long
+            frames = sum(n for n, _ in runs)
+            # the frames' own times, added up: the length the track states can run a frame over when frames are stored out of order
+            length = sum(n * d for n, d in runs) or length
+            if not (scale and length and frames and width and height):
+                return {}
+            seconds = length / scale
+            return {"seconds": round(seconds, 3), "fps": round(frames / seconds, 3), "width": width, "height": height, "frames": frames}
+    return {}
+
+
+def check_video(path: Path, rules: dict):
+    """A clip's facts, read from the file. A WebM, or an MP4 this cannot read, has none; that is no fault."""
+    if path.suffix.lower() not in (".mp4", ".m4v", ".mov"):
+        return {}, []
+    try:
+        return video_facts(path), []
+    except (OSError, struct.error, ValueError, RecursionError):
+        return {}, []
 
 
 # --------------------------------------------------------------------- models
@@ -278,7 +366,9 @@ def check_batch(studio, batch: dict) -> dict:
             if entry["kind"] in ("image", "texture"):
                 f_facts, f_out = check_image(path, entry["kind"], rules)
             elif entry["kind"] == "audio":
-                f_facts, f_out = check_audio(path, rules)
+                f_facts, f_out = check_audio(path, rules, targets)
+            elif entry["kind"] == "video":
+                f_facts, f_out = check_video(path, rules)
             elif entry["kind"] == "model":
                 f_facts, f_out = check_model(path, rules, targets)
             entry["facts"] = f_facts

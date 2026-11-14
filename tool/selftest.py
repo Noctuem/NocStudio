@@ -219,6 +219,126 @@ def main() -> int:
         check(put_pic("a", b"") == 200 and not studio.marks_picture(marked["id"], "a").exists(), "an empty picture takes the marks away")
         shutil.rmtree(studio.batch_dir(marked["id"]))
 
+        # marks on a timeline: moments and stretches of a sound or a clip, each with its own note, colour and kind
+        from studiolib.store import clean_tempo, clock, marks_say
+        junk = {"kind": "sound", "file": "tune.wav", "length": 12.0, "fps": 30, "size": [640, 360], "notes": {"red": "not used here"}, "extra": 1,
+                "tempo": {"bpm": 120, "beats": 4, "first": 0, "guess": True},
+                "spans": [{"id": "m2", "c": "green", "tag": "keep", "t0": 5.0004, "t1": 3.2, "note": " the good part ", "where": "w" * 900,
+                           "facts": {"peak": -3.14159, "clips": True, "bands": [1, 2, 3, 4, 90], "name": "dropped", "Bad Key": 1}, "strokes": [{"c": "red", "r": 4, "p": [[1, 1]]}]},
+                          {"id": "m1", "c": "pink", "tag": "explode", "t0": 7.52, "note": "n" * 5000},
+                          {"id": "m1", "c": "red", "tag": "cut", "t0": 1, "t1": 2}, {"id": "x9", "t0": 1}, {"id": "m4", "t0": "soon"}, "junk",
+                          {"id": "m5", "c": "blue", "tag": "cut", "t0": -4, "t1": 99, "note": 7}]}
+        kept = clean_marks(junk)
+        check(set(kept) == {"kind", "file", "length", "tempo", "spans"} and kept["tempo"] == {"bpm": 120.0, "beats": 4, "first": 0.0}
+              and [s["id"] for s in kept["spans"]] == ["m5", "m2", "m1"]
+              and kept["spans"][0] == {"id": "m5", "c": "blue", "tag": "cut", "t0": 0.0, "t1": 12.0, "note": "", "where": ""}
+              and (kept["spans"][1]["t0"], kept["spans"][1]["t1"], kept["spans"][1]["note"], len(kept["spans"][1]["where"])) == (3.2, 5.0, "the good part", 800)
+              and kept["spans"][1]["facts"] == {"peak": -3.142, "clips": True, "bands": [1.0, 2.0, 3.0, 4.0, 90.0]} and "strokes" not in kept["spans"][1]
+              and kept["spans"][2] == {"id": "m1", "c": "red", "tag": "change", "t0": 7.52, "t1": 7.52, "note": "n" * 4000, "where": ""},
+              "marks on a sound keep each mark's times, note, colour and kind, in time order; a moment is a mark that ends where it starts; the rest is dropped")
+        many = clean_marks({"kind": "sound", "length": 60, "spans": [{"id": f"m{i}", "t0": i} for i in range(1, 60)]})
+        clip = clean_marks({"kind": "video", "file": "cut.mp4", "length": 4, "fps": 29.97, "size": [640, 360], "tempo": {"bpm": 9000},
+                            "spans": [{"id": "m1", "c": "red", "t0": 1.5, "facts": {"peak": -3},
+                                       "strokes": [{"c": "red", "r": 12, "p": [[10, 20], [30.6, 40], ["x", 1]]}, {"c": "pink", "r": 3, "p": [[1, 1]]}]}]})
+        check(len(many["spans"]) == 40 and clean_marks({"kind": "sound", "length": 3, "spans": []}) is None and clean_marks({"kind": "film", "spans": [{"id": "m1", "t0": 1}]}) is None
+              and (clip["fps"], clip["size"]) == (29.97, [640, 360]) and "tempo" not in clip and "facts" not in clip["spans"][0]
+              and clip["spans"][0]["strokes"] == [{"c": "red", "r": 12.0, "p": [[10, 20], [30, 40]]}],
+              "one sound or clip takes 40 marks; none at all is no marks; a mark on a clip keeps the paint on its frame, and the clip its frames a second and size")
+        check(clean_tempo({"bpm": 96, "beats": 3, "first": 0.5}) == {"bpm": 96.0, "beats": 3, "first": 0.5} and clean_tempo({"bpm": 5}) is None
+              and clock(3.2) == "0:03.20" and clock(67.523) == "1:07.52" and clock(59.999) == "1:00.00"
+              and marks_say({"spans": [{"tag": "keep", "note": ""}]}) and marks_say({"spans": [{"tag": "change", "note": "x"}]})
+              and not marks_say({"spans": [{"tag": "change", "note": ""}]}) and not marks_say({"notes": {"red": "x"}}),
+              "a tempo is kept only when it is one; a time reads 0:03.20; a mark says something when it has a note, or is a Cut or a Keep")
+        tool_py = str(Path(__file__).resolve().parent / "studio.py")
+        def cli(*args):
+            return subprocess.run([sys.executable, tool_py, "--home", str(home), *args], capture_output=True, text=True, encoding="utf-8")
+        tune = studio.new_batch("tune", kind="audio", mode="rate", ask="Approve the tune?", look_at=["The second bar"], targets={"max_seconds": 5})
+        make_wav(src / "tune.wav", -22.0, 4.0)
+        added = cli("add", tune["id"], str(src / "tune.wav"), "--title", "Tune", "--tool", "selftest", "--bpm", "96", "--beats", "3", "--first-beat", "0.5")
+        lone, slow = cli("add", tune["id"], str(src / "tune.wav"), "--beats", "3"), cli("add", tune["id"], str(src / "tune.wav"), "--bpm", "4")
+        filed = studio.publish(tune["id"])
+        cand = studio.load_batch(tune["id"])["candidates"]
+        check(added.returncode == 0 and len(cand) == 1 and cand[0]["tempo"] == {"bpm": 96.0, "beats": 3, "first": 0.5}
+              and lone.returncode == 2 and "--bpm" in lone.stderr and slow.returncode == 2 and "20 to 400" in slow.stderr,
+              "a sound is filed with its tempo by --bpm, --beats and --first-beat; beats without a tempo, or a tempo that is not one, is refused")
+        check(filed["ready"] and cand[0]["facts"]["seconds"] == 4.0, "a batch's own target lets a sound run longer than the Studio's usual limit")
+        def put_mark(cid, span, data, batch_id=tune["id"]):
+            req = urllib.request.Request(base + f"/api/batch/{batch_id}/marks/{cid}" + (f"/{span}" if span else ""), data=data, method="PUT", headers={"X-Studio-File": "1"})
+            try:
+                with urllib.request.urlopen(req, timeout=10) as res:
+                    return res.status
+            except urllib.error.HTTPError as err:
+                return err.code
+        spans = [{"id": "m1", "c": "red", "tag": "change", "t0": 0.4, "t1": 0.4, "note": "a click here", "where": "at 0:00.40; before bar 1"},
+                 {"id": "m2", "c": "yellow", "tag": "keep", "t0": 1.2, "t1": 2.5, "note": "", "where": "0:01.20 to 0:02.50 (1.30 s); bar 1 beat 2 to bar 2 beat 1; peak -22.0 dBFS"},
+                 {"id": "m3", "c": "green", "tag": "cut", "t0": 3.0, "t1": 3.5, "note": "drags\non", "where": "0:03.00 to 0:03.50 (0.50 s)"}]
+        timed = {"kind": "sound", "file": "tune.wav", "length": 4.0, "tempo": cand[0]["tempo"], "spans": spans}
+        status, _ = http("PUT", base + f"/api/batch/{tune['id']}/draft", {"candidates": {"a": {"marks": timed}}})
+        sent = [put_mark("a", "", png), put_mark("a", "m1", png), put_mark("a", "m2", png), put_mark("a", "m3", png)]
+        refused = [put_mark("a", "m1", b"not a picture"), put_mark("zz", "m1", png), put_mark("a", "sheet", png), put_mark("a", "..", png)]
+        own = lambda span: studio.mark_picture(tune["id"], "a", span)  # noqa: E731
+        check(status == 200 and sent == [200] * 4 and refused == [400] * 4 and own("m2").read_bytes() == png
+              and own("m2") == studio.batch_dir(tune["id"]) / "marks" / "a" / "m2.png",
+              "each mark can have its own picture beside the sheet, sent as the sheet is; anything but a PNG, an unknown candidate or a name that is no mark is refused")
+        timed["spans"] = spans[:2]
+        http("PUT", base + f"/api/batch/{tune['id']}/draft", {"candidates": {"a": {"marks": timed}}})
+        check(own("m1").exists() and own("m2").exists() and not own("m3").exists() and studio.marks_picture(tune["id"], "a").exists()
+              and put_mark("a", "m2", b"") == 200 and not own("m2").exists(),
+              "saving a draft throws away the picture of a mark that is gone and keeps the rest; an empty picture takes one away")
+        timed["spans"] = [dict(spans[0], note="")]
+        status, body = http("POST", base + f"/api/batch/{tune['id']}/submit", {"action": "another_round", "candidates": {"a": {"marks": timed}}})
+        check(status == 400 and "direction" in body["error"], "a mark with no note that is neither a Cut nor a Keep gives another round no direction")
+        timed["spans"] = [dict(s, note="") if s["id"] == "m1" else s for s in spans]
+        put_mark("a", "m3", png)
+        status, body = http("POST", base + f"/api/batch/{tune['id']}/submit", {"action": "another_round", "candidates": {"a": {"marks": timed}}})
+        item = next((x for x in studio.todo() if x["batch"] == tune["id"]), {"unmarked": [{}], "steps": []})
+        row = item["unmarked"][0].get("marks") or {"spans": []}
+        check(status == 200 and row.get("on") == "sound" and row["picture"] == str(studio.marks_picture(tune["id"], "a"))
+              and (row["file"], row["length"], row["tempo"]["bpm"]) == ("tune.wav", 4.0, 96.0)
+              and [(m["number"], m["id"], m["colour"], m["tag"], m["moment"]) for m in row["spans"]]
+              == [(1, "m1", "red", "change", True), (2, "m2", "yellow", "keep", False), (3, "m3", "green", "cut", False)]
+              and [bool(m["picture"]) for m in row["spans"]] == [True, False, True] and row["spans"][2]["picture"] == str(own("m3"))
+              and row["spans"][2]["note"] == "drags\non" and row["spans"][1]["where"].startswith("0:01.20 to 0:02.50"),
+              "a Keep with no note is direction enough; Claude gets the sheet, then each mark in time order: number, colour, kind, moment or stretch, note, where, its own picture")
+        steps = " ".join(item["steps"])
+        check("marks on the timeline of a" in steps and "KEEP is a fence" in steps and "CUT means that stretch goes" in steps
+              and "open the pictures" in steps and "in colours" not in steps,
+              "the steps say how to read marks on a timeline: the pictures first, a Keep is a fence, a Cut goes, a note is about its own part")
+        listed = cli("todo").stdout
+        check("marks on the timeline of the sound (tune.wav, 4.00 s, 96 beats a minute, 3 to the bar); the sheet: " + row["picture"] in listed
+              and "1. change, at 0:00.40, red: (no note)" in listed and "2. KEEP, 0:01.20 to 0:02.50 (1.30 s), yellow: (no note)" in listed
+              and '3. CUT, 0:03.00 to 0:03.50 (0.50 s), green: "drags\non"' in listed
+              and "where: 0:01.20 to 0:02.50 (1.30 s); bar 1 beat 2 to bar 2 beat 1; peak -22.0 dBFS" in listed
+              and "its own picture: " + str(own("m3")) in listed and "marked in colours" not in listed.split(tune["id"])[1].split("do:")[0],
+              "todo prints them so: the sheet, then a line a mark with KEEP and CUT in capitals, its times, the note exactly, where, and its picture")
+        brief = studio.brief(tune["id"])
+        check("marks on the timeline of the sound `tune.wav` (4.00 s, 96 beats a minute, 3 to the bar)" in brief and f"`batches/{tune['id']}/marks/a.png`" in brief
+              and "- **2. KEEP, 0:01.20 to 0:02.50 (1.30 s), yellow** (0:01.20 to 0:02.50 (1.30 s); bar 1 beat 2" in brief and "(no note for this mark)" in brief
+              and "- **3. CUT, 0:03.00 to 0:03.50 (0.50 s), green**" in brief and "  > drags\n  > on" in brief
+              and f"Its own picture: `batches/{tune['id']}/marks/a/m3.png`" in brief and "KEEP is a fence" in brief and "in colours" not in brief,
+              "the brief for the next round says the same: every mark, the user's words quoted, the pictures by their paths")
+        (studio.batch_dir(tune["id"]) / "result.json").write_text('{"action": "another_round"}', encoding="utf-8")
+        check(put_mark("a", "m1", png) == 400 and put_mark("a", "", png) == 400, "a closed batch takes no more pictures of marks")
+        shutil.rmtree(studio.batch_dir(tune["id"]))
+        schema = json.loads((Path(__file__).resolve().parent / "schemas" / "verdict.schema.json").read_text(encoding="utf-8"))
+        in_schema = schema["properties"]["candidates"]["additionalProperties"]["properties"]["marks"]["properties"]
+        of_span = in_schema["spans"]["items"]["properties"]
+        check({"sound", "video"} <= set(in_schema["kind"]["enum"]) and set(kept) | set(clip) <= set(in_schema)
+              and set().union(*(set(s) for s in kept["spans"] + clip["spans"])) <= set(of_span)
+              and of_span["tag"]["enum"] == ["change", "cut", "keep"] and in_schema["spans"]["maxItems"] == 40,
+              "the verdict's schema names every field kept for marks on a sound and a clip")
+        from studiolib import checks as filechecks
+        clips = Path(__file__).resolve().parent / "samples_src" / "video"
+        (src / "odd.webm").write_bytes(b"\x1a\x45\xdf\xa3" + b"\0" * 64)
+        (src / "cut_short.mp4").write_bytes((clips / "clip_bars.mp4").read_bytes()[:700])
+        (src / "not_one.mp4").write_bytes(b"\0\0\0\x08moov" + b"junk" * 9)
+        seen = {n: filechecks.check_video(clips / f"clip_{n}.mp4", {}) for n in ("bars", "zoom", "cells")}
+        check(seen["bars"] == ({"seconds": 4.0, "fps": 30.0, "width": 640, "height": 360, "frames": 120}, []) and seen["zoom"] == seen["bars"]
+              and seen["cells"] == ({"seconds": 4.0, "fps": 15.0, "width": 640, "height": 360, "frames": 60}, []),
+              "a clip's length, frames a second, size and count of frames are read from the MP4 itself")
+        check(all(filechecks.check_video(src / n, {}) == ({}, []) for n in ("odd.webm", "cut_short.mp4", "not_one.mp4", "tex.png")),
+              "a WebM, or an MP4 that cannot be read, has no facts and is no fault")
+
         # the overview: the road, the build in hand, what only the user can do
         studio.set_milestone("M1", name="One room", status="current")
         studio.set_now(headline="Built.", next=["The user's picks"])
@@ -894,7 +1014,7 @@ def main() -> int:
         made = samples.build(studio, model=str(src / "puppet.glb"))
         state = studio.state()
         kinds = {b["kind"] for b in state["samples"]}
-        check(len(made) == 10 and {"image", "texture", "model", "audio", "video", "text", "in_app", "question"} <= kinds
+        check(len(made) == 11 and {"image", "texture", "model", "audio", "video", "text", "in_app", "question"} <= kinds
               and all(b["sample"] and b["status"] == "open" for b in state["samples"])
               and [b["id"] for b in state["samples"]][:2] == ["sample-motions", "sample-models"],
               "the samples are made, one for each thing the user can be asked to judge")
@@ -903,6 +1023,20 @@ def main() -> int:
         moves = studio.load_batch("sample-motions")
         check(all(c.get("motion", "").startswith("sample.figure:") for c in moves["candidates"])
               and state["motions"]["sample.figure"].get("sample") is True, "the motion sample loops a figure with made-up clips")
+        long_one = studio.load_batch("sample-tune")
+        check(long_one["status"] == "open" and long_one["candidates"][0]["tempo"] == {"bpm": 120.0, "beats": 4, "first": 0.0}
+              and long_one["candidates"][0]["facts"]["seconds"] == 12.0 and long_one["candidates"][0]["facts"]["peak_dbfs"] <= -20.0
+              and not list((Path(__file__).resolve().parent / "samples_src").rglob("tune*")),
+              "one sample is a longer sound written by script and filed with its tempo, to try marks on")
+        check([c["facts"].get("fps") for c in studio.load_batch("sample-video")["candidates"]] == [30.0, 30.0, 15.0]
+              and all(c["facts"]["frames"] == c["facts"]["fps"] * 4 for c in studio.load_batch("sample-video")["candidates"]),
+              "filing a clip keeps its facts on it, as a sound's are kept")
+        studio.save_draft("sample-tune", {"candidates": {"a": {"marks": {"kind": "sound", "length": 12.0, "spans": [{"id": "m1", "t0": 8, "t1": 10, "tag": "cut"}]}}}})
+        studio.put_marks_picture("sample-tune", "a", (src / "tex.png").read_bytes())
+        studio.put_mark_picture("sample-tune", "a", "m1", (src / "tex.png").read_bytes())
+        studio.reset_sample("sample-tune")
+        check(studio.load_batch("sample-tune")["status"] == "open" and not (studio.batch_dir("sample-tune") / "marks").exists(),
+              "a sample started over loses the pictures of its marks with them")
         studio.save_draft("sample-pictures", {"candidates": {"a": {"call": "keep"}}})
         studio.submit("sample-pictures", {"action": "ship", "candidates": {"a": {"call": "winner", "score": 8, "note": "this one"}}})
         after = (len(studio.state()["batches"]), len(studio.todo()), len(studio.decisions()), len(studio.slots()))
@@ -1151,7 +1285,7 @@ def main() -> int:
         check(new.config["project"] == "Other Project" and new.repo_root() == other.resolve() and made["port"] == setup.FIRST_PORT + 1
               and made["home"] in skill and "{{" not in skill and (Path(made["home"]) / "studio.cmd").exists()
               and new.state()["has_test_runs"] is False and len(setup.studios(reg)) == 2
-              and len(new.state()["samples"]) == 9 and not new.state()["batches"],
+              and len(new.state()["samples"]) == 10 and not new.state()["batches"],
               "a Studio is made for another project, with its own home, port, launcher and skill")
         made_skill = setup.install_create_skill(tmp / "skills").read_text(encoding="utf-8")
         check(str(setup.KIT) in made_skill and "{{" not in made_skill, "the setup skill is written with this tool's own path in it")

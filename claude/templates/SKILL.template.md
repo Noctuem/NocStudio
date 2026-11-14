@@ -43,7 +43,8 @@ S new <slug> --kind <image|texture|model|audio|video|in_app|question|text> \
       [--target height_m=1.8] [--target max_triangles=1500] \
       [--dest <path in the repo>] [--brief-file <what the makers were told>]
 S add <batch> <file> [<more files>] --title "<short name>" --summary "<one line>" \
-      --tool <tool> --seed <seed> --prompt-file <file> --source <script that made it>
+      --tool <tool> --seed <seed> --prompt-file <file> --source <script that made it> \
+      [--bpm 120 [--beats 4] [--first-beat 0.0]]
 S context <batch> <reference picture> --label "<what it is>"
 S file <batch>
 ```
@@ -73,6 +74,12 @@ What makes a batch worth their time:
   that says how ("Dry crack", "Hall report"), not "Option 3".
 - **Provenance on every generated file**: tool, seed, prompt, the script.
 - **Hard targets** go in `--target`, so the checks hold the makers to them.
+- **Music is filed with its tempo** when you know it: `--bpm` on `add`, with
+  `--beats` to the bar (4 unless you say) and `--first-beat`, the second the
+  first bar starts at. The page then counts bars on its ruler and names the
+  bar and beat of every mark they make. Never guess a tempo: leave it out. A
+  sound longer than the Studio's usual limit needs
+  `--target max_seconds=<n>` on the batch (`max_peak_dbfs` likewise).
 - For something that must be judged **in the running app** (`--kind in_app`),
   add no file: give each candidate `--label` with the exact words shown over
   it in the app, and the batch `--launch` with the line that starts the app.
@@ -134,6 +141,19 @@ colours, a note for each colour. `todo` names the picture of them
 and says where each colour sits; on a motion, the clip and the second. Open
 the picture before you act: a colour's note is about that part only. A note
 sent from the Library's Mark button carries the same picture as its file.
+On a **sound** (and on a clip) the marks are on its time instead: each is a
+moment or a stretch with its own note, numbered in time order. You cannot
+hear a sound or watch a clip, so `todo` gives you what you can read: the
+sheet (`marks/<candidate>.png`: the whole wave, every mark coloured and
+numbered on it, a legend under it), then a line for each mark with its times
+and the user's note, a `where` line the page measured (the bar and beat when
+there is a tempo, peak and RMS level, whether it clips, where the energy sits,
+each against the whole sound), and the mark's own picture when it has one
+(`marks/<candidate>/<mark>.png`). Open the pictures first. Each mark says what
+it asks for: a plain change is the part to fix; **KEEP** is a fence around
+that part, which must come through the redo as it is; **CUT** means that
+stretch goes. A note is about its own moment or stretch only, so change that
+part and leave the rest alone unless the note on the whole candidate says more.
 For each verdict, in order:
 
 - **Ship** (`ship`, `ship_and_iterate`): `S import <batch>` copies the winner

@@ -65,6 +65,10 @@ EDIT_MAX = 400_000  # characters of the user's own version of a text candidate
 MARK_COLOURS = ("red", "yellow", "green", "blue", "purple")  # the user's marks on a picture or a model, in this order
 MARK_LIMIT = 200_000  # face numbers or stroke points kept on one candidate
 MARK_PICTURE_MAX = 16 * 1024 * 1024
+TIMELINE_KINDS = ("sound", "video")  # marks on these are moments and stretches of time, each with its own note
+MARK_TAGS = ("change", "cut", "keep")  # what a mark on a sound or a clip asks for; keep is a fence around that part
+MARK_SPANS = 40  # marks kept on one sound or clip
+MARK_ID = re.compile(r"m[0-9]{1,6}")  # a mark's own name: given once by the page, and the name of its picture
 HAND_STATUS = ("open", "later", "done", "parked")  # later: the user's, but nothing waits on it yet
 HAND_KINDS = ("action", "decision", "play", "info")  # something to do, a question to answer, a build to try, a thing to know
 # how the user likes the page: one answer for every Studio here (STUDIO_PREFS names another file, for a test)
@@ -105,6 +109,8 @@ class StudioError(Exception):
 def clean_marks(raw) -> dict | None:
     """The user's marks on a candidate, as the page sends them: a note and a place for each colour, and the
     strokes (on a picture) or the face numbers (on a model). Anything else is dropped."""
+    if isinstance(raw, dict) and raw.get("kind") in TIMELINE_KINDS:
+        return clean_timeline(raw)
     if not isinstance(raw, dict) or raw.get("kind") not in ("image", "model"):
         return None
     pick = lambda d, n: {c: str(v).strip()[:n] for c, v in (d or {}).items() if c in MARK_COLOURS and isinstance(v, str)}  # noqa: E731
@@ -150,6 +156,103 @@ def clean_marks(raw) -> dict | None:
         if moments:
             out["moments"] = moments
     return out if notes or where else None
+
+
+def clean_tempo(raw) -> dict | None:
+    """A tempo as it is kept: beats a minute, beats to the bar, and the second the first bar starts at."""
+    num = lambda x: isinstance(x, (int, float)) and not isinstance(x, bool) and x == x and abs(x) != float("inf")  # noqa: E731
+    if not isinstance(raw, dict) or not num(raw.get("bpm")) or not 20 <= raw["bpm"] <= 400:
+        return None
+    beats, first = raw.get("beats", 4), raw.get("first", 0.0)
+    return {"bpm": round(float(raw["bpm"]), 3), "beats": int(beats) if num(beats) and 1 <= int(beats) <= 32 else 4,
+            "first": round(float(first), 3) if num(first) and 0 <= first <= 86400 else 0.0}
+
+
+def clean_timeline(raw: dict) -> dict | None:
+    """The user's marks on a sound or a clip, as the page sends them: moments and stretches of time, each with its
+    own note, colour and kind (change, cut or keep); on a clip a mark may carry paint on its first frame. Anything
+    else is dropped. A mark with no note is kept: a Keep or a Cut says something by itself."""
+    num = lambda x: isinstance(x, (int, float)) and not isinstance(x, bool) and x == x and abs(x) != float("inf")  # noqa: E731
+    video = raw["kind"] == "video"
+    length = round(float(raw["length"]), 3) if num(raw.get("length")) and 0 < raw["length"] <= 86400 else 0.0
+    out = {"kind": raw["kind"], "file": str(raw.get("file") or "")[:300], "length": length}
+    if video:
+        if num(raw.get("fps")) and 1 <= raw["fps"] <= 1000:
+            out["fps"] = round(float(raw["fps"]), 3)
+        size = raw.get("size")
+        if isinstance(size, list) and len(size) == 2 and all(num(x) and 0 < x <= 100_000 for x in size):
+            out["size"] = [int(size[0]), int(size[1])]
+    tempo = clean_tempo(raw.get("tempo"))
+    if tempo:
+        out["tempo"] = tempo
+    spans, seen, budget = [], set(), MARK_LIMIT
+    for s in raw.get("spans") or []:
+        if len(spans) >= MARK_SPANS:
+            break
+        if not isinstance(s, dict) or not isinstance(s.get("id"), str) or not MARK_ID.fullmatch(s["id"]) or s["id"] in seen:
+            continue
+        if not num(s.get("t0")):
+            continue
+        top = length or 86400.0
+        t0 = min(top, max(0.0, float(s["t0"])))
+        t1 = min(top, max(0.0, float(s["t1"]))) if num(s.get("t1")) else t0
+        t0, t1 = round(min(t0, t1), 3), round(max(t0, t1), 3)
+        span = {"id": s["id"], "c": s["c"] if s.get("c") in MARK_COLOURS else MARK_COLOURS[0],
+                "tag": s["tag"] if s.get("tag") in MARK_TAGS else MARK_TAGS[0], "t0": t0, "t1": t1,
+                "note": s["note"].strip()[:4000] if isinstance(s.get("note"), str) else "",
+                "where": s["where"].strip()[:800] if isinstance(s.get("where"), str) else ""}
+        if not video and isinstance(s.get("facts"), dict):  # what the page measured in that stretch of the sound: plain numbers
+            facts = {}
+            for key, val in list(s["facts"].items())[:40]:
+                if not isinstance(key, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,23}", key):
+                    continue
+                if isinstance(val, bool) or num(val):
+                    facts[key] = val if isinstance(val, bool) else round(float(val), 3)
+                elif isinstance(val, list) and len(val) <= 8 and all(num(x) for x in val):
+                    facts[key] = [round(float(x), 3) for x in val]
+            if facts:
+                span["facts"] = facts
+        if video:  # paint on the frame at the mark's start, in the clip's own pixels
+            strokes = []
+            for k in s.get("strokes") or []:
+                if budget <= 0:
+                    break
+                if not isinstance(k, dict) or k.get("c") not in MARK_COLOURS + ("erase",):
+                    continue
+                pts = [[int(p[0]), int(p[1])] for p in k.get("p") or [] if isinstance(p, list) and len(p) == 2 and num(p[0]) and num(p[1])][:budget]
+                budget -= len(pts)
+                if pts:
+                    strokes.append({"c": k["c"], "r": float(k["r"]) if num(k.get("r")) and 0 < k["r"] < 100_000 else 1.0, "p": pts})
+            if strokes:
+                span["strokes"] = strokes
+        seen.add(s["id"])
+        spans.append(span)
+    spans.sort(key=lambda x: (x["t0"], x["t1"], int(x["id"][1:])))  # in time order: the page numbers them 1, 2, 3 this way
+    out["spans"] = spans
+    return out if spans else None
+
+
+def marks_say(marks) -> bool:
+    """Whether the marks on a clip or a sound say anything by themselves: a note, a Cut or a Keep."""
+    spans = (marks or {}).get("spans") if isinstance(marks, dict) else None
+    return any(isinstance(s, dict) and (s.get("note") or s.get("tag") in ("cut", "keep")) for s in spans or [])
+
+
+def clock(t: float) -> str:
+    """A time on a sound, as the page writes it: 0:03.20."""
+    t = round(max(0.0, float(t)), 2)
+    return f"{int(t // 60)}:{t % 60:05.2f}"
+
+
+def span_head(row: dict, on: str) -> str:
+    """One mark on a clip or a sound in a line: its number, KEEP or CUT in capitals, when, and its colour."""
+    tag = {"keep": "KEEP", "cut": "CUT"}.get(row.get("tag"), "change")
+    say = (lambda t: f"{t:.2f} s") if on == "video" else clock
+    if row["t1"] > row["t0"]:
+        when = f"{say(row['t0'])} to {say(row['t1'])} ({row['t1'] - row['t0']:.2f} s)"
+    else:
+        when = f"at {say(row['t0'])}"
+    return f"{row['number']}. {tag}, {when}, {row['colour']}"
 
 
 def fresh_slot(slot):
@@ -508,8 +611,11 @@ class Studio:
 
     def add_candidate(self, batch_id: str, files: list, *, cid: str = "", title: str = "",
                       summary: str = "", label: str = "", body: str = "", recommended: bool = False,
-                      made_with: dict | None = None, slot: str = "", dest: str = "", motion: str = "") -> dict:
+                      made_with: dict | None = None, slot: str = "", dest: str = "", motion: str = "",
+                      tempo: dict | None = None) -> dict:
         batch = self._editable(batch_id)
+        if tempo and not clean_tempo(tempo):
+            raise StudioError("a tempo is 20 to 400 beats a minute; give it as --bpm 120")
         if motion:
             self.motion_ref(motion, sample=bool(batch.get("sample")))
         taken = {c["id"] for c in batch["candidates"]}
@@ -543,6 +649,8 @@ class Studio:
             cand["dest"] = dest
         if motion:
             cand["motion"] = motion
+        if tempo:  # given by the maker, never worked out: the page counts bars from it on a sound's timeline
+            cand["tempo"] = clean_tempo(tempo)
         batch["candidates"].append(cand)
         batch["ready"] = False
         self.save_batch(batch)
@@ -568,7 +676,7 @@ class Studio:
         files = [self.batch_dir(from_batch) / f["path"] for f in old.get("files", [])]
         cand = self.add_candidate(batch_id, files, cid=cid, title=old.get("title", ""),
                                   summary=old.get("summary", ""), label=old.get("label", ""),
-                                  body=old.get("body", ""), made_with=old.get("made_with"))
+                                  body=old.get("body", ""), made_with=old.get("made_with"), tempo=old.get("tempo"))
         batch = self.load_batch(batch_id)
         for c in batch["candidates"]:
             if c["id"] == cand["id"]:
@@ -634,10 +742,59 @@ class Studio:
         tmp.write_bytes(data)
         os.replace(tmp, path)
 
+    def mark_picture(self, batch_id: str, cid: str, span: str) -> Path:
+        """The picture of one mark on a clip or a sound: what is at its start, large enough to see."""
+        if not MARK_ID.fullmatch(str(span)):
+            raise StudioError(f"{span!r} is not a mark; a mark is named m1, m2 and so on")
+        return self.batch_dir(batch_id) / "marks" / safe_id(cid, "candidate") / f"{span}.png"
+
+    def put_mark_picture(self, batch_id: str, cid: str, span: str, data: bytes) -> None:
+        """Keep the page's picture of one mark; an empty one takes it away."""
+        batch = self.load_batch(batch_id)
+        if batch["status"] == "processed":
+            raise StudioError("this batch is closed")
+        if cid not in [c["id"] for c in batch.get("candidates", [])]:
+            raise StudioError(f"no candidate {cid!r} in {batch_id}")
+        path = self.mark_picture(batch_id, cid, span)
+        if not data:
+            path.unlink(missing_ok=True)
+            return
+        if len(data) > MARK_PICTURE_MAX or not data.startswith(b"\x89PNG\r\n\x1a\n"):
+            raise StudioError("send the mark's picture as a PNG of at most 16 MB")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_bytes(data)
+        os.replace(tmp, path)
+
+    def _prune_mark_pictures(self, batch: dict, verdict: dict) -> None:
+        """Throw away the pictures of marks that are no longer in the verdict."""
+        for cand in batch.get("candidates", []):
+            folder = self.batch_dir(batch["id"]) / "marks" / cand["id"]
+            if not folder.is_dir():
+                continue
+            marks = (verdict["candidates"].get(cand["id"]) or {}).get("marks") or {}
+            live = {s["id"] for s in marks.get("spans") or []}
+            for path in folder.glob("*.png"):
+                if path.stem not in live:
+                    path.unlink(missing_ok=True)
+            if not any(folder.iterdir()):
+                folder.rmdir()
+
     def marks_view(self, batch_id: str, cid: str, marks: dict | None) -> dict | None:
         """The user's marks on a candidate as Claude reads them: the picture, then each colour's note and place."""
         if not marks:
             return None
+        if marks.get("kind") in TIMELINE_KINDS:
+            # a clip or a sound: the sheet, then each mark in time order with its number, its kind, when, the note,
+            # where, and its own picture when there is one
+            sheet, rows = self.marks_picture(batch_id, cid), []
+            for n, s in enumerate(marks.get("spans") or [], 1):
+                own = self.mark_picture(batch_id, cid, s["id"])
+                rows.append({"number": n, "id": s["id"], "colour": s["c"], "tag": s["tag"], "moment": s["t1"] <= s["t0"],
+                             "t0": s["t0"], "t1": s["t1"], "note": s.get("note", ""), "where": s.get("where", ""),
+                             "picture": str(own) if own.exists() else ""})
+            return dict({k: marks[k] for k in ("file", "length", "fps", "size", "tempo") if k in marks},
+                        on=marks["kind"], picture=str(sheet) if sheet.exists() else "", colours=[], spans=rows)
         picture = self.marks_picture(batch_id, cid)
         colours = [dict({"colour": c, "note": (marks.get("notes") or {}).get(c, ""), "where": (marks.get("where") or {}).get(c, "")},
                         **({"moment": marks["moments"][c]} if c in (marks.get("moments") or {}) else {}))
@@ -648,7 +805,9 @@ class Studio:
         batch = self.load_batch(batch_id)
         if batch["status"] == "processed":
             raise StudioError("this batch is closed")
-        write_json(self.batch_dir(batch_id) / "draft.json", self._clean_verdict(batch, draft, strict=False))
+        verdict = self._clean_verdict(batch, draft, strict=False)
+        write_json(self.batch_dir(batch_id) / "draft.json", verdict)
+        self._prune_mark_pictures(batch, verdict)
 
     def _clean_verdict(self, batch: dict, raw: dict, strict: bool) -> dict:
         mode = batch.get("mode", "pick")
@@ -741,6 +900,7 @@ class Studio:
         if action in ("another_round", "ship_and_iterate"):
             said = verdict.get("note") or any(c.get("note") or c.get("call") in ("keep", "redo")
                                               or any((c.get("marks") or {}).get("notes", {}).values())
+                                              or marks_say(c.get("marks"))
                                               for c in verdict["candidates"].values())
             if not said:
                 return "Another round needs a direction: write a note, or mark a Keep or a Redo."
@@ -757,6 +917,7 @@ class Studio:
         verdict["revision"] = int((batch.get("verdict") or {}).get("revision", 0)) + 1
         folder = self.batch_dir(batch_id)
         self._write_edits(batch, verdict)
+        self._prune_mark_pictures(batch, verdict)
         write_json(folder / "verdict.json", verdict)
         with open(folder / "verdicts.log.jsonl", "a", encoding="utf-8", newline="\n") as fh:
             fh.write(json.dumps(verdict, ensure_ascii=False) + "\n")  # the user's words are never lost
@@ -781,6 +942,7 @@ class Studio:
             raise StudioError("only a sample can be started over; a real verdict is changed, never erased")
         for name in ("draft.json", "verdict.json", "verdicts.log.jsonl", "next-round-brief.md"):
             (self.batch_dir(batch_id) / name).unlink(missing_ok=True)
+        shutil.rmtree(self.batch_dir(batch_id) / "marks", ignore_errors=True)  # the pictures of the marks go with them
 
     # ------------------------------------------------------------------ slots
     def slots(self) -> list[dict]:
@@ -1032,7 +1194,17 @@ class Studio:
                 steps.append(f"The user edited the text of {cand['id']} on the card. Their version is {edits[cand['id']]}; "
                              f"it is the one that counts (import copies it). See what they changed, in the home: "
                              f"git diff --no-index --word-diff \"{first}\" \"{edits[cand['id']]}\"")
+        timed = [c["id"] for c in batch["candidates"]
+                 if ((verdict["candidates"].get(c["id"]) or {}).get("marks") or {}).get("kind") in TIMELINE_KINDS]
+        if timed:
+            steps.append(f"The user put marks on the timeline of {', '.join(timed)}: moments and stretches of time, each with its own "
+                         "note. You cannot hear a sound or watch a clip, so before anything else open the pictures listed with the "
+                         "candidate: the sheet first (every mark numbered on it, with a legend), then a mark's own picture where it "
+                         "has one. Then read each mark: its times, the user's note, and its 'where' line, which the page measured. "
+                         "A note is about its own moment or stretch only. KEEP is a fence around that part: it must come through the "
+                         "redo as it is. CUT means that stretch goes. A plain change with no note still says that part is wrong.")
         marked = [c["id"] for c in batch["candidates"] if (verdict["candidates"].get(c["id"]) or {}).get("marks")]
+        marked = [c for c in marked if c not in timed]
         if marked:
             steps.append(f"The user marked parts of {', '.join(marked)} in colours, with a note for each colour. Before anything else, "
                          "open each marked picture (listed with the candidate; the marks are painted on it, with a legend) and read "
@@ -1077,6 +1249,24 @@ class Studio:
             "import": batch.get("import") or {}, "steps": steps,
         }
 
+    def _brief_spans(self, marks: dict) -> list[str]:
+        """The marks on a clip or a sound, as the next round's makers read them."""
+        here = lambda p: f"`{Path(p).relative_to(self.home).as_posix()}`"  # noqa: E731
+        what = "clip" if marks["on"] == "video" else "sound"
+        tempo = marks.get("tempo")
+        lines = [f"The user put marks on the timeline of the {what}" + (f" `{marks['file']}`" if marks.get("file") else "")
+                 + (f" ({marks['length']:.2f} s" + (f", {tempo['bpm']:g} beats a minute, {tempo['beats']} to the bar" if tempo else "") + ")"
+                    if marks.get("length") else "")
+                 + ". Each note is about its own moment or stretch only. KEEP is a fence around that part: it must come "
+                   "through the redo as it is. CUT means that stretch goes."
+                 + (f" Open the sheet first, {here(marks['picture'])}: every mark is numbered on it, with a legend." if marks["picture"] else ""), ""]
+        for m in marks["spans"]:
+            said = "> " + m["note"].replace("\n", "\n> ") if m["note"] else "(no note for this mark)"
+            lines += [f"- **{span_head(m, marks['on'])}**" + (f" ({m['where']})" if m["where"] else "") + ":", "", "  " + said.replace("\n", "\n  ")]
+            if m["picture"]:
+                lines += ["", f"  Its own picture: {here(m['picture'])}"]
+        return lines
+
     def brief(self, batch_id: str) -> str:
         """What the next round's makers are told: the old ask plus everything the user said."""
         batch = self.load_batch(batch_id)
@@ -1109,6 +1299,9 @@ class Studio:
                 if entry.get("note"):
                     lines += ["", "> " + entry["note"].replace("\n", "\n> ")]
                 marks = self.marks_view(batch_id, cand["id"], entry.get("marks"))
+                if marks and "spans" in marks:
+                    lines += ["", *self._brief_spans(marks)]
+                    marks = None
                 if marks:
                     pic = self.marks_picture(batch_id, cand["id"])
                     lines += ["", "The user marked parts of it in colours"

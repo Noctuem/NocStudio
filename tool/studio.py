@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from studiolib import bake, board, checks, notes as notebox, server, setup, sync  # noqa: E402
 from studiolib.store import (HAND_KINDS, HAND_STATUS, KINDS, MILESTONE_STATUS, MODES, NOTE_KINDS, OLD_KIND,  # noqa: E402
                              OLD_SOURCE, OLD_STATUS, SLOT_STATUS, TRIAGE_STATUS, Studio, StudioError)
+from studiolib.store import span_head  # noqa: E402
 
 
 def today_names(argv: list[str]) -> list[str]:
@@ -181,9 +182,14 @@ def cmd_add(a):
         made["params"] = pairs(a.param)
     if a.ref:
         made["refs"] = a.ref
+    if a.bpm is None and (a.beats is not None or a.first_beat is not None):
+        raise StudioError("--beats and --first-beat say how to count a tempo; give the tempo too, as --bpm 120")
+    tempo = None if a.bpm is None else {"bpm": a.bpm, "beats": 4 if a.beats is None else a.beats, "first": a.first_beat or 0.0}
+    if tempo and not (1 <= tempo["beats"] <= 32 and tempo["first"] >= 0):
+        raise StudioError("--beats is 1 to 32 beats to the bar, and --first-beat is a second from the start, 0 or later")
     cand = s.add_candidate(a.batch, a.files, cid=a.id, title=a.title, summary=a.summary, label=a.label,
                            body=text_arg(a.body, a.body_file), recommended=a.recommended, made_with=made,
-                           slot=a.slot, dest=a.dest, motion=a.motion)
+                           slot=a.slot, dest=a.dest, motion=a.motion, tempo=tempo)
     print(f"{a.batch}: added candidate {cand['id']} ({len(cand['files'])} file{'s' if len(cand['files']) != 1 else ''})")
 
 
@@ -387,6 +393,20 @@ def cmd_todo(a):
                 if row.get("edited"):
                     print(f"           the user edited it; their version: {row['edited']}")
                 marks = row.get("marks")
+                if marks and "spans" in marks:  # a clip or a sound: moments and stretches of time, each with its own note
+                    what = "clip" if marks["on"] == "video" else "sound"
+                    tempo = marks.get("tempo")
+                    about = ", ".join(x for x in (marks.get("file", ""), f"{marks['length']:.2f} s" if marks.get("length") else "",
+                                                  f"{tempo['bpm']:g} beats a minute, {tempo['beats']} to the bar" if tempo else "") if x)
+                    print(f"           marks on the timeline of the {what}" + (f" ({about})" if about else "")
+                          + f"; the sheet: {marks['picture'] or '(not saved; ask them to open it again)'}")
+                    for m in marks["spans"]:
+                        print(f"             {span_head(m, marks['on'])}: " + (f"\"{m['note']}\"" if m["note"] else "(no note)"))
+                        if m["where"]:
+                            print(f"                     where: {m['where']}")
+                        if m["picture"]:
+                            print(f"                     its own picture: {m['picture']}")
+                    marks = None
                 if marks:
                     print(f"           marked in colours; the picture of it: {marks['picture'] or '(not saved; ask them to open it again)'}")
                     for m in marks["colours"]:
@@ -861,6 +881,9 @@ def main(argv=None) -> int:
     c.add_argument("--param", action="append", default=[]); c.add_argument("--ref", action="append", default=[])
     c.add_argument("--slot", default=""); c.add_argument("--dest", default="")
     c.add_argument("--motion", default="", help="<motion set>:<clip>: the baked motion to loop beside it")
+    c.add_argument("--bpm", type=float, default=None, help="music: its tempo in beats a minute, when you know it; the page then counts bars")
+    c.add_argument("--beats", type=int, default=None, help="beats to the bar (4 unless you say)")
+    c.add_argument("--first-beat", type=float, default=None, help="the second the first bar starts at (0 unless you say)")
     c.set_defaults(fn=cmd_add)
 
     c = sub.add_parser("carry", help="bring a candidate the user kept into a later round")

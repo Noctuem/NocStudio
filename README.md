@@ -155,7 +155,7 @@ The page knows how to show each kind of work:
 | Textures | Tile them at any size to see the repeat |
 | 3D models | Each piece framed to fill the view whatever its size; turn, zoom, wireframe, a 1.8 m reference figure, play the clips the model carries |
 | Motions | Each candidate loops in place in the 3D viewer, at full, half or quarter speed |
-| Sounds | Waveform, length and peak level, play them in turn, loop one |
+| Sounds | Waveform, length and peak level, play them in turn, loop one; opened large, the wave on a ruler of seconds (and bars, when it was filed with a tempo), zoom in time, half speed, and marks on moments and stretches of it |
 | Video | Looping clips side by side |
 | In-app options | Labels to look for in the running app, with the line that starts it |
 | Questions | Options written out with what each costs, risks and feels like |
@@ -168,6 +168,19 @@ paint over the part you are talking about, in up to five colours, with a note fo
 motion the frame holds while you paint, and each colour keeps the clip and the second. The agent gets
 your words, a plain account of where each colour sits, and one picture of it all (a model from six
 sides, or posed at each moment you marked). On an asset in the Library, Mark sends the same thing as a note.
+
+**Mark a part of a sound.** A sound has no place to paint, so its marks sit on its time. Press
+Mark on a sound (or Enter) and it opens large. Drag across the wave to mark a stretch, press `M`
+to mark the moment the playhead is at, while it plays or held. Each mark has its own note, a
+colour, and a kind: **Change**, **Cut** or **Keep**. Keep matters: it tells the agent which part
+must come through a redo untouched. Drag a mark's edges or its middle to move it, play one stretch
+round and round with its own button, and step through the marks with `[` and `]`. The agent gets
+each note with its times, the bar and beat when the sound was filed with a tempo
+(`add ... --bpm 120`), what the page measured in that stretch (peak and RMS level, whether it
+clips, where its energy sits, each against the whole sound), and one picture: the whole wave with
+every mark coloured and numbered on it, and a legend. Nothing is guessed: the page works out no
+tempo, no pitch and no loudness score. A sound in the Library has Mark too: it sends a note with a
+line for each mark and the picture as its file.
 
 Before a batch reaches you, **checks** run on every file (too loud, too long, too many
 triangles, wrong size, no record of how it was made). A batch that breaks a rule is held back
@@ -331,6 +344,10 @@ edges, and expect it to change.
   Pictures, sounds, clips, writing, questions and in-app options work for any project.
 - **One person.** A Studio is for one person judging. There are no accounts and no sharing. A
   second copy on a server (Linux, Docker, a sign-in proxy in front) is for that same person's phone.
+- **Marks on a sound point; they do not edit.** Left out on purpose: stems played together with
+  solo and mute, a spectrogram to look at, comparing two versions at the same moment, any editing
+  (cut, fade, gain), replies and approvals on a mark, and playing backwards. Marks on a clip are
+  being built; until then a clip opens large and plays, and takes no marks.
 - **Notes need a session that is working.** A session that has finished its turn and sits at
   the prompt is not woken by a note; it gets it the next time it works. Handing notes over was
   tested with Claude Code 2.1.296.

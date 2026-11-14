@@ -62,16 +62,44 @@
           },
           "marks": {
             "type": "object",
-            "description": "Parts of the picture or model the user painted, in up to five colours, each with a note. The page also keeps a picture of them at marks/<candidate>.png.",
+            "description": "Parts of the picture or model the user painted, in up to five colours, each with a note; or, on a sound or a clip, moments and stretches of time, each with its own note (spans). The page also keeps a picture of them at marks/<candidate>.png.",
             "properties": {
-              "kind": { "enum": ["image", "model"] },
+              "kind": { "enum": ["image", "model", "sound", "video"] },
               "notes": { "type": "object", "description": "colour -> the user's note for that colour, exact" },
               "where": { "type": "object", "description": "colour -> where those marks sit, worked out by the page" },
               "strokes": { "type": "array", "description": "On a picture: {c: colour or erase, r: radius in the picture's pixels, p: [[x, y], ...]}" },
               "size": { "type": "array", "description": "On a picture: its width and height in pixels" },
               "faces": { "type": "object", "description": "On a model: mesh number -> colour -> face numbers" },
               "meshes": { "type": "object", "description": "On a model: mesh number -> its name" },
-              "moments": { "type": "object", "description": "On a moving model: colour -> {clip, t, length}, the motion and the second it was painted at" }
+              "moments": { "type": "object", "description": "On a moving model: colour -> {clip, t, length}, the motion and the second it was painted at" },
+              "file": { "type": "string", "description": "On a sound or a clip: the name of the candidate's file the marks are on" },
+              "length": { "type": "number", "description": "On a sound or a clip: its length in seconds" },
+              "fps": { "type": "number", "description": "On a clip: frames a second; missing when it could not be told" },
+              "tempo": {
+                "type": "object",
+                "description": "On a sound filed with a tempo: beats a minute, beats to the bar, and the second the first bar starts at. Given by the maker, never worked out.",
+                "properties": { "bpm": { "type": "number" }, "beats": { "type": "integer" }, "first": { "type": "number" } }
+              },
+              "spans": {
+                "type": "array",
+                "maxItems": 40,
+                "description": "On a sound or a clip (kind sound or video): the marks, in time order. Here the note belongs to the mark, not to a colour, and notes and where keyed by colour are not used. On a clip, size is the frame's width and height. A mark's own picture, when it has one, is at marks/<candidate>/<id>.png.",
+                "items": {
+                  "type": "object",
+                  "required": ["id", "c", "tag", "t0", "t1"],
+                  "properties": {
+                    "id": { "type": "string", "pattern": "^m[0-9]{1,6}$", "description": "Given once, never reused" },
+                    "c": { "enum": ["red", "yellow", "green", "blue", "purple"] },
+                    "tag": { "enum": ["change", "cut", "keep"], "description": "What the mark asks for. keep: this part must come through a redo as it is. cut: this stretch goes." },
+                    "t0": { "type": "number", "description": "Where it starts, in seconds" },
+                    "t1": { "type": "number", "description": "Where it ends; the same as t0 for a moment" },
+                    "note": { "type": "string", "description": "The user's note on this mark, exact" },
+                    "where": { "type": "string", "description": "A sentence the page writes: the times, the bar and beat, what it measured there" },
+                    "facts": { "type": "object", "description": "On a sound: numbers the page measured in the stretch (peak and RMS in dBFS, the share of energy in five bands, and the same for the whole sound)" },
+                    "strokes": { "type": "array", "description": "On a clip: paint on the frame at t0, as on a picture, in the pixels of size" }
+                  }
+                }
+              }
             }
           }
         }

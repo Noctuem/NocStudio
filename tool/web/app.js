@@ -170,6 +170,7 @@
     addNote: async () => { throw new Error('This is a sample page: notes are not kept here'); },
     putFile: async () => { throw new Error('This is a sample page: notes are not kept here'); },
     putMarks: async () => {},
+    putMark: async () => {},
     editText: async () => { throw new Error('This is a sample page: edits are not kept here'); },
     note: async () => { throw new Error('This is a sample page: notes are not kept here'); },
     src: (url) => STATIC.files[url] || '',
@@ -202,6 +203,12 @@
     },
     putMarks: async (id, cid, blob) => { // the marked picture Claude reads; nothing sent takes it away
       const res = await fetch(rel('/api/batch/' + encodeURIComponent(id) + '/marks/' + encodeURIComponent(cid)), { method: 'PUT', headers: { 'X-Studio-File': '1' }, body: blob || new Blob([]) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || ('The studio answered ' + res.status));
+      return data;
+    },
+    putMark: async (id, cid, span, blob) => { // the picture of one mark on a clip or a sound; nothing sent takes it away
+      const res = await fetch(rel('/api/batch/' + encodeURIComponent(id) + '/marks/' + encodeURIComponent(cid) + '/' + encodeURIComponent(span)), { method: 'PUT', headers: { 'X-Studio-File': '1' }, body: blob || new Blob([]) });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || ('The studio answered ' + res.status));
       return data;
@@ -1057,6 +1064,738 @@
     players.add(p); setTimeout(draw, 0);
     return p;
   }
+  // ----------------------------------------------------- marks on a timeline
+  // On a sound or a clip a mark is a moment or a stretch of time with its own note, a colour, and a kind: Change, Cut
+  // or Keep. What Claude gets: the marks as data, a sentence for each on where it is, and a picture of them all.
+  // The sound view and the clip view share these parts: the marks (newSpans), the list of them beside the media
+  // (spanList), their tools and keys (spanTools, spanKeys), the playing (transport), dragging marks along a lane
+  // (spanLane), and how they are drawn (paintSpans, paintRuler, spanLegend).
+  const TAGS = [['change', 'Change'], ['cut', 'Cut'], ['keep', 'Keep']];
+  const SPAN_MAX = 40;
+  const sec3 = (x) => Math.round(x * 1000) / 1000;
+  // a time as it is written for the user and for Claude: 0:03.20
+  function clock(t) { const c = Math.round(Math.max(0, t || 0) * 100); return Math.floor(c / 6000) + ':' + ((c % 6000) / 100).toFixed(2).padStart(5, '0'); }
+  // the bar and the beat a time falls in, counted from the tempo the sound was filed with
+  function barAt(tempo, t) {
+    const pos = (t - tempo.first) * tempo.bpm / 60 + 1e-6;
+    return pos < 0 ? null : { bar: Math.floor(pos / tempo.beats) + 1, beat: Math.floor(pos % tempo.beats) + 1 };
+  }
+  const barText = (tempo, t) => { const at = barAt(tempo, t); return at ? 'bar ' + at.bar + ' beat ' + at.beat : 'before bar 1'; };
+  // the bars a mark covers: "bar 2 beat 3 to bar 3 beat 3", or "in bar 2 beat 3" when it starts and ends in one beat
+  const barSpan = (tempo, s) => { const a = barText(tempo, s.t0), b = barText(tempo, s.t1); return !(s.t1 > s.t0) ? a : a === b ? 'in ' + a : a + ' to ' + b; };
+  const spanWhen = (s) => (s.t1 > s.t0 ? clock(s.t0) + ' to ' + clock(s.t1) + ' (' + (s.t1 - s.t0).toFixed(2) + ' s)' : 'at ' + clock(s.t0));
+  const tagWord = (s) => (s.tag === 'keep' ? 'KEEP' : s.tag === 'cut' ? 'CUT' : 'change');
+  // what a mark's play button loops: the stretch itself, or the second around a moment
+  const spanRange = (s, len) => (s.t1 > s.t0 ? [s.t0, s.t1] : [Math.max(0, s.t0 - 0.5), Math.min(len || s.t0 + 0.5, s.t0 + 0.5)]);
+  // whether marks on a timeline say anything by themselves: a note, a Cut or a Keep
+  const spansSay = (mk) => !!(mk && (mk.spans || []).some((s) => (s.note && s.note.trim()) || s.tag === 'cut' || s.tag === 'keep'));
+
+  // the marks on one sound or clip: add, move, stretch, take away, undo; numbered in time order, coloured in turn
+  function newSpans(saved, kind) {
+    saved = saved && saved.kind === kind ? saved : {};
+    const tl = { kind, file: saved.file || '', length: saved.length || 0, fps: saved.fps || 0, size: saved.size || null, tempo: saved.tempo || null,
+      spans: (saved.spans || []).map((s) => Object.assign({}, s)), chosen: null, subs: [], past: [], describe: null };
+    let next = tl.spans.reduce((n, s) => Math.max(n, +String(s.id).slice(1) || 0), 0) + 1;  // a mark's name is given once and never again
+    const told = new Map(tl.spans.map((s) => [s.id, s.t0 + '|' + s.t1]));  // the times each mark's "where" was written for
+    const order = (a, b) => a.t0 - b.t0 || a.t1 - b.t1 || +a.id.slice(1) - +b.id.slice(1);
+    tl.changed = (what) => tl.subs.slice().forEach((fn) => fn(what));  // 'marks', 'moved' (while dragging), 'notes', 'chosen'
+    tl.sorted = () => tl.spans.slice().sort(order);
+    tl.get = (id) => tl.spans.find((s) => s.id === id) || null;
+    tl.fit = (t) => sec3(Math.min(tl.length || Infinity, Math.max(0, +t || 0)));
+    // remember the marks as they are, so that the change about to be made can be undone
+    tl.keep = () => { tl.past.push(JSON.stringify(tl.spans)); if (tl.past.length > 60) tl.past.shift(); };
+    tl.add = (t0, t1, more) => {
+      if (tl.spans.length >= SPAN_MAX) { toast('One ' + (kind === 'video' ? 'clip' : 'sound') + ' takes ' + SPAN_MAX + ' marks at most'); return null; }
+      if (t1 === undefined) t1 = t0;
+      tl.keep();
+      const s = Object.assign({ id: 'm' + next, c: MARK[(next - 1) % MARK.length][0], tag: 'change', t0: tl.fit(Math.min(t0, t1)), t1: tl.fit(Math.max(t0, t1)), note: '', where: '' }, more || {});
+      next++; tl.spans.push(s); tl.chosen = s.id; tl.changed('marks');
+      return s;
+    };
+    // while a mark is dragged: call keep() once before the first move, and changed('marks') when it is let go
+    tl.move = (s, t0, t1) => { s.t0 = tl.fit(Math.min(t0, t1)); s.t1 = tl.fit(Math.max(t0, t1)); tl.changed('moved'); };
+    tl.set = (s, fields) => { tl.keep(); Object.assign(s, fields); tl.changed('marks'); };
+    tl.remove = (s) => { const i = tl.spans.indexOf(s); if (i < 0) return; tl.keep(); tl.spans.splice(i, 1); if (tl.chosen === s.id) tl.chosen = null; tl.changed('marks'); };
+    tl.clear = () => { if (!tl.spans.length) return; tl.keep(); tl.spans = []; tl.chosen = null; tl.changed('marks'); };
+    // back to before the last change; a note typed since stays with its mark
+    tl.undo = () => {
+      if (!tl.past.length) return false;
+      const now = new Map(tl.spans.map((s) => [s.id, s]));
+      tl.spans = JSON.parse(tl.past.pop()).map((s) => (now.has(s.id) ? Object.assign(s, { note: now.get(s.id).note }) : s));
+      if (!tl.get(tl.chosen)) tl.chosen = null;
+      tl.changed('marks');
+      return true;
+    };
+    tl.choose = (s) => { const id = s ? s.id : null; if (tl.chosen === id) return; tl.chosen = id; tl.changed('chosen'); };
+    // the mark before or after the chosen one; with none chosen, before or after a time
+    tl.beside = (d, t) => {
+      const list = tl.sorted(), i = list.findIndex((s) => s.id === tl.chosen);
+      if (i >= 0) return list[i + d] || null;
+      return d > 0 ? list.find((s) => s.t0 > t + 1e-4) || null : list.filter((s) => s.t0 < t - 1e-4).pop() || null;
+    };
+    // the sentence Claude reads for a mark, written again by the view (tl.describe) when its times have changed
+    tl.where = (s) => {
+      const key = s.t0 + '|' + s.t1;
+      if (tl.describe && told.get(s.id) !== key) { const d = tl.describe(s) || {}; s.where = d.where || ''; if (d.facts) s.facts = d.facts; else delete s.facts; told.set(s.id, key); }
+      return s.where || '';
+    };
+    tl.stale = (s) => { if (s) told.delete(s.id); else told.clear(); };
+    // the marks as they are saved: in time order, nothing the server has to work out
+    tl.data = () => {
+      if (!tl.spans.length) return null;
+      const out = { kind, file: tl.file, length: sec3(tl.length) };
+      if (kind === 'video') { if (tl.fps) out.fps = tl.fps; if (tl.size) out.size = tl.size; }
+      if (tl.tempo) out.tempo = tl.tempo;
+      out.spans = tl.sorted().map((s) => {
+        const o = { id: s.id, c: s.c, tag: s.tag, t0: s.t0, t1: s.t1, note: (s.note || '').trim(), where: tl.where(s) };
+        if (s.facts) o.facts = s.facts;
+        if (s.strokes && s.strokes.length) o.strokes = s.strokes;
+        return o;
+      });
+      return out;
+    };
+    return tl;
+  }
+
+  // playing a sound or a clip: play and hold that keep the place, seek, speed, loop all of it, or loop one stretch by
+  // watching the time each frame. `el` is an <audio> or a <video>; opts.length() gives the length when the page knows it better
+  function transport(el, opts) {
+    opts = opts || {};
+    const subs = [], me = { stop: () => el.pause() };
+    let raf = 0, loop = null;  // loop: { id, range() -> [from, to] in seconds, or null once the mark is gone }
+    const tell = (what) => subs.slice().forEach((fn) => fn(what));
+    const range = () => { const r = loop && loop.range(); if (loop && !r) { loop = null; tell('state'); } return r || null; };
+    const tick = () => {
+      raf = 0;
+      const r = range();
+      if (r && (el.currentTime >= r[1] || el.currentTime < r[0] - 0.05)) el.currentTime = r[0];
+      tell('time');
+      if (!el.paused && !el.ended) raf = requestAnimationFrame(tick);
+    };
+    const tp = {
+      el,
+      on(fn) { subs.push(fn); },  // fn('time') each frame while it plays and on a seek, fn('state') on play, hold and loop, fn('length')
+      length: () => (opts.length && opts.length()) || (isFinite(el.duration) ? el.duration : 0) || 0,
+      time: () => el.currentTime || 0,
+      playing: () => !el.paused && !el.ended,
+      looping: () => (loop ? loop.id : null),
+      play() {
+        for (const o of players) if (o !== me) o.stop();  // one sound at a time
+        seq.token++;
+        const d = tp.length(), r = range();
+        if (r && (el.currentTime < r[0] - 0.05 || el.currentTime >= r[1])) el.currentTime = r[0];
+        else if (!r && d && el.currentTime >= d - 0.01) el.currentTime = 0;
+        return Promise.resolve(el.play()).catch(() => toast('The browser would not play this file'));
+      },
+      hold() { el.pause(); },
+      toggle() { if (tp.playing()) tp.hold(); else tp.play(); },
+      // go to a time; going outside a looping stretch ends its loop, unless `stay` is set
+      seek(t, stay) {
+        const d = tp.length(), r = range();
+        t = Math.min(d || Math.max(0, t), Math.max(0, t));
+        if (r && !stay && (t < r[0] - 1e-3 || t > r[1] + 1e-3)) { loop = null; tell('state'); }
+        try { el.currentTime = t; } catch (e) { /* not loaded yet */ }
+        tell('time');
+      },
+      rate(r) { el.playbackRate = r || 1; },  // an <audio> or <video> keeps its pitch when slowed
+      loopAll(on) { el.loop = !!on; },
+      // play one stretch round and round: id names it, range() says where it is now (it may be dragged meanwhile)
+      loopSpan(id, rangeFn) { loop = id ? { id, range: rangeFn } : null; tell('state'); },
+      destroy() { cancelAnimationFrame(raf); raf = 0; loop = null; el.pause(); players.delete(me); subs.length = 0; },
+    };
+    el.addEventListener('play', () => { tell('state'); if (!raf) raf = requestAnimationFrame(tick); });
+    el.addEventListener('pause', () => tell('state'));
+    el.addEventListener('ended', () => { const r = range(); if (r) { el.currentTime = r[0]; el.play().catch(() => {}); } else tell('state'); });
+    el.addEventListener('seeked', () => tell('time'));
+    el.addEventListener('loadedmetadata', () => tell('length'));
+    el.addEventListener('durationchange', () => tell('length'));
+    players.add(me);
+    return tp;
+  }
+
+  // the list beside the media: every mark in time order with its number, colour, time, kind, its own note, and
+  // what Claude is told about where it is. opts: editable(), when(span) -> text, goto(span), loop(span), looping() -> id
+  function spanList(tl, opts) {
+    const box = h('div', { class: 'timemarks' }), rows = new Map();
+    const none = h('p', { class: 'hint' }, opts.none || 'No marks yet.');
+    function make(id) {
+      const get = () => tl.get(id);
+      const num = h('span', { class: 'num' });
+      const sw = h('button', { class: 'swatch', type: 'button', title: 'Change its colour', 'aria-label': 'Change its colour', onclick: () => {
+        const s = get(); if (!s || !opts.editable()) return;
+        tl.set(s, { c: MARK[(MARK.findIndex(([c]) => c === s.c) + 1) % MARK.length][0] });
+      } });
+      const when = h('button', { class: 'when', type: 'button', title: 'Go to it', onclick: () => { const s = get(); if (s) { tl.choose(s); opts.goto(s); } } });
+      const tags = TAGS.map(([tag, label]) => h('button', { class: 'btn small', type: 'button', 'data-tag': tag,
+        title: { change: 'This part must change', cut: 'This stretch goes', keep: 'This part must stay as it is' }[tag],
+        onclick: () => { const s = get(); if (s && opts.editable() && s.tag !== tag) tl.set(s, { tag }); } }, label));
+      const play = h('button', { class: 'play', type: 'button', 'aria-label': 'Play it round and round', title: 'Play it round and round', html: ICON_PLAY, onclick: () => { const s = get(); if (s) { tl.choose(s); opts.loop(s); } } });
+      const del = h('button', { class: 'btn small', type: 'button', title: 'Take this mark away (Delete)', 'aria-label': 'Take this mark away', onclick: () => { const s = get(); if (s && opts.editable()) tl.remove(s); } }, '×');
+      const note = h('textarea', { class: 'field', rows: 1, placeholder: 'What about this part', 'aria-label': 'Note for this mark',
+        oninput: () => { const s = get(); if (s) { s.note = note.value; tl.changed('notes'); } },
+        onfocus: () => tl.choose(get()),
+        onkeydown: (e) => { if (e.key === 'Escape') { note.blur(); e.preventDefault(); e.stopPropagation(); } } });  // Esc leaves the box; the next one closes the closer look
+      const told = h('div', { class: 'told', title: 'What Claude is told about where this mark is' });
+      const el = h('div', { class: 'timemark', 'data-id': id }, h('div', { class: 'head' }, play, num, sw, when, del), h('div', { class: 'tags' }, tags), note, told);
+      return { el, num, sw, when, tags, play, del, note, told };
+    }
+    function draw(what) {
+      const list = tl.sorted(), can = opts.editable(), looping = opts.looping ? opts.looping() : null;
+      for (const [id, r] of rows) if (!tl.get(id)) { r.el.remove(); rows.delete(id); }
+      list.forEach((s, i) => {
+        let r = rows.get(s.id);
+        if (!r) { r = make(s.id); rows.set(s.id, r); }
+        r.num.textContent = String(i + 1);
+        r.el.style.setProperty('--sw', MARK_HEX[s.c] || MARK_HEX.red); r.sw.style.setProperty('--sw', MARK_HEX[s.c] || MARK_HEX.red);
+        r.when.textContent = opts.when(s);
+        r.tags.forEach((b) => { const on = b.dataset.tag === s.tag; b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); b.disabled = !can; });
+        r.sw.disabled = r.del.disabled = r.note.disabled = !can; r.del.hidden = !can;
+        if (document.activeElement !== r.note && r.note.value !== (s.note || '')) r.note.value = s.note || '';
+        if (what !== 'moved') r.told.textContent = tl.where(s);  // measured once the mark is let go, not at every step of a drag
+        r.el.classList.toggle('on', s.id === tl.chosen);
+        r.play.classList.toggle('on', s.id === looping); r.play.innerHTML = s.id === looping ? ICON_STOP : ICON_PLAY;
+        if (box.children[i] !== r.el) box.insertBefore(r.el, box.children[i] || null);
+      });
+      if (!list.length) box.append(none); else none.remove();
+      if ((what === 'chosen' || what === 'marks') && rows.get(tl.chosen)) rows.get(tl.chosen).el.scrollIntoView({ block: 'nearest' });
+    }
+    tl.subs.push((what) => { if (what !== 'notes') draw(what); });
+    draw();
+    return { el: box, draw, focus(id) { const r = rows.get(id); if (r && !r.note.disabled) r.note.focus(); } };
+  }
+
+  // the tools over the media: drop a moment where the playhead is, undo, clear
+  function spanTools(tl, tp, editable) {
+    const act = (label, title, fn) => h('button', { class: 'btn small', type: 'button', title, onclick: (e) => { e.currentTarget.blur(); if (editable()) fn(); } }, label);
+    return h('div', { class: 'grp marktools' },
+      act('Moment', 'Mark the moment the playhead is at (M)', () => tl.add(tp.time())),
+      act('Undo', 'Undo the last change to the marks (Ctrl+Z)', () => { if (!tl.undo()) toast('Nothing to undo'); }),
+      act('Clear all', 'Take every mark away', () => tl.clear()));
+  }
+
+  // the keys both views share: Space plays and holds, Home and End, M drops a moment, [ and ] step through the marks,
+  // Enter writes the chosen mark's note, Delete takes it away, Ctrl+Z undoes. It answers true when the key was its own.
+  // opts: editable(), note(id) focuses a mark's note box, more(e, key) for a view's own keys
+  function spanKeys(tl, tp, opts) {
+    return (e) => {
+      const tag = (e.target || {}).tagName || '';
+      if (/^(TEXTAREA|INPUT|SELECT)$/.test(tag)) return false;
+      const key = e.key.length === 1 ? e.key.toLowerCase() : e.key, can = opts.editable();
+      const mine = () => { if (tag === 'BUTTON') e.target.blur(); e.preventDefault(); return true; };  // a button in focus must not take the key as a click
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && key === 'z') { if (can && !tl.undo()) toast('Nothing to undo'); return mine(); }
+      if (e.ctrlKey || e.metaKey || e.altKey) return false;
+      if (opts.more && opts.more(e, key)) return mine();
+      if (key === ' ') { tp.toggle(); return mine(); }
+      if (key === 'Home') { tp.seek(0); return mine(); }
+      if (key === 'End') { tp.seek(tp.length()); return mine(); }
+      if (key === 'm') { if (can) tl.add(tp.time()); return mine(); }
+      if (key === '[' || key === ']') { const s = tl.beside(key === ']' ? 1 : -1, tp.time()); if (s) { tl.choose(s); tp.seek(s.t0); } return mine(); }
+      if (key === 'Delete' || key === 'Backspace') { const s = tl.get(tl.chosen); if (s && can) tl.remove(s); return mine(); }
+      if (key === 'Enter' && tl.chosen && opts.note) { opts.note(tl.chosen); return mine(); }
+      return false;
+    };
+  }
+
+  // dragging on a lane of marks: across empty time makes a stretch, a mark's edge stretches it, its middle moves it
+  // (Shift makes a new one there instead), a click moves the playhead, a double click drops a moment.
+  // map.time(clientX) -> seconds and map.x(seconds) -> clientX say where the lane's times are on the screen.
+  // opts: editable(), seek(t), drag(on) is told when a drag starts and ends
+  function spanLane(host, tl, map, opts) {
+    let d = null;
+    // what of which mark is under the pointer: the chosen mark first, then the shortest
+    function hit(cx) {
+      const list = tl.spans.slice().sort((a, b) => (b.id === tl.chosen) - (a.id === tl.chosen) || (a.t1 - a.t0) - (b.t1 - b.t0));
+      for (const s of list) {
+        const a = map.x(s.t0), b = map.x(s.t1);
+        if (!(s.t1 > s.t0)) { if (Math.abs(cx - a) <= 7) return { s, part: 'move' }; continue; }
+        const da = Math.abs(cx - a), db = Math.abs(cx - b);
+        if (Math.min(da, db) <= 6) return { s, part: da <= db ? 'start' : 'end' };
+        if (cx > a && cx < b) return { s, part: 'move' };
+      }
+      return null;
+    }
+    const down = (e) => {
+      if (e.button !== 0 || d) return;
+      host.setPointerCapture(e.pointerId);
+      const at = opts.editable() && !e.shiftKey ? hit(e.clientX) : null;
+      d = { id: e.pointerId, x: e.clientX, t: map.time(e.clientX), part: at ? at.part : 'new', span: at ? at.s.id : null, a: at ? at.s.t0 : 0, b: at ? at.s.t1 : 0, moved: false };
+    };
+    const move = (e) => {
+      if (!d) { const at = opts.editable() ? hit(e.clientX) : null; host.style.cursor = at ? (at.part === 'move' ? 'grab' : 'ew-resize') : ''; return; }
+      if (e.pointerId !== d.id) return;
+      const t = map.time(e.clientX);
+      if (!d.moved) {
+        if (Math.abs(e.clientX - d.x) < 4 || !opts.editable()) return;
+        d.moved = true; if (opts.drag) opts.drag(true);
+        if (d.part === 'new') { const s = tl.add(d.t, t); if (!s) { d = null; return; } d.span = s.id; d.a = d.b = tl.fit(d.t); d.part = 'end'; }
+        else { tl.keep(); tl.choose(tl.get(d.span)); }
+      }
+      const s = tl.get(d.span); if (!s) return;
+      if (d.part === 'start') tl.move(s, t, d.b);
+      else if (d.part === 'end') tl.move(s, d.a, t);
+      else { const len = d.b - d.a, top = (tl.length || Infinity) - len, a = Math.min(top, Math.max(0, d.a + t - d.t)); tl.move(s, a, a + len); }
+    };
+    const up = (e) => {
+      if (!d || e.pointerId !== d.id) return;
+      const was = d; d = null;
+      if (was.moved) { if (opts.drag) opts.drag(false); tl.changed('marks'); return; }
+      const at = hit(e.clientX);
+      tl.choose(at ? at.s : null); opts.seek(was.t);
+    };
+    const twice = (e) => { if (!opts.editable()) return; const at = hit(e.clientX); if (at && !(at.s.t1 > at.s.t0)) return; tl.add(map.time(e.clientX)); };
+    host.addEventListener('pointerdown', down); host.addEventListener('pointermove', move);
+    host.addEventListener('pointerup', up); host.addEventListener('pointercancel', up); host.addEventListener('dblclick', twice);
+    return { hit, destroy() { host.removeEventListener('pointerdown', down); host.removeEventListener('pointermove', move); host.removeEventListener('pointerup', up); host.removeEventListener('pointercancel', up); host.removeEventListener('dblclick', twice); } };
+  }
+
+  // the marks drawn along a lane: a band for a stretch, a line for a moment, each with its number on a flag.
+  // x(seconds) gives the place across the canvas; opts.scale makes it larger for a picture
+  function paintSpans(ctx, tl, x, top, height, opts) {
+    const k = (opts && opts.scale) || 1, fh = 16 * k;
+    ctx.save(); ctx.textBaseline = 'middle'; ctx.font = '600 ' + (11 * k) + 'px system-ui, sans-serif';
+    tl.sorted().forEach((s, i) => {
+      const hex = MARK_HEX[s.c] || MARK_HEX.red, a = x(s.t0), b = x(s.t1), on = s.id === tl.chosen, lw = (on ? 3 : 2) * k;
+      ctx.fillStyle = hex;
+      if (s.t1 > s.t0) { ctx.globalAlpha = on ? 0.38 : 0.22; ctx.fillRect(a, top, Math.max(1, b - a), height); ctx.globalAlpha = 1; ctx.fillRect(b - lw / 2, top, lw, height); }
+      ctx.fillRect(a - lw / 2, top, lw, height);
+      const label = (i + 1) + (s.tag === 'change' ? '' : ' ' + s.tag), fw = ctx.measureText(label).width + 10 * k, fy = top + 2 * k + (i % 3) * (fh + 2 * k);
+      ctx.fillRect(a, fy, fw, fh);
+      if (on) { ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5 * k; ctx.strokeRect(a + 0.75 * k, fy + 0.75 * k, fw - 1.5 * k, fh - 1.5 * k); }
+      ctx.fillStyle = '#111'; ctx.fillText(label, a + 5 * k, fy + fh / 2 + k);
+    });
+    ctx.restore();
+  }
+
+  // the bars that fall in a view, when there is a tempo: each with its number, and whether it gets a label
+  function barsIn(v, tempo, w) {
+    const bar = 60 / tempo.bpm * tempo.beats, px = bar / v.span * w, every = [1, 2, 4, 8, 16, 32, 64, 128].find((n) => n * px >= 46) || 256, out = [];
+    for (let n = Math.max(0, Math.floor((v.t0 - tempo.first) / bar)); tempo.first + n * bar <= v.t0 + v.span + 1e-9 && out.length < 4000; n++) {
+      const t = tempo.first + n * bar;
+      if (t >= v.t0 - 1e-9 && (n % every === 0 || px >= 6)) out.push({ t, n: n + 1, named: n % every === 0 });
+    }
+    return out;
+  }
+  const RULER = 24, RULER_BARS = 20;  // the height of the seconds row, and of the bars row under it
+  // the ruler over a timeline: seconds, and under them bars and beats when there is a tempo. v is { t0, span } in seconds
+  function paintRuler(ctx, w, v, tempo, col) {
+    const steps = [0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1800, 3600];
+    const step = steps.find((s) => s / v.span * w >= 72) || 3600, places = step >= 1 ? 0 : step >= 0.1 ? 1 : step >= 0.01 ? 2 : 3, minor = step / 5;
+    const x = (t) => Math.round((t - v.t0) / v.span * w);
+    const label = (t) => { const c = Math.round(t * 1000), s = (c % 60000) / 1000; return Math.floor(c / 60000) + ':' + s.toFixed(places).padStart(places ? places + 3 : 2, '0'); };
+    ctx.save(); ctx.font = '11px system-ui, sans-serif'; ctx.textBaseline = 'alphabetic';
+    ctx.fillStyle = col.line; ctx.fillRect(0, RULER - 1, w, 1);
+    for (let i = Math.ceil(v.t0 / minor - 1e-6); i * minor <= v.t0 + v.span + 1e-9; i++) {
+      const major = i % 5 === 0, px = x(i * minor);
+      ctx.fillStyle = col.line; ctx.fillRect(px, major ? 10 : 18, 1, major ? RULER - 10 : RULER - 18);
+      if (major && px + 4 + ctx.measureText(label(i * minor)).width <= w) { ctx.fillStyle = col.text; ctx.fillText(label(i * minor), px + 4, 12); }
+    }
+    if (tempo) {
+      const beat = 60 / tempo.bpm, beatPx = beat / v.span * w, bars = barsIn(v, tempo, w);
+      ctx.fillStyle = col.line; ctx.fillRect(0, RULER + RULER_BARS - 1, w, 1);
+      bars.forEach((b, i) => {
+        ctx.fillStyle = b.named ? col.bar : col.line; ctx.fillRect(x(b.t), RULER + (b.named ? 2 : 10), 1, RULER_BARS - (b.named ? 2 : 10));
+        if (b.named) ctx.fillText((bars.findIndex((o) => o.named) === i ? 'bar ' : '') + b.n, x(b.t) + 4, RULER + 14);
+        if (beatPx >= 10) for (let j = 1; j < tempo.beats; j++) { ctx.fillStyle = col.line; ctx.fillRect(x(b.t + j * beat), RULER + 14, 1, RULER_BARS - 14); }
+      });
+    }
+    ctx.restore();
+  }
+
+  // under a picture of marks on a timeline: each mark's number in its colour, its kind, when, and its note
+  function spanLegend(top, tl, when) {
+    const W = Math.max(top.width, 800), pad = 16, line = 20, list = tl.sorted();
+    const meas = h('canvas').getContext('2d');
+    const wrap = (text, width) => { const out = []; let cur = ''; for (const w of String(text).split(/\s+/)) { const t2 = cur ? cur + ' ' + w : w; if (meas.measureText(t2).width > width && cur) { out.push(cur); cur = w; } else cur = t2; } if (cur) out.push(cur); return out.length ? out : ['']; };
+    meas.font = '600 15px system-ui, sans-serif';
+    const heads = list.map((s) => tagWord(s) + '  ' + when(s)), headW = Math.min(W / 2, Math.max(0, ...heads.map((t) => meas.measureText(t).width)));
+    const noteX = pad + 44 + headW + 18;
+    meas.font = '15px system-ui, sans-serif';
+    const rows = list.map((s, i) => ({ s, head: heads[i], lines: wrap(s.note && s.note.trim() ? '“' + s.note.trim() + '”' : '(no note)', W - noteX - pad) }));
+    const legendH = rows.length ? pad + rows.reduce((n, r) => n + r.lines.length * line + 8, 0) + pad : 0;
+    const out = h('canvas', { width: W, height: top.height + legendH }), ctx = out.getContext('2d');
+    ctx.fillStyle = '#111114'; ctx.fillRect(0, 0, out.width, out.height);
+    ctx.drawImage(top, Math.round((W - top.width) / 2), 0);
+    let y = top.height + pad;
+    rows.forEach((r, i) => {
+      ctx.fillStyle = MARK_HEX[r.s.c] || MARK_HEX.red; ctx.fillRect(pad, y + 1, 34, 20);
+      ctx.fillStyle = '#111'; ctx.font = '600 14px system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.fillText(String(i + 1), pad + 17, y + 16); ctx.textAlign = 'left';
+      ctx.fillStyle = '#fff'; ctx.font = '600 15px system-ui, sans-serif'; ctx.fillText(r.head, pad + 44, y + 16, headW);
+      ctx.font = '15px system-ui, sans-serif'; ctx.fillStyle = '#e6e6ea';
+      r.lines.forEach((l, j) => ctx.fillText(l, noteX, y + 16 + j * line));
+      y += r.lines.length * line + 8;
+    });
+    return new Promise((ok) => out.toBlob((b) => ok(b), 'image/png'));
+  }
+
+  // ----------------------------------------------------- a sound, to mark it
+  const WAVE_BLOCK = 256, FFT_N = 2048;
+  const BANDS = [[60, 'under 60 Hz'], [250, 'between 60 and 250 Hz'], [2000, 'between 250 Hz and 2 kHz'], [6000, 'between 2 and 6 kHz'], [Infinity, 'over 6 kHz']];
+  const dB = (x) => Math.round((x > 0 ? Math.max(-120, 20 * Math.log10(x)) : -120) * 10) / 10;
+  const hertz = (f) => (f >= 1000 ? String(Math.round(f / 100) / 10) + ' kHz' : Math.round(f) + ' Hz');
+  let fftTab = null;
+  // the power at each frequency, averaged over windows of 2048 samples across a stretch (at most 400 of them)
+  function spectrum(mono, i0, i1) {
+    const N = FFT_N, half = N / 2;
+    if (!fftTab) {
+      const rev = new Uint16Array(N), cos = new Float32Array(half), sin = new Float32Array(half), hann = new Float32Array(N);
+      for (let i = 0, bits = Math.log2(N); i < N; i++) { let r = 0; for (let b = 0; b < bits; b++) r |= ((i >> b) & 1) << (bits - 1 - b); rev[i] = r; hann[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / (N - 1)); }
+      for (let i = 0; i < half; i++) { cos[i] = Math.cos(2 * Math.PI * i / N); sin[i] = Math.sin(2 * Math.PI * i / N); }
+      fftTab = { rev, cos, sin, hann };
+    }
+    const { rev, cos, sin, hann } = fftTab, re = new Float32Array(N), im = new Float32Array(N), pow = new Float64Array(half);
+    const len = i1 - i0, count = len <= N ? 1 : Math.min(400, Math.floor((len - N) / half) + 1), stride = count > 1 ? (len - N) / (count - 1) : 0;
+    for (let w = 0; w < count; w++) {
+      const at = i0 + Math.floor(w * stride);
+      for (let k = 0; k < N; k++) { const j = at + k; re[rev[k]] = j < i1 ? mono[j] * hann[k] : 0; }
+      im.fill(0);
+      for (let size = 2; size <= N; size <<= 1) {
+        const h2 = size >> 1, step = N / size;
+        for (let s = 0; s < N; s += size) for (let k = 0; k < h2; k++) {
+          const c = cos[k * step], sn = sin[k * step], a = s + k, b = a + h2;
+          const tr = re[b] * c + im[b] * sn, ti = im[b] * c - re[b] * sn;
+          re[b] = re[a] - tr; im[b] = im[a] - ti; re[a] += tr; im[a] += ti;
+        }
+      }
+      for (let k = 0; k < half; k++) pow[k] += re[k] * re[k] + im[k] * im[k];
+    }
+    return pow;
+  }
+  // what the page can measure between two samples of a sound: peak and RMS in dBFS, whether it clips, the share of its
+  // energy in five bands and its spectral centre. All channels mixed; nothing is guessed
+  function soundFacts(snd, i0, i1) {
+    i0 = Math.max(0, Math.min(snd.n, i0)); i1 = Math.max(i0, Math.min(snd.n, i1));
+    let peak = 0, sum = 0, clips = false;
+    for (let i = i0; i < i1; i++) { const x = snd.mono[i], a = x < 0 ? -x : x; if (a > peak) peak = a; sum += x * x; }
+    for (const ch of snd.chans) { let run = 0; for (let i = i0; i < i1 && !clips; i++) { run = (ch[i] >= 0.999 || ch[i] <= -0.999) ? run + 1 : 0; if (run >= 3) clips = true; } }
+    const out = { peak: dB(peak), rms: dB(i1 > i0 ? Math.sqrt(sum / (i1 - i0)) : 0), clips, rough: (i1 - i0) / snd.rate < 0.1 };
+    if (peak > 0) {
+      const p = spectrum(snd.mono, i0, i1), per = snd.rate / FFT_N, bands = BANDS.map(() => 0);
+      let all = 0, weight = 0, band = 0;
+      for (let k = 1; k < p.length; k++) { const f = k * per; while (f >= BANDS[band][0]) band++; all += p[k]; weight += f * p[k]; bands[band] += p[k]; }
+      if (all > 0) { out.bands = bands.map((x) => Math.round(1000 * x / all) / 10); out.centre = Math.round(weight / all); }
+    }
+    return out;
+  }
+  // read a sound file into samples the page can draw and measure: any kind the browser plays, not only 16-bit WAV
+  async function decodeSound(url) {
+    const buf = await API.bytes(url);
+    let rate = 44100;  // a WAV is read at its own rate, so its samples are measured as they are
+    try {
+      const dv = new DataView(buf);
+      if (dv.byteLength > 44 && dv.getUint32(0, false) === 0x52494646) for (let pos = 12; pos + 16 <= dv.byteLength;) {
+        const id = dv.getUint32(pos, false), size = dv.getUint32(pos + 4, true);
+        if (id === 0x666d7420) { rate = dv.getUint32(pos + 12, true); break; }
+        pos += 8 + size + (size % 2);
+      }
+    } catch (e) { /* not a WAV */ }
+    if (!(rate >= 8000 && rate <= 96000)) rate = 44100;
+    const Ctx = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+    if (!Ctx) throw new Error('this browser cannot read a sound into samples');
+    const ab = await new Ctx(1, 1, rate).decodeAudioData(buf), n = ab.length, chans = [];
+    for (let c = 0; c < ab.numberOfChannels; c++) chans.push(ab.getChannelData(c));
+    let mono = chans[0];
+    if (chans.length > 1) { mono = new Float32Array(n); for (const ch of chans) for (let i = 0; i < n; i++) mono[i] += ch[i] / chans.length; }
+    // the smallest and the largest sample in each block of 256, worked out once: a long sound is drawn from these
+    const nb = Math.ceil(n / WAVE_BLOCK), lo = new Float32Array(nb), hi = new Float32Array(nb);
+    let top = 0;
+    for (let b = 0; b < nb; b++) {
+      let a = 1, z = -1;
+      for (let i = b * WAVE_BLOCK, end = Math.min(n, i + WAVE_BLOCK); i < end; i++) { const x = mono[i]; if (x < a) a = x; if (x > z) z = x; }
+      lo[b] = a; hi[b] = z; top = Math.max(top, -a, z);
+    }
+    const snd = { rate: ab.sampleRate, n, seconds: n / ab.sampleRate, channels: chans.length, chans, mono, lo, hi, top };
+    snd.whole = soundFacts(snd, 0, n);
+    return snd;
+  }
+  // a sound's wave between two times, one line a column from its smallest sample there to its largest; it is drawn
+  // to fill the height (the numbers say how loud it is). cols is the count of columns across the width w
+  function paintWave(ctx, snd, v, w, hgt, cols, colour) {
+    const mid = hgt / 2, cw = w / cols;
+    ctx.save(); ctx.fillStyle = ctx.strokeStyle = colour;
+    if (!snd || !snd.top) { ctx.fillRect(0, mid - cw / 2, w, cw); ctx.restore(); return; }
+    const amp = (hgt / 2 - 2) / snd.top, per = v.span * snd.rate / cols;
+    if (per < 1) {  // closer than a sample a column: a line through the samples themselves
+      const i0 = Math.max(0, Math.floor(v.t0 * snd.rate)), i1 = Math.min(snd.n - 1, Math.ceil((v.t0 + v.span) * snd.rate));
+      ctx.lineWidth = Math.max(1, 1.5 * cw); ctx.beginPath();
+      for (let i = i0; i <= i1; i++) { const px = (i / snd.rate - v.t0) / v.span * w, py = mid - snd.mono[i] * amp; if (i === i0) ctx.moveTo(px, py); else ctx.lineTo(px, py); }
+      ctx.stroke(); ctx.restore(); return;
+    }
+    for (let c = 0; c < cols; c++) {
+      let i0 = Math.floor((v.t0 + c / cols * v.span) * snd.rate), i1 = Math.floor((v.t0 + (c + 1) / cols * v.span) * snd.rate);
+      if (i1 <= i0) i1 = i0 + 1;
+      if (i0 >= snd.n || i1 <= 0) continue;
+      i0 = Math.max(0, i0); i1 = Math.min(snd.n, i1);
+      let a = 1, z = -1;
+      if (i1 - i0 >= 2 * WAVE_BLOCK) for (let k = Math.floor(i0 / WAVE_BLOCK), end = Math.ceil(i1 / WAVE_BLOCK); k < end; k++) { if (snd.lo[k] < a) a = snd.lo[k]; if (snd.hi[k] > z) z = snd.hi[k]; }
+      else for (let i = i0; i < i1; i++) { const x = snd.mono[i]; if (x < a) a = x; if (x > z) z = x; }
+      ctx.fillRect(c * cw, mid - z * amp, cw, Math.max(cw, (z - a) * amp));
+    }
+    ctx.restore();
+  }
+  // the sentence Claude reads for one mark on a sound: when, the bar and beat, and what the page measured there
+  function soundWhere(s, tl, snd) {
+    const moment = !(s.t1 > s.t0), parts = [spanWhen(s)];
+    if (!moment) parts[0] = parts[0].replace(/^at /, '');
+    if (tl.tempo) parts.push(barSpan(tl.tempo, s));
+    if (moment || !snd) return { where: parts.join('; ') };
+    const f = soundFacts(snd, Math.round(s.t0 * snd.rate), Math.round(s.t1 * snd.rate)), w = snd.whole;
+    const facts = { peak: f.peak, rms: f.rms, whole_peak: w.peak, whole_rms: w.rms, clips: f.clips, rough: f.rough };
+    if (f.peak <= -120) parts.push('silent');
+    else {
+      const d = Math.round((f.rms - w.rms) * 10) / 10;
+      parts.push('peak ' + f.peak.toFixed(1) + ' dBFS, RMS ' + f.rms.toFixed(1) + ' dBFS, ' + (Math.abs(d) < 0.5 ? 'as loud as the whole sound' : Math.abs(d).toFixed(1) + ' dB ' + (d > 0 ? 'louder' : 'quieter') + ' than the whole sound'));
+      if (f.clips) parts.push('it clips');
+      if (f.bands) {
+        const i = f.bands.indexOf(Math.max(...f.bands));
+        parts.push((f.bands[i] >= 50 ? 'most of its energy is ' : 'the largest share of its energy is ') + BANDS[i][1] + ' (' + Math.round(f.bands[i]) + '%' + (w.bands ? ', the whole sound ' + Math.round(w.bands[i]) + '%' : '') + ')');
+        parts.push('spectral centre ' + hertz(f.centre) + (w.centre ? ' (the whole sound ' + hertz(w.centre) + ')' : ''));
+        Object.assign(facts, { bands: f.bands, centre: f.centre }, w.bands ? { whole_bands: w.bands, whole_centre: w.centre } : {});
+      }
+    }
+    if (f.rough) parts.push('too short to measure well');
+    return { where: parts.join('; '), facts };
+  }
+
+  // a sound, large: its wave under a ruler, zoom in time, a playhead, the marks along it and the list of them beside it.
+  // files: [{ url, label, name }]; opts.tempo counts bars. attach(marks, { editable }) puts a set of marks on it
+  function soundView(files, opts) {
+    opts = opts || {};
+    const a = new Audio(); a.preload = 'auto';
+    let cur = null, snd = null, tl = null, list = null, lane = null, alive = true, editable = () => false, hover = null, busy = false, thin = false, pan = null, grab = null;
+    const v = { t0: 0, span: 1 };  // the stretch of time on screen: where it starts, and how many seconds it shows
+    const tp = transport(a, { length: () => (snd ? snd.seconds : 0) });
+    const len = () => tp.length(), inside = () => tp.time() >= v.t0 - 1e-6 && tp.time() <= v.t0 + v.span + 1e-6;
+    let seen = true;  // whether the playhead was on screen when last looked at
+    const ruler = h('canvas', { class: 'timeruler' + (opts.tempo ? ' bars' : '') }), wave = h('canvas'), over = h('canvas');
+    const strip = h('div', { class: 'timelane' }, wave, over), head = h('div', { class: 'timehead', hidden: true });
+    const box = h('div', { class: 'timewave' }, ruler, strip, head);
+    const thumb = h('div', { class: 'thumb' }), ticks = h('div', {}), scroll = h('div', { class: 'timescroll', title: 'Drag to move along the sound' }, ticks, thumb);
+    const playBtn = h('button', { class: 'btn small', type: 'button', title: 'Play or hold (Space)', onclick: (e) => { e.currentTarget.blur(); tp.toggle(); } }, 'Play');
+    const time = h('span', { class: 't' }), status = h('span', { class: 'hint' });
+    const rates = [[1, 'Full speed'], [0.5, 'Half']].map(([r, label]) => h('button', { class: 'btn small' + (S.opts.rate === r ? ' on' : ''), type: 'button', 'data-rate': r,
+      title: r === 1 ? 'Play at its own speed' : 'Play at half speed; the pitch stays', onclick: (e) => { e.currentTarget.blur(); S.opts.rate = r; showOpts(); tp.rate(r); } }, label));
+    const loopBtn = h('button', { class: 'btn small' + (S.opts.loop ? ' on' : ''), type: 'button', 'data-opt': 'loop', 'aria-pressed': String(!!S.opts.loop), title: 'Play the whole sound round and round, to hear its seam',
+      onclick: (e) => { e.currentTarget.blur(); S.opts.loop = !S.opts.loop; showOpts(); tp.loopAll(S.opts.loop); } }, 'Loop');
+    const zoomBtn = (label, title, fn) => h('button', { class: 'btn small', type: 'button', title, 'aria-label': title, onclick: (e) => { e.currentTarget.blur(); fn(); } }, label);
+    const pick = files.length > 1 ? h('div', { class: 'timefiles' }, files.map((f) => h('button', { class: 'btn small', type: 'button', onclick: (e) => { e.currentTarget.blur(); if (f !== cur) load(f); } }, f.label || f.name))) : null;
+    const side = h('div', { class: 'timeside' });
+    const el = h('div', { class: 'timeview' }, h('div', { class: 'timemain' }, pick, box, scroll,
+      h('div', { class: 'timebar' }, playBtn, time, h('span', { class: 'grp' }, rates), loopBtn,
+        h('span', { class: 'grp' }, zoomBtn('−', 'Show more time (-)', () => zoomAt(centre(), 1 / 1.6)), zoomBtn('+', 'Show less time, closer (+)', () => zoomAt(centre(), 1.6)), zoomBtn('Whole', 'Show the whole sound', () => setView(0, len()))),
+        status)), side);
+    const map = { time: (cx) => { const r = strip.getBoundingClientRect(); return v.t0 + (cx - r.left) / (r.width || 1) * v.span; },
+      x: (t) => { const r = strip.getBoundingClientRect(); return r.left + (t - v.t0) / v.span * r.width; } };
+    // whether the marks are on the file on screen: a candidate's marks sit on one of its files
+    const mine = () => !!tl && (!tl.spans.length || !tl.file || tl.file === cur.name);
+    function fit(c) {
+      const dpr = Math.min(2, (window.devicePixelRatio || 1) * cz(c)), w = c.clientWidth, hh = c.clientHeight;
+      if (!w || !hh) return null;
+      if (c.width !== Math.round(w * dpr) || c.height !== Math.round(hh * dpr)) { c.width = Math.round(w * dpr); c.height = Math.round(hh * dpr); }
+      const ctx = c.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, hh);
+      return { ctx, w, h: hh, cols: c.width };
+    }
+    const colours = () => { const css = getComputedStyle(box), get = (n, d) => css.getPropertyValue(n).trim() || d; return { text: get('--muted', '#b3b3bd'), line: get('--line', '#2f2f37'), bar: get('--fg', '#f1f1f4'), wave: get('--faint', '#7d7d88') }; };
+    function drawBase() {
+      const col = colours(), r = fit(ruler), w = fit(wave);
+      if (r) paintRuler(r.ctx, r.w, v, opts.tempo, col);
+      if (!w) return;
+      if (opts.tempo) { w.ctx.fillStyle = col.line; for (const b of barsIn(v, opts.tempo, w.w)) if (b.named) w.ctx.fillRect(Math.round((b.t - v.t0) / v.span * w.w), 0, 1, w.h); }
+      paintWave(w.ctx, snd, v, w.w, w.h, w.cols, col.wave);
+    }
+    function drawMarks() {
+      const m = fit(over);
+      if (m && tl && mine()) paintSpans(m.ctx, tl, (t) => (t - v.t0) / v.span * m.w, 0, m.h);
+      const d = len() || 1;
+      ticks.replaceChildren(...(tl && mine() ? tl.spans.map((s) => h('i', { style: '--sw:' + (MARK_HEX[s.c] || MARK_HEX.red) + ';left:' + (100 * s.t0 / d) + '%;width:' + (100 * (s.t1 - s.t0) / d) + '%' })) : []));
+      thumb.style.left = (100 * v.t0 / d) + '%'; thumb.style.width = (100 * Math.min(1, v.span / d)) + '%';
+    }
+    function drawHead() {
+      const t = tp.time(), d = len(), f = (t - v.t0) / v.span;
+      head.hidden = !d || f < 0 || f > 1; head.style.left = (100 * f) + '%';
+      playBtn.textContent = tp.playing() ? 'Hold' : 'Play';
+      time.textContent = d ? clock(t) + ' / ' + clock(d) + (opts.tempo ? ' · ' + barText(opts.tempo, t) : '') : '';
+    }
+    const drawAll = () => { drawBase(); drawMarks(); drawHead(); };
+    function setView(t0, span) {
+      const d = len(); if (!d) return;
+      v.span = Math.min(d, Math.max(Math.min(d, 0.01), span)); v.t0 = Math.min(d - v.span, Math.max(0, t0));
+      seen = inside(); drawAll();
+    }
+    function zoomAt(t, k) { const span = Math.min(len(), Math.max(0.01, v.span / k)); setView(t - (t - v.t0) * span / v.span, span); }
+    // what a zoom by key or button holds still: the pointer when it is over the wave, else the playhead, else the middle
+    const centre = () => (hover !== null ? hover : (tp.time() >= v.t0 && tp.time() <= v.t0 + v.span) ? tp.time() : v.t0 + v.span / 2);
+    function say() {
+      const w = snd && snd.whole, n = tl && !mine() ? 'The marks are on ' + tl.file + '. Take them away to mark this file instead.' : '';
+      status.textContent = n || (snd ? 'peak ' + w.peak.toFixed(1) + ' dBFS · RMS ' + w.rms.toFixed(1) + ' dBFS · ' + (snd.rate / 1000) + ' kHz' + (snd.channels > 1 ? ' · ' + snd.channels + ' channels, mixed' : '') + ' · the wave is drawn to fill'
+        : busy ? 'Reading the sound' : cur ? 'The browser could not read this file to draw it. It may still play, and marks keep their times.' : '');
+    }
+    // the length is known: from the samples, or from the player when the file could not be read into samples
+    function ready() {
+      const d = len(); if (!d) return;
+      if (tl && mine()) { tl.file = cur.name; tl.length = sec3(d); }
+      setView(0, d); say();
+      if (list) list.draw();
+      if (snd && thin && tl && tl.spans.length && editable()) { thin = false; tl.stale(); tl.changed('marks'); }  // marks made before the samples were in get their numbers now
+    }
+    function load(f) {
+      cur = f; snd = null; busy = true; tp.hold(); tp.loopSpan(null);
+      a.src = rel(API.src(f.url)); v.t0 = 0; v.span = 1;
+      if (pick) [...pick.children].forEach((b, i) => b.classList.toggle('on', files[i] === f));
+      say(); drawAll();
+      decodeSound(f.url).then((d) => { if (alive && cur === f) { snd = d; busy = false; ready(); } }, () => { if (alive && cur === f) { busy = false; say(); ready(); } });
+    }
+    tp.on((what) => {
+      if (what === 'length') { if (!snd) ready(); return; }
+      if (what === 'state' && list) list.draw();
+      // the view follows the playhead when it runs off the edge or is sent somewhere; not when the user has moved the view away from it
+      if (!inside() && (seen || !tp.playing()) && !pan && !grab && len()) setView(tp.playing() ? tp.time() - v.span * 0.04 : tp.time() - v.span / 2, v.span);
+      else { if (inside()) seen = true; drawHead(); }
+    });
+    // the wheel zooms in time around the pointer; with Shift, or sideways, it moves along
+    box.addEventListener('wheel', (e) => {
+      e.preventDefault(); if (!len()) return;
+      if (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) setView(v.t0 + (e.deltaX || e.deltaY) / (box.clientWidth || 1) * v.span, v.span);
+      else zoomAt(map.time(e.clientX), e.deltaY < 0 ? 1.25 : 1 / 1.25);
+    }, { passive: false });
+    strip.addEventListener('pointermove', (e) => { hover = map.time(e.clientX); });
+    strip.addEventListener('pointerleave', () => { hover = null; });
+    // the ruler: a click moves the playhead, a drag moves along the sound
+    ruler.addEventListener('pointerdown', (e) => { if (e.button !== 0) return; ruler.setPointerCapture(e.pointerId); pan = { x: e.clientX, t0: v.t0, moved: false }; });
+    ruler.addEventListener('pointermove', (e) => { if (!pan) return; const dx = e.clientX - pan.x; if (!pan.moved && Math.abs(dx) < 4) return; pan.moved = true; setView(pan.t0 - dx / (ruler.getBoundingClientRect().width || 1) * v.span, v.span); });
+    const panEnd = (e) => { if (pan && !pan.moved) tp.seek(map.time(e.clientX)); pan = null; };
+    ruler.addEventListener('pointerup', panEnd); ruler.addEventListener('pointercancel', () => { pan = null; });
+    // the bar under the wave: all of the sound, the part on screen as a handle to drag
+    scroll.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0 || !len()) return;
+      scroll.setPointerCapture(e.pointerId);
+      const r = scroll.getBoundingClientRect();
+      if (e.target !== thumb) setView((e.clientX - r.left) / r.width * len() - v.span / 2, v.span);
+      grab = { x: e.clientX, t0: v.t0 };
+    });
+    scroll.addEventListener('pointermove', (e) => { if (grab) setView(grab.t0 + (e.clientX - grab.x) / (scroll.getBoundingClientRect().width || 1) * len(), v.span); });
+    const grabEnd = () => { grab = null; };
+    scroll.addEventListener('pointerup', grabEnd); scroll.addEventListener('pointercancel', grabEnd);
+    const ro = window.ResizeObserver ? new ResizeObserver(drawAll) : null;
+    if (ro) ro.observe(box);
+    // the picture Claude reads: the whole wave with every mark coloured and numbered on it, the ruler, and a legend
+    function picture() {
+      if (!tl || !tl.spans.length || !len()) return Promise.resolve(null);
+      const W = 1600, pad = 16, title = 34, rh = RULER + (opts.tempo ? RULER_BARS : 0), wh = 300, w = W - 2 * pad, all = { t0: 0, span: len() };
+      const top = h('canvas', { width: W, height: title + rh + wh + 8 }), ctx = top.getContext('2d');
+      ctx.fillStyle = '#111114'; ctx.fillRect(0, 0, W, top.height);
+      ctx.fillStyle = '#fff'; ctx.font = '600 15px system-ui, sans-serif';
+      ctx.fillText([cur.name, clock(all.span) + ' long', opts.tempo ? opts.tempo.bpm + ' beats a minute, ' + opts.tempo.beats + ' to the bar' : '',
+        snd ? 'peak ' + snd.whole.peak.toFixed(1) + ' dBFS, RMS ' + snd.whole.rms.toFixed(1) + ' dBFS (the wave is drawn to fill the height)' : 'the wave could not be drawn'].filter(Boolean).join(' · '), pad, 22, w);
+      ctx.translate(pad, title);
+      paintRuler(ctx, w, all, opts.tempo, { text: '#e6e6ea', line: '#55555e', bar: '#fff' });
+      ctx.translate(0, rh);
+      ctx.fillStyle = '#1b1b1f'; ctx.fillRect(0, 0, w, wh);
+      if (opts.tempo) { ctx.fillStyle = '#34343c'; for (const b of barsIn(all, opts.tempo, w)) if (b.named) ctx.fillRect(Math.round(b.t / all.span * w), 0, 1, wh); }
+      paintWave(ctx, snd, all, w, wh, w, '#9a9aa6');
+      const was = tl.chosen; tl.chosen = null;
+      paintSpans(ctx, tl, (t) => t / all.span * w, 0, wh, { scale: 1.25 });
+      tl.chosen = was;
+      return spanLegend(top, tl, (s) => spanWhen(s) + (opts.tempo ? '  ·  ' + barSpan(opts.tempo, s) : ''));
+    }
+    const api = {
+      el, kind: 'sound', tp, keys: null, picture,
+      hint: ['Drag across the wave: a stretch · ', h('kbd', {}, 'M'), ' or a double click: a moment · ', h('kbd', {}, 'Space'), ' plays · ', h('kbd', {}, '['), ' ', h('kbd', {}, ']'),
+        ' step · ', h('kbd', {}, 'Enter'), ' its note · ', h('kbd', {}, 'Del'), ' takes it away · scroll or ', h('kbd', {}, '+'), ' ', h('kbd', {}, '−'), ' zooms'],
+      // put a set of marks on the sound: they are drawn on the wave, listed beside it, and the keys work them
+      attach(marks, o) {
+        if (lane) lane.destroy();
+        tl = marks; editable = () => !!(o.editable() && mine() && len());
+        tl.tempo = opts.tempo || null;
+        tl.describe = (s) => { if (!snd) thin = true; return soundWhere(s, tl, snd); };
+        const loop = (s) => {
+          if (tp.looping() === s.id && tp.playing()) { tp.loopSpan(null); tp.hold(); return; }
+          tp.loopSpan(s.id, () => { const x = tl.get(s.id); return x ? spanRange(x, len()) : null; });
+          tp.seek(spanRange(s, len())[0], true); tp.play();
+        };
+        list = spanList(tl, { editable, when: spanWhen, goto: (s) => tp.seek(s.t0), loop, looping: () => tp.looping(),
+          none: 'No marks yet. Drag across the wave to mark a stretch, or press M to mark the moment the playhead is at.' });
+        side.replaceChildren(list.el);
+        lane = spanLane(strip, tl, map, { editable, seek: (t) => tp.seek(t) });
+        tl.subs.push((what) => { if (what !== 'notes') drawMarks(); if (what === 'marks') say(); });
+        api.keys = spanKeys(tl, tp, { editable, note: (id) => list.focus(id),
+          more: (e, key) => { if (key === '+' || key === '=') { zoomAt(centre(), 1.6); return true; } if (key === '-' || key === '_') { zoomAt(centre(), 1 / 1.6); return true; } return false; } });
+        const on = tl.spans.length && files.find((f) => f.name === tl.file);
+        if (on && on !== cur) load(on); else if (len()) ready(); else say();
+      },
+      set() { tp.rate(S.opts.rate === 0.5 ? 0.5 : 1); tp.loopAll(S.opts.loop); },
+      destroy() { alive = false; if (ro) ro.disconnect(); if (lane) lane.destroy(); tp.destroy(); a.removeAttribute('src'); snd = null; },
+    };
+    api.set(); load(files[0]);
+    return api;
+  }
+
+  // a clip, large. The clip view will stand here: for now the clip plays with the browser's own controls and takes no marks.
+  // When it marks, it returns what soundView returns (kind 'video', attach, keys, picture, hint, tp) and media() keeps it as api.timed
+  function clipView(url) {
+    const video = h('video', { src: url, controls: true, loop: true, muted: true, playsinline: true, preload: 'auto' });
+    return { el: h('div', { class: 'timeview clip' }, video, h('p', { class: 'hint' }, 'Marks on clips are coming: a moment or a stretch of the clip, with a note for each, as on a sound.')), destroy() { video.pause(); video.removeAttribute('src'); } };
+  }
+
+  // marks on a sound or a clip in the closer look: kept on the verdict, with a picture of them beside the batch for Claude
+  function markTimed(cand, m, el, bar) {
+    const b = S.batch, view = m.timed, tl = newSpans(entry(cand.id).marks, view.kind);
+    view.attach(tl, { editable });
+    let timer = 0, pending = false;
+    const failed = (e) => toast('The picture of the marks was not saved: ' + e.message);
+    const send = async () => {
+      clearTimeout(timer); timer = 0;
+      if (!pending) return;
+      pending = false;
+      const sheet = tl.spans.length ? view.picture() : null, shots = view.shots ? view.shots() : null;  // both start now: the view may be closed before they are sent
+      await API.putMarks(b.id, cand.id, await sheet).catch(failed);
+      for (const [id, blob] of (await shots) || []) await API.putMark(b.id, cand.id, id, blob).catch(failed);  // a mark's own picture; none takes it away
+    };
+    tl.subs.push((what) => {
+      if ((what !== 'marks' && what !== 'notes') || !editable()) return;
+      entry(cand.id).marks = tl.data(); changed(cand.id);
+      pending = true; clearTimeout(timer); timer = setTimeout(send, 1500);
+    });
+    S.markFlush = send;
+    if (editable()) bar.after(h('div', { class: 'tools overtools' }, spanTools(tl, view.tp, editable), h('span', { class: 'hint' }, view.hint)));
+    return null;
+  }
+
+  // marks on a sound in the Library: they go to Claude as a note, a line for each mark, with the picture of them on it
+  function markTimedOver(f, s) {
+    const prev = $('.over.marking'); if (prev) prev.remove();
+    const view = soundView([{ url: f.url, label: f.label, name: decodeURIComponent(String(f.url).split('/').pop()) }], {});
+    const tl = newSpans(null, view.kind);
+    view.attach(tl, { editable: () => true });
+    const words = h('textarea', { class: 'field', rows: 2, placeholder: 'Anything else about it (optional)', 'aria-label': 'A note on the whole thing' });
+    const close = () => { document.removeEventListener('keydown', key); view.destroy(); el.remove(); document.body.style.overflow = ''; };
+    const key = (e) => {
+      if (e.key === 'Escape') { if (!/^(TEXTAREA|INPUT)$/.test((e.target || {}).tagName || '')) { close(); e.stopPropagation(); } return; }
+      if (view.keys && view.keys(e)) e.stopPropagation();
+    };
+    const send = h('button', { class: 'btn primary', type: 'button', onclick: async () => {
+      const data = tl.data();
+      if (!data) { toast('Mark something first'); return; }
+      send.disabled = true;
+      try {
+        const lines = ['Marks on ' + s.title + ' (' + s.id + ', ' + f.label + '), a sound ' + clock(tl.length) + ' long. The picture of them is attached; each mark is quoted with when it is. KEEP: that part must stay as it is. CUT: that stretch goes.'];
+        if (words.value.trim()) lines.push('', words.value.trim());
+        lines.push('');
+        data.spans.forEach((m, i) => lines.push('- ' + (i + 1) + '. ' + tagWord(m) + ' (' + m.c + '): ' + (m.note ? '"' + m.note + '"' : '(no note)') + (m.where ? '. Where: ' + m.where : '')));
+        const blob = await view.picture();
+        const made = (await API.addNote(lines.join('\n'), '', false)).note;
+        if (blob) await sendFiles(made.id, [new File([blob], 'marks ' + s.id + '.png', { type: 'image/png' })]);
+        close(); await afterNote('Noted, with the picture of the marks');
+      } catch (e) { toast(e.message); send.disabled = false; }
+    } }, 'Send as a note');
+    const bar = h('div', { class: 'bar' }, h('h3', {}, 'Mark ' + s.title), h('span', { class: 'hint' }, f.label),
+      h('button', { class: 'btn small', type: 'button', onclick: close }, 'Close (Esc)'));
+    const el = h('div', { class: 'over marking', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Mark ' + s.title }, bar,
+      h('div', { class: 'tools overtools' }, spanTools(tl, view.tp, () => true), h('span', { class: 'hint' }, view.hint)),
+      h('div', { class: 'panes' }, h('div', { class: 'pane' }, view.el)),
+      h('div', { class: 'side marking' }, h('div', {}, h('p', { class: 'hint' }, 'Each mark has its own note, in the list beside the wave.')), h('div', {}, words, h('div', { class: 'jf' }, send))));
+    document.body.append(el); document.body.style.overflow = 'hidden';
+    document.addEventListener('keydown', key);
+  }
   const seq = { token: 0 };
 
   // ------------------------------------------------------------------- shell
@@ -1634,7 +2373,8 @@
       if (f.kind === 'audio') {
         const p = audioPlayer(f.url, f.label); S.cleanup.push(() => p.destroy());
         stage.append(p.el);
-        return h('article', { class: 'tile' }, h('div', { class: 'thead' }, h('span', { class: 'mono muted', style: 'overflow-wrap:anywhere' }, f.label)), stage);
+        return h('article', { class: 'tile' }, h('div', { class: 'thead' }, h('span', { class: 'mono muted grow', style: 'overflow-wrap:anywhere' }, f.label),
+          STATIC ? null : h('button', { class: 'btn small', type: 'button', title: 'Mark moments and stretches of it, with a note for each, and send them to Claude', onclick: () => { p.stop(); markTimedOver(f, s); } }, 'Mark')), stage);
       }
       if (f.kind === 'video') stage.append(h('video', { src: f.url, controls: true, playsinline: true, preload: 'metadata', style: 'width:100%;display:block' }));  // with its sound: a cut is judged heard
       else if (f.kind === 'text') {
@@ -1839,7 +2579,7 @@
     if (!v.action) return b.mode === 'question' ? 'Choose an option or write your own answer.' : 'Mark the candidates, then choose what happens next.';
     if (b.mode === 'question') return (v.action === 'answer' && !chosen && !v.answer) ? 'Pick an option or write your own answer.' : '';
     if ((v.action === 'ship' || v.action === 'ship_and_iterate') && !chosen) return 'Nothing is marked to ship. Mark a winner, or choose another round.';
-    const marked = (c) => c.marks && Object.values(c.marks.notes || {}).some((x) => x && x.trim());
+    const marked = (c) => c.marks && (Object.values(c.marks.notes || {}).some((x) => x && x.trim()) || spansSay(c.marks));
     if ((v.action === 'another_round' || v.action === 'ship_and_iterate') && !v.note && !calls.some((c) => c.note || marked(c) || c.call === 'keep' || c.call === 'redo'))
       return 'Another round needs a direction: write a note, or mark a Keep or a Redo.';
     return '';
@@ -1871,6 +2611,8 @@
     if (f.peak_dbfs !== undefined) parts.push(f.peak_dbfs.toFixed(1) + ' dBFS');
     if (f.sample_rate) parts.push((f.sample_rate / 1000) + ' kHz');
     if (f.width && f.height) parts.push(f.width + ' x ' + f.height);
+    if (f.fps) parts.push(f.fps + ' fps');
+    if (cand.tempo) parts.push(cand.tempo.bpm + ' bpm');
     return parts.join(' · ');
   }
   const primary = (cand) => (cand.files || []).find((f) => f.role === 'primary') || (cand.files || [])[0] || null;
@@ -1878,6 +2620,11 @@
     const el = h('div', { class: 'markchip', hidden: true });
     const upd = () => {
       const mk = entry(cid).marks, used = mk ? Object.keys(mk.notes || {}) : [];
+      if (mk && mk.spans) {  // a sound or a clip: its marks are moments and stretches
+        el.hidden = !mk.spans.length;
+        el.replaceChildren(...mk.spans.map((s) => h('span', { class: 'sw', style: '--sw:' + (MARK_HEX[s.c] || MARK_HEX.red), title: s.tag })), ' ' + mk.spans.length + ' mark' + (mk.spans.length === 1 ? '' : 's') + ' on it; open it to see');
+        return;
+      }
       el.hidden = !used.length;
       el.replaceChildren(...used.map((c) => h('span', { class: 'sw', style: '--sw:' + MARK_HEX[c], title: c })), used.length ? ' Marked in ' + used.join(', ') + '; open it to see' : '');
     };
@@ -1908,6 +2655,12 @@
       const v = modelView(fileUrl(b.id, file.path), { zoom: big, group: group && group.cam, ready: group && group.ready });
       if (group && group.cam && v.copyCam) group.cam.views.push(v);
       views.push(v); api.view = v; stage.append(v.el);
+    } else if (file.kind === 'audio' && big) {
+      const v = api.timed = soundView(cand.files.filter((x) => x.kind === 'audio').map((f) => ({ url: fileUrl(b.id, f.path), label: f.label, name: f.path.split('/').pop() })), { tempo: cand.tempo });
+      views.push(v); stage.classList.add('timed'); stage.append(v.el);
+    } else if (file.kind === 'video' && big) {
+      const v = clipView(API.src(fileUrl(b.id, file.path)));  // api.timed stays empty until the clip view takes marks
+      views.push(v); stage.classList.add('timed'); stage.append(v.el);
     } else if (file.kind === 'audio') {
       for (const f of cand.files.filter((x) => x.kind === 'audio')) {
         const p = audioPlayer(fileUrl(b.id, f.path), f.label);
@@ -2012,7 +2765,8 @@
     if (from.action) S.touched = true;
     Object.assign(S.opts, { clip: (b.candidates.map((c) => (c.facts || {}).clips).find((c) => c && c.length) || [{ name: '' }])[0].name, tile: false, rotate: false, wire: false, playing: true, rate: 1 });
     const moving = b.kind === 'in_app' && b.candidates.some((c) => motionOf(c.motion));
-    const visual = S.visual = ['image', 'texture', 'model'].includes(b.kind) || moving;
+    const timed = b.kind === 'audio' || b.kind === 'video';  // a sound or a clip: its closer look opens from Mark and from Enter, not from a click on its player
+    const visual = S.visual = ['image', 'texture', 'model'].includes(b.kind) || moving || timed;
     const main = h('main', {});
     const medias = {};
     S.cleanup.push(() => { Object.values(medias).forEach((m) => m.destroy()); seq.token++; clearTimeout(saveTimer); document.removeEventListener('keydown', onKey); });
@@ -2105,7 +2859,7 @@
     }
     if (b.kind === 'in_app' && b.launch) tools.append(h('div', { class: 'grp' }, h('label', {}, 'Start it with'), h('code', { class: 'i' }, b.launch), copyButton(b.launch)));
     const cmpBtn = h('button', { class: 'btn small', type: 'button', hidden: true, onclick: () => openOver([...S.cmp]) }, 'Compare');
-    const canCompare = visual && b.candidates.length > 1;
+    const canCompare = visual && !timed && b.candidates.length > 1;
     if (canCompare) tools.append(h('span', { style: 'flex:1' }), h('div', { class: 'grp' }, cmpBtn,
       h('button', { class: 'btn small', type: 'button', onclick: () => openOver(b.candidates.slice(0, 4).map((c) => c.id)) }, b.candidates.length > 4 ? 'Compare the first four' : 'Compare all')));
     const refreshCmp = () => { cmpBtn.hidden = S.cmp.size < 2; cmpBtn.textContent = 'Compare the ' + S.cmp.size + ' ticked'; };
@@ -2123,6 +2877,8 @@
         h('div', { class: 'thead' }, h('span', { class: 'letter' }, cand.id.length <= 2 ? cand.id : cand.id[0]), h('h3', {}, cand.title),
           cand.recommended ? h('span', { class: 'chip accent' }, 'Suggested') : null,
           cand.carried_from ? h('span', { class: 'chip keep', title: 'You kept this in an earlier round' }, 'From last round') : null,
+          timed ? h('button', { class: 'btn small', type: 'button', title: b.kind === 'audio' ? 'Open it large and mark moments and stretches of it, with a note for each (Enter)' : 'Open it large (Enter)',
+            onclick: () => { seq.token++; if (m.play) m.play.stop(); openOver([cand.id]); } }, b.kind === 'audio' && editable() ? 'Mark' : 'Look closer') : null,
           box ? h('label', { class: 'cmp' }, box, 'Compare') : null),
         m.el,
         h('div', { class: 'tinfo' }, cand.summary && b.kind !== 'question' ? h('p', { class: 'sum' }, cand.summary) : null, markChip(cand.id),
@@ -2132,7 +2888,7 @@
       tile.noteField = ctl.noteField; tile.box = box;
       tile.addEventListener('pointerenter', () => setCurrent(cand.id, false));
       tile.addEventListener('focusin', () => setCurrent(cand.id, false));
-      if (visual) {
+      if (visual && !timed) {
         let down = null;
         m.el.addEventListener('pointerdown', (e) => { down = [e.clientX, e.clientY]; });
         m.el.addEventListener('pointerup', (e) => { if (down && Math.hypot(e.clientX - down[0], e.clientY - down[1]) < 5) openOver([cand.id]); down = null; });
@@ -2188,6 +2944,7 @@
     const b = S.batch; if (!b) return;
     const typing = /^(TEXTAREA|INPUT|SELECT)$/.test((e.target || {}).tagName || '');
     if (e.key === 'Escape') { if (S.over) { closeOver(); e.preventDefault(); } else if (typing) e.target.blur(); return; }
+    if (S.over && S.over.keys && S.over.keys(e)) return;  // a sound or a clip: Space, M, [ ], Delete and the rest are its own
     if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
     if (S.over && !S.over.ids.length) return;  // a screenshot or reference is open: nothing to judge
     const ids = S.over ? S.over.ids : b.candidates.map((c) => c.id), i = ids.indexOf(S.current);
@@ -2213,7 +2970,8 @@
   // ---------------------------------------------------- look closer, compare
   function closeOver() {
     if (!S.over) return;
-    if (S.markFlush) S.markFlush();
+    const sent = S.markFlush ? S.markFlush() : null;
+    if (S.over.keep && sent && sent.then) { const gone = S.over.destroy; sent.then(gone, gone); S.over.destroy = () => {}; }  // a clip's pictures are grabbed from the clip itself
     S.over.destroy(); S.over.el.remove(); S.over = null;
     document.body.style.overflow = '';
     if (S.batch) for (const c of S.batch.candidates) S.ui[c.id] = (S.ui[c.id] || []).filter((fn) => !fn.over);
@@ -2258,6 +3016,11 @@
     }
     S.current = cands.some((c) => c.id === S.current) ? S.current : cands[0].id;
     S.over = { el, ids: cands.map((c) => c.id), note: noteField, mark, apply: () => medias.forEach((m) => m.set()), destroy: () => medias.forEach((m) => m.destroy()) };
+    if (one && medias[0].el.classList.contains('timed')) {  // a sound or a clip: its own hint, and its own keys once it takes marks
+      const view = medias[0].timed;
+      if (view) Object.assign(S.over, { keys: (e) => !!view.keys && view.keys(e), keep: !!view.slow });
+      bar.querySelector('.hint').replaceChildren(h('kbd', {}, '←'), ' ', h('kbd', {}, '→'), ' next' + (view ? ' · each mark has its own note, in the list beside it' : ''));
+    }
     document.body.append(el); document.body.style.overflow = 'hidden';
     mark();
   }
@@ -2265,6 +3028,7 @@
   // marks on a candidate, in the closer look: kept on the verdict, with a picture beside the batch for Claude
   function markCandidate(cand, m, el, bar) {
     const b = S.batch, file = primary(cand);
+    if (m.timed) return markTimed(cand, m, el, bar);  // a sound or a clip: marks along its time
     const isModel = !!(m.view && m.view.canvas);  // a model, or a motion baked from the project
     if (!isModel && !(file && b.kind !== 'in_app' && (file.kind === 'image' || file.kind === 'texture') && m.pane !== undefined)) return null;
     const ink = newInk(entry(cand.id).marks, isModel ? 'model' : 'image');

@@ -75,6 +75,11 @@ Nothing in a sample is counted, recorded or acted on, and **Start over** clears 
 *Motions* and *Models* show the 3D viewer; *Sounds* shows the players; *A question with
 options* shows how a design question arrives.
 
+*A longer sound* is the one to try marks on a timeline with. Press **Mark** on it (or Enter):
+drag across the wave to mark a stretch, press `M` to mark the moment the playhead is at, write a
+note on each, and make one a **Keep** or a **Cut**. Space plays and holds, the wheel zooms in
+time, and each mark's own play button plays that stretch round and round.
+
 **Size** and **Light / Dark** are at the right of the top bar and are remembered.
 
 ## 5. Teach your agent
@@ -162,6 +167,7 @@ You rarely type these yourself; the skill teaches them. `S` is
 
 ```
 S new / add / context / file      make a batch, add candidates and references, run the checks and file it
+                                  (add ... --bpm 120 files music with its tempo, so the page counts bars)
 S todo                            the verdicts you submitted, with the steps for each
 S import / done                   copy a winner into the project; close a verdict with a decision
 S decide                          record a ruling you made in chat
