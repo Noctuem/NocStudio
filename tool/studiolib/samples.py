@@ -364,11 +364,13 @@ def _file(studio, bid: str, any_length: bool = False) -> dict:
     audio = (studio.config.get("checks") or {}).get("audio")
     if not (any_length and isinstance(audio, dict) and audio.get("max_seconds")):
         return studio.publish(bid)
-    limit, audio["max_seconds"] = audio["max_seconds"], 0
+    # a copy of the checks for this one publish, so the shared defaults (when studio.toml has no [checks.audio]) are never touched
+    checks = studio.config["checks"]
+    studio.config["checks"] = dict(checks, audio=dict(audio, max_seconds=0))
     try:
         return studio.publish(bid)
     finally:
-        audio["max_seconds"] = limit
+        studio.config["checks"] = checks
 
 
 def build(studio, model: str = "", fresh: bool = False) -> list[dict]:

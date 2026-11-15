@@ -163,6 +163,10 @@ def main() -> int:
               and said["audio.peak"] == "peaks at -6.0 dBFS; the limit is -20"
               and limits.check_audio(src / "two.wav", project, {"max_seconds": 1.5})[1][0]["msg"] == "2.00 s long; the limit is 1.5 s",
               "a sound over the limit in a batch that asked for a looser one is told the project's limit stands")
+        said = {c["id"]: c["msg"] for c in limits.check_audio(src / "five.wav", project, {"max_seconds": "2s", "max_peak_dbfs": "-30dB"})[1]}
+        check(said["audio.length"].endswith("the batch's target '2s' was not used, as it is not a length above 0 in seconds)")
+              and said["audio.peak"].endswith("the batch's target '-30dB' was not used, as it is not a level in dBFS)"),
+              "a target that is not a number is said to be not used, not to be looser")
         tool_cli = lambda *args: subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "studio.py"), "--home", str(home), *args],  # noqa: E731
                                                 capture_output=True, text=True, encoding="utf-8")
         odd = tool_cli("new", "odd", "--kind", "audio", "--mode", "rate", "--ask", "Approve?", "--look", "x",
@@ -1233,6 +1237,15 @@ def main() -> int:
         check(studio.config["checks"]["audio"]["max_seconds"] == 3.0 and not long_one["targets"] and long_one["candidates"][0]["checks"] == []
               and Studio(home).config["checks"]["audio"]["max_seconds"] == 3.0,
               "the long sample is filed in a Studio whose sounds may run 3 s, with no target of its own, and the project's limit is as it was")
+        from copy import deepcopy
+        from types import SimpleNamespace
+        from studiolib import store as store_mod
+        shared = store_mod.DEFAULT_CONFIG["checks"]  # what a Studio with no [checks.audio] of its own reads
+        kept = deepcopy(shared)
+        fake = SimpleNamespace(config={"checks": shared})
+        fake.publish = lambda bid: (fake.config["checks"]["audio"]["max_seconds"], shared["audio"]["max_seconds"])
+        check(samples._file(fake, "x", any_length=True) == (0, 3.0) and shared == kept and fake.config["checks"] is shared,
+              "and in a Studio with no limits of its own, the tool's own defaults are not touched while it is filed")
         check([c["facts"].get("fps") for c in studio.load_batch("sample-video")["candidates"]] == [30.0, 30.0, 15.0]
               and all(c["facts"]["frames"] == c["facts"]["fps"] * 4 for c in studio.load_batch("sample-video")["candidates"]),
               "filing a clip keeps its facts on it, as a sound's are kept")

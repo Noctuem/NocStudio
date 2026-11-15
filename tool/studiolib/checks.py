@@ -88,7 +88,9 @@ def check_audio(path: Path, rules: dict, targets: dict | None = None):
         if own is not None:
             r[name] = min(has, own) if (has if positive else has is not None) else own
         if asked is not None and r.get(name) != own:  # said only when the sound is over: the batch asked, and the project's limit stands
-            stands[name] = " (the project's, in studio.toml: a batch's own target cannot raise it)"
+            stands[name] = (" (the project's, in studio.toml: a batch's own target cannot raise it)" if own is not None
+                            else f" (the project's, in studio.toml: the batch's target {asked!r} was not used, as it is not "
+                                 + ("a length above 0 in seconds)" if positive else "a level in dBFS)"))
     if path.suffix.lower() != ".wav":
         return facts, [_chk("warn", "audio.format", f"{path.suffix} is not WAV; level and length were not checked")]
     try:
