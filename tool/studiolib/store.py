@@ -1719,6 +1719,18 @@ class Studio:
         write_json(self.overview_dir / "now.json", data)
         return data
 
+    def page_prefs(self) -> dict:
+        """What the user set on this project's page and wants on every copy of it (the phone's too)."""
+        return read_json(self.overview_dir / "page.json", {}) or {}
+
+    def hide_setup(self, hidden: bool) -> dict:
+        """The Getting organised box: hidden by the user, or brought back."""
+        data = self.page_prefs()
+        data["setup_hidden"] = bool(hidden)
+        data["updated"] = iso_now()
+        write_json(self.overview_dir / "page.json", data)
+        return data
+
     def hands(self) -> list[dict]:
         return (read_json(self.overview_dir / "hands.json", {}) or {}).get("items", [])
 
@@ -2086,7 +2098,7 @@ class Studio:
         hooks = bool(setup.hooks_on())
         return {"now": self.now(), "repo": self.repo_git(), "milestones": self.roadmap(), "hands": self._hands_shown(),
                 "board": board.view(self), "live": board.live(self), "hooks": hooks, "hooks_notes": setup.hooks_hand_over_all(),
-                "setup": board.checklist(self, hooks)}
+                "setup": board.checklist(self, hooks), "setup_hidden": bool(self.page_prefs().get("setup_hidden"))}
 
     # ------------------------------------------------- the files behind a slot
     def repo_file(self, rel: str) -> Path:

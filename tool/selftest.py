@@ -454,6 +454,14 @@ def main() -> int:
         check(status == 200 and studio.unseen_hands()[0]["his_note"] == "walked it", "what the user marks done on the page reaches Claude's queue")
         studio.see_hand("walk")
         check(studio.unseen_hands() == [], "and leaves it once read")
+        left = [x["id"] for x in ov["setup"] if not x["done"] and not x.get("optional")]
+        hid, _ = http("POST", base + "/api/setup", {"hidden": True})
+        _, hidden = http("GET", base + "/api/state")
+        back, _ = http("POST", base + "/api/setup", {"hidden": False})
+        _, shown = http("GET", base + "/api/state")
+        check(left and not ov.get("setup_hidden") and hid == 200 and hidden["overview"]["setup_hidden"] is True
+              and back == 200 and shown["overview"]["setup_hidden"] is False and (home / "overview" / "page.json").is_file(),
+              "the Getting organised box is hidden from the page and brought back, kept in the Studio so the phone copy has it too")
 
         # buttons: a session files a line to run or a file to open; the user's click does it on the PC
         from studiolib import buttons

@@ -150,6 +150,7 @@
     reopen: async (id) => { const b = STATIC.batches[id]; b.draft = b.verdict; b.verdict = null; b.status = 'draft'; sync(b); },
     reset: async () => {},
     ui: async () => {},
+    setup: async (hidden) => { (STATIC.state.overview || {}).setup_hidden = hidden; },
     addDecision: async (d) => {
       const n = STATIC.state.decisions.length + 1;
       const rec = { id: 'D-' + String(n).padStart(4, '0'), date: new Date().toISOString().slice(0, 10), title: d.title, his_words: d.his_words, ruling: '', source: { type: 'studio', ref: 'written by hand' }, tags: d.tags || [], status: 'active' };
@@ -189,6 +190,7 @@
     reopen: (id) => call('POST', '/api/batch/' + encodeURIComponent(id) + '/reopen', {}),
     reset: (id) => call('POST', '/api/batch/' + encodeURIComponent(id) + '/reset', {}),
     ui: (v) => call('POST', '/api/ui', v),
+    setup: (hidden) => call('POST', '/api/setup', { hidden }),
     addDecision: (d) => call('POST', '/api/decisions', d),
     confirm: (key, confirmed, note) => call('PUT', '/api/triage', { key, confirmed, confirm_note: note }),
     hand: (id, action, note) => call('POST', '/api/hand', { id, action, note }),
@@ -3144,10 +3146,15 @@
     const owed = mine.length + (confirms ? 1 : 0) + openHands.length + myNotes.length;
     const col = h('div', { class: 'hudmain' });
 
-    // a project that has not been planned yet says so, and says how
+    // a project that has not been planned yet says so, and says how; the user can hide it, and a link under the milestones brings it back
     const todo = (ov.setup || []).filter((x) => !x.optional), left = todo.filter((x) => !x.done);
-    if (left.length) col.append(fold('setup', true, 'setup',
-      [h('span', { class: 'grow' }, 'Getting organised'), h('span', { class: 'chip accent' }, (todo.length - left.length) + ' of ' + todo.length)],
+    const setupShown = async (hidden) => {
+      try { await API.setup(hidden); S.state = await API.state(); render(null, true); } catch (e) { toast(e.message); }
+    };
+    const hideSetup = h('button', { class: 'btn small', type: 'button', title: 'Hide this box for this project. Set up, under the milestones, brings it back.',
+      onclick: (e) => { e.preventDefault(); e.stopPropagation(); setupShown(true); } }, 'Hide');
+    if (left.length && !ov.setup_hidden) col.append(fold('setup', true, 'setup',
+      [h('span', { class: 'grow' }, 'Getting organised'), h('span', { class: 'chip accent' }, (todo.length - left.length) + ' of ' + todo.length), hideSetup],
       h('ul', { class: 'ticks' }, (ov.setup || []).map((x) => h('li', { class: x.done ? 'done' : '' }, h('span', { class: 'tick' }, x.done ? '✓' : ''), x.title, x.optional && !x.done ? h('span', { class: 'muted' }, ' (if it has any)') : null))),
       h('div', { class: 'say' }, h('span', {}, 'In the project, say to Claude Code:'), h('code', {}, PLAN_SAY), copyButton(PLAN_SAY)),
       h('p', { class: 'muted' }, 'It reads what the project already has, asks you what only you can answer, and fills in the rest.')));
@@ -3164,7 +3171,9 @@
         h('span', { class: 'muted' }, board.steps ? board.steps + ' steps in all' : 'No steps yet')),
       ms.length ? h('div', { class: 'track', role: 'img', 'aria-label': ms.map((m) => m.id + ' ' + MSTONE[m.status]).join(', ') },
         ms.map((m) => h('div', { class: 'seg ' + m.status, title: m.name + ': ' + MSTONE[m.status] + (m.steps ? ', ' + pctText(m.pct) : '') }, h('b', {}, m.id), h('span', {}, m.name)))) : null,
-      ms.length ? h('p', { class: 'muted' }, done + ' of ' + ms.length + ' milestones complete') : null));
+      ms.length || (left.length && ov.setup_hidden) ? h('p', { class: 'muted' }, ms.length ? done + ' of ' + ms.length + ' milestones complete' : null,
+        left.length && ov.setup_hidden ? [ms.length ? ' · ' : null, h('a', { href: '#', class: 'setuplink', title: 'Show the Getting organised box again: ' + left.length + ' left to do',
+          onclick: (e) => { e.preventDefault(); setupShown(false); } }, 'Set up')] : null) : null));
 
     // the few facts worth a glance
     const tile = (label, value, sub, href) => h(href ? 'a' : 'div', { class: 'stat', href: href || null }, h('span', { class: 'label' }, label), h('span', { class: 'value' }, value), sub ? h('span', { class: 'sub' }, sub) : null);
