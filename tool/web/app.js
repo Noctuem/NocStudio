@@ -1029,8 +1029,14 @@
         if (!s.names.size) for (const st of ink.strokes) {
           const home = byKey[st.m]; if (st.c !== c || !home || !st.p) continue;
           for (let i = 0; i < st.p.length; i += 6) {
-            if (top(home, st.p[i], st.p[i + 1], st.p[i + 2], st.p[i + 3], st.p[i + 4], st.p[i + 5]) !== code) continue;
+            // a point's last three numbers are the way to its eye, not the surface's facing: top() is asked with the facing of the face under it
             const on = locate(home.group, st.p[i], st.p[i + 1], st.p[i + 2]); if (!on) continue;
+            const N = on.m.NB, a = 3 * on.m.ix[3 * on.f], b = 3 * on.m.ix[3 * on.f + 1], e = 3 * on.m.ix[3 * on.f + 2], w0 = 1 - on.u - on.w;
+            let nx = w0 * N[a] + on.u * N[b] + on.w * N[e], ny = w0 * N[a + 1] + on.u * N[b + 1] + on.w * N[e + 1], nz = w0 * N[a + 2] + on.u * N[b + 2] + on.w * N[e + 2];
+            const l = Math.hypot(nx, ny, nz) || 1; nx /= l; ny /= l; nz /= l;
+            let shows = top(home, st.p[i], st.p[i + 1], st.p[i + 2], nx, ny, nz);
+            if (shows < 1 && on.m.both) shows = top(home, st.p[i], st.p[i + 1], st.p[i + 2], -nx, -ny, -nz);
+            if (shows !== code) continue;
             spot(on.m, on.f, on.u, on.w); add(on.m, Math.PI * st.r * st.r * on.stretch, st.r * Math.sqrt(on.stretch));
           }
         }
