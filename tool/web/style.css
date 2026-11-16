@@ -328,6 +328,15 @@ details.brief summary { cursor: pointer; font-weight: 600; }
 .timebar { display: flex; gap: 8px 12px; align-items: center; flex-wrap: wrap; padding: 8px 12px 10px; }
 .timebar .grp { display: inline-flex; gap: 4px; }
 .timebar .t { font: 12px/1 var(--font-mono); color: var(--fg); font-variant-numeric: tabular-nums; min-width: 17ch; }
+/* the volume on the play bar: a speaker that mutes and a slider from silent to full */
+.timebar .volbar { align-items: center; }
+.btn.vol { padding: 3px 7px; line-height: 0; }
+.btn.vol svg { width: 16px; height: 14px; fill: var(--fg); stroke: var(--fg); stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+.btn.vol svg path + path { fill: none; }
+.btn.vol .x, .btn.vol.off .w1, .btn.vol.off .w2, .btn.vol.low .w2 { display: none; }
+.btn.vol.off .x { display: inline; }
+.btn.vol.off svg { fill: var(--muted); stroke: var(--muted); }
+.timebar .volume { width: 96px; margin: 0; accent-color: var(--accent); cursor: pointer; }
 .timeside { min-height: 0; overflow: auto; border-left: 1px solid var(--line); background: var(--surface); padding: 10px 12px; }
 .timemarks { display: grid; gap: 8px; }
 .timemark { display: grid; gap: 6px; padding: 6px 8px; background: var(--bg); border: 1px solid var(--line); border-left: 4px solid var(--sw); border-radius: var(--radius); }

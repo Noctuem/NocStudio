@@ -2204,8 +2204,8 @@ class Studio:
     def ui() -> dict:
         return read_json(PREFS, {}) or {}
 
-    def set_ui(self, scale=None, theme=None) -> dict:
-        """The page's size and theme, kept beside the tool so every Studio and window opens the way the user left it."""
+    def set_ui(self, scale=None, theme=None, volume=None) -> dict:
+        """The page's size, theme and play bar volume, kept beside the tool so every Studio and window opens the way the user left it."""
         ui = self.ui()
         if scale is not None:
             try:
@@ -2216,6 +2216,12 @@ class Studio:
             if theme not in ("dark", "light"):
                 raise StudioError("theme is dark or light")
             ui["theme"] = theme
+        if volume is not None:
+            level = lambda x: isinstance(x, (int, float)) and not isinstance(x, bool) and x == x
+            if not isinstance(volume, dict) or not level(volume.get("level")) or not level(volume.get("back", 1)):
+                raise StudioError("volume is a level from 0 to 1, with muted true or false")
+            ui["volume"] = {"level": round(min(1.0, max(0.0, float(volume["level"]))), 2), "muted": volume.get("muted") is True,
+                            "back": round(min(1.0, max(0.0, float(volume.get("back", 1)))), 2)}
         write_json(PREFS, ui)
         return ui
 
