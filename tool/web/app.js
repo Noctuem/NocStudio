@@ -1577,12 +1577,45 @@
     return tl;
   }
 
+  // the volume of the sound and clip views, kept on this PC so the next file and the next visit play as loud. level is
+  // from 0 (silent) to 1 (full); muted keeps the level, so the sound comes back where it was; back is the level the
+  // slider was last left at above silent, for the speaker to bring back after it was taken to 0. With no storage it plays at full
+  const VOL = (() => {
+    const v = { level: 1, muted: false, back: 1 }, subs = new Set(), KEY = 'nocstudio.volume';
+    const take = (o) => {
+      if (!o || typeof o !== 'object') return;
+      const n = (x) => (typeof x === 'number' && isFinite(x) ? Math.min(1, Math.max(0, x)) : null);
+      if (n(o.level) !== null) v.level = n(o.level);
+      v.muted = o.muted === true;
+      v.back = n(o.back) || (v.level > 0 ? v.level : 1);
+    };
+    try { take(JSON.parse(localStorage.getItem(KEY) || 'null')); } catch (e) { /* no storage: full volume */ }
+    const tell = () => subs.forEach((fn) => fn());
+    window.addEventListener('storage', (e) => { if (e.key === KEY) { try { take(JSON.parse(e.newValue || 'null')); } catch (x) { /* as above */ } tell(); } });  // another tab moved it
+    const save = () => { try { localStorage.setItem(KEY, JSON.stringify(v)); } catch (e) { /* as above */ } tell(); };
+    return {
+      v,
+      on(fn) { subs.add(fn); return () => subs.delete(fn); },
+      // the slider: a level from 0 to 1; moving it while muted brings the sound back at that level
+      level(x) { v.level = Math.min(1, Math.max(0, +x || 0)); v.muted = false; save(); },
+      // the slider let go: where it was left, or where it was taken from when it was taken down to silent
+      settle(from) { if (v.level > 0) v.back = v.level; else if (from > 0) v.back = from; save(); },
+      // the speaker: mute, or bring the sound back at the level before
+      toggle() { if (v.muted || v.level <= 0) { v.muted = false; if (v.level <= 0) v.level = v.back || 1; } else v.muted = true; save(); },
+      silent: () => v.muted || v.level <= 0,
+    };
+  })();
+  const ICON_VOL = '<svg viewBox="0 0 16 14" aria-hidden="true"><path d="M1.5 4.5h3l4-3.5v12l-4-3.5h-3z"/><path class="w1" d="M10.6 4.6a3.2 3.2 0 0 1 0 4.8"/><path class="w2" d="M12.4 2.6a6 6 0 0 1 0 8.8"/><path class="x" d="M10.5 4.5l4.5 5M15 4.5l-4.5 5"/></svg>';
+
   // playing a sound or a clip: play and hold that keep the place, seek, speed, loop all of it, or loop one stretch by
   // watching the time each frame. `el` is an <audio> or a <video>; opts.length() gives the length when the page knows it
-  // better; opts.snap(t) moves a time it is sent to (a clip goes to the middle of a frame)
+  // better; opts.snap(t) moves a time it is sent to (a clip goes to the middle of a frame). It plays at the kept volume
+  // (VOL), and volumeBar() draws the speaker and slider for the play bar
   function transport(el, opts) {
     opts = opts || {};
-    const subs = [], me = { stop: () => el.pause() };
+    const subs = [], me = { stop: () => el.pause() }, bars = [];
+    const loud = () => { el.volume = VOL.v.level; el.muted = VOL.v.muted; bars.forEach((fn) => fn()); };  // a new file on the same element keeps both
+    const quiet = VOL.on(loud); loud();
     let raf = 0, loop = null;  // loop: { id, range() -> [from, to] in seconds, or null once the mark is gone }
     const tell = (what) => subs.slice().forEach((fn) => fn(what));
     const range = () => { const r = loop && loop.range(); if (loop && !r) { loop = null; tell('state'); } return r || null; };
@@ -1623,7 +1656,27 @@
       loopAll(on) { el.loop = !!on; },
       // play one stretch round and round: id names it, range() says where it is now (it may be dragged meanwhile)
       loopSpan(id, rangeFn) { loop = id ? { id, range: rangeFn } : null; tell('state'); },
-      destroy() { cancelAnimationFrame(raf); raf = 0; loop = null; el.pause(); players.delete(me); subs.length = 0; },
+      // the speaker that mutes and brings the sound back, and the slider from silent to full, for the play bar
+      volumeBar() {
+        const btn = h('button', { class: 'btn small vol', type: 'button', html: ICON_VOL, onclick: (e) => { e.currentTarget.blur(); VOL.toggle(); } });
+        let from = VOL.v.level, held = false;  // the level when the slider was taken hold of, by the pointer or by the keys
+        const take = () => { from = VOL.v.muted ? 0 : VOL.v.level; };
+        const bar = h('input', { type: 'range', class: 'volume', min: 0, max: 100, step: 1, 'aria-label': 'Volume', oninput: () => VOL.level(bar.value / 100), onchange: () => VOL.settle(from),
+          onpointerdown: () => { held = true; take(); window.addEventListener('pointerup', letGo, { once: true }); }, onfocus: () => { if (!held) take(); } });
+        function letGo() { held = false; bar.blur(); }  // let go of the slider, here or past its end, and Space plays again, as after a button
+        const show = () => {
+          const v = VOL.v, off = VOL.silent(), pct = Math.round(100 * v.level);
+          bar.value = String(v.muted ? 0 : pct);
+          btn.classList.toggle('off', off); btn.classList.toggle('low', !off && v.level < 0.5);
+          btn.setAttribute('aria-pressed', String(v.muted));
+          const say = off ? 'Bring the sound back' + (v.muted ? ' at ' + pct + '%' : '') : 'Mute; the level is kept';
+          btn.title = say; btn.setAttribute('aria-label', say);
+          bar.title = 'Volume ' + (v.muted ? 'muted, kept at ' + pct + '%' : pct + '%');
+        };
+        bars.push(show); show();
+        return h('span', { class: 'grp volbar' }, btn, bar);
+      },
+      destroy() { cancelAnimationFrame(raf); raf = 0; loop = null; el.pause(); players.delete(me); subs.length = 0; quiet(); bars.length = 0; },
     };
     el.addEventListener('play', () => { tell('state'); if (!raf) raf = requestAnimationFrame(tick); });
     el.addEventListener('pause', () => tell('state'));
@@ -2025,7 +2078,7 @@
     const pick = files.length > 1 ? h('div', { class: 'timefiles' }, files.map((f) => h('button', { class: 'btn small', type: 'button', onclick: (e) => { e.currentTarget.blur(); if (f !== cur) load(f); } }, f.label || f.name))) : null;
     const side = h('div', { class: 'timeside' });
     const el = h('div', { class: 'timeview' }, h('div', { class: 'timemain' }, pick, box, scroll,
-      h('div', { class: 'timebar' }, playBtn, time, h('span', { class: 'grp' }, rates), loopBtn,
+      h('div', { class: 'timebar' }, playBtn, time, h('span', { class: 'grp' }, rates), loopBtn, tp.volumeBar(),
         h('span', { class: 'grp' }, zoomBtn('−', 'Show more time (-)', () => zoomAt(centre(), 1 / 1.6)), zoomBtn('+', 'Show less time, closer (+)', () => zoomAt(centre(), 1.6)), zoomBtn('Whole', 'Show the whole sound', () => setView(0, len()))),
         status)), side);
     const map = { time: (cx) => { const r = strip.getBoundingClientRect(); return v.t0 + (cx - r.left) / (r.width || 1) * v.span; },
@@ -2316,7 +2369,7 @@
     const side = h('div', { class: 'timeside' });
     const el = h('div', { class: 'timeview clip' }, h('div', { class: 'timemain' }, stage, track,
       h('div', { class: 'timebar' }, playBtn, h('span', { class: 'grp' }, btn('◀', 'A frame back (,); with Shift, ten', () => step(-1), 'A frame back'), btn('▶', 'A frame on (.); with Shift, ten', () => step(1), 'A frame on')),
-        time, h('span', { class: 'grp' }, rateButtons(() => tp.rate(S.opts.rate))), loopBtn, status)), side);
+        time, h('span', { class: 'grp' }, rateButtons(() => tp.rate(S.opts.rate))), loopBtn, tp.volumeBar(), status)), side);
     // the brush: Paint on or off, its size, Rub out. Undo and Clear all are the marks' own
     const penBtn = btn('Paint', 'Paint on the frame, in the colour of its mark (B). Painting holds the clip', () => setPen(!pen.on));
     const sizes = ['S', 'M', 'L'].map((label, i) => btn(label, ['Small', 'Medium', 'Large'][i] + ' brush', () => { pen.size = i; showPen(); }));
