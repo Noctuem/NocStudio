@@ -336,12 +336,14 @@ def make_handler(home: Path, allowed_hosts: set[str], quiet: bool = False, hub: 
 
         def write(self):
             started = time.time_ns()
+            self.marks = True  # a read-only post (the link check) turns this off, so a session's own writes are not taken as the user's
             try:
                 self._write()
             finally:  # what this click changed, so a sync can send it while a session works on other files
                 from . import sync
                 try:
-                    sync.page_wrote(home, started, urlsplit(self.path).path)
+                    if self.marks:
+                        sync.page_wrote(home, started, urlsplit(self.path).path)
                 except Exception:  # noqa: BLE001 - the click itself went through
                     pass
 
@@ -390,6 +392,7 @@ def make_handler(home: Path, allowed_hosts: set[str], quiet: bool = False, hub: 
                 data = self.body()
                 if parts == ["api", "share"] and data.get("action") == "check":  # has a new link reached the public server yet: only its id comes from the page
                     from . import share
+                    self.marks = False
                     return self.send_json(dict(share.check_live(self.studio(), str(data.get("id") or "")), ok=True))
                 if parts == ["api", "wake"]:  # the user pressed Send verdicts: tell that session there are verdicts to check
                     from . import wake

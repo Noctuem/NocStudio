@@ -380,6 +380,13 @@ def stop(studio: Studio, share_id: str) -> dict:
     return dict(rec, state="stopped", url=link(studio, rec))
 
 
+class _Stay(urllib.request.HTTPRedirectHandler):
+    """Refuse to follow a redirect, so a sign-in page elsewhere never reads as the link working."""
+
+    def redirect_request(self, *a, **k):
+        return None
+
+
 def check_live(studio: Studio, share_id: str, timeout: float = 4.0) -> dict:
     """Whether the link answers on the public server yet: one HEAD to the public address, asked by the PC, never by the page."""
     if not SHARE_ID.fullmatch(share_id or ""):
@@ -392,7 +399,7 @@ def check_live(studio: Studio, share_id: str, timeout: float = 4.0) -> dict:
         return {"public": False, "live": False}
     req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "NocStudio link check"})
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as res:
+        with urllib.request.build_opener(_Stay).open(req, timeout=timeout) as res:  # a 3xx raises, so it is not live
             live = res.status == 200
     except (urllib.error.URLError, OSError, ValueError):
         live = False

@@ -1378,6 +1378,36 @@ def main() -> int:
         del os.environ["STUDIO_HUB"]
         check(answers == [{"public": True, "live": True}, {"public": True, "live": False}, {"public": False, "live": False}] and len(bad_ids) == 3,
               "the check says a live link answers on the public server and a stopped one does not, says nothing with no public address, and takes only a share's id")
+        # a public address that sends the check elsewhere, as a proxy sends a visitor to its sign-in page, is not taken as the link working
+        from http.server import BaseHTTPRequestHandler
+        seen = []
+
+        class SignIn(BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def answer(self):
+                seen.append((self.server.server_address[1], self.command))
+                if self.server is gate:
+                    self.send_response(302)
+                    self.send_header("Location", f"http://127.0.0.1:{portal.server_address[1]}/login?rd=x")
+                else:
+                    self.send_response(200)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            do_HEAD = do_GET = answer
+
+        gate, portal = ThreadingHTTPServer(("127.0.0.1", 0), SignIn), ThreadingHTTPServer(("127.0.0.1", 0), SignIn)
+        for srv in (gate, portal):
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+        os.environ["STUDIO_SHARE_URL"] = f"http://127.0.0.1:{gate.server_address[1]}/share/"
+        sent_on = share.check_live(studio, clip["id"])
+        os.environ["STUDIO_SHARE_URL"] = "https://example.test/share"
+        for srv in (gate, portal):
+            srv.shutdown(); srv.server_close()
+        check(sent_on == {"public": True, "live": False} and seen == [(gate.server_address[1], "HEAD")],
+              "a link whose public address answers with a move to another page is not live, and the check does not follow it there")
 
         # share links from the inbox: a batch's or one candidate's own files, under its name, and nothing else in the batch
         shot = studio.load_batch(batch["id"])
@@ -1732,6 +1762,42 @@ def main() -> int:
               "a batch of clips shared from the PC page takes the first clip's still to the server's copy, has no link straight to one clip, "
               "and the page's check says the link works once it is there")
         shares.stop(studio, made["share"]["id"])
+        # the page's check changes nothing, so a session's own writes made while it waits are never sent as the user's
+        from http.server import BaseHTTPRequestHandler
+
+        class Slow(BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_HEAD(self):
+                time.sleep(1.0)
+                self.send_response(404)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+        slow = ThreadingHTTPServer(("127.0.0.1", 0), Slow)
+        threading.Thread(target=slow.serve_forever, daemon=True).start()
+        os.environ["STUDIO_SHARE_URL"] = f"http://127.0.0.1:{slow.server_address[1]}/"
+        slowlink = shares.make(Studio(home), [reel["id"]], title="Waiting")
+        for _ in range(150):
+            if not sync.KICKS[str(home.resolve())].locked():
+                break
+            time.sleep(0.1)
+        put(home / "live" / "page-wrote.json", [])
+        calls, real_wrote = [], sync.page_wrote
+        sync.page_wrote = lambda *a, **k: (calls.append(a), real_wrote(*a, **k))
+        side = threading.Timer(0.3, lambda: put(home / "overview" / "session-wrote-this.json", {"by": "a session"}))
+        side.start()
+        try:
+            _, asked = http("POST", pcbase + "/api/share", {"action": "check", "id": slowlink["id"]})
+        finally:
+            side.join(); sync.page_wrote = real_wrote
+            slow.shutdown(); slow.server_close(); del os.environ["STUDIO_SHARE_URL"]
+        check(asked == {"ok": True, "public": True, "live": False} and not calls
+              and json.loads((home / "live" / "page-wrote.json").read_text(encoding="utf-8")) == [],
+              "a check of a link marks nothing as changed on the page, though a session wrote to the overview while it waited")
+        shares.stop(Studio(home), slowlink["id"])
+        (home / "overview" / "session-wrote-this.json").unlink()
         (home / "live" / "s-busy.json").unlink()
         pc.shutdown(); pc.server_close()
 
