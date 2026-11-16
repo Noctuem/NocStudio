@@ -351,6 +351,8 @@ details.brief summary { cursor: pointer; font-weight: 600; }
 .btn.vol.off .x { display: inline; }
 .btn.vol.off svg { fill: var(--muted); stroke: var(--muted); }
 .timebar .volume { width: 96px; margin: 0; accent-color: var(--accent); cursor: pointer; }
+.player .volbar { display: flex; align-items: center; gap: 4px; flex: none; }
+.player .volume { width: 72px; margin: 0; accent-color: var(--accent); cursor: pointer; }
 .timeside { min-height: 0; overflow: auto; border-left: 1px solid var(--line); background: var(--surface); padding: 10px 12px; }
 .timemarks { display: grid; gap: 8px; }
 .timemark { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; gap: 6px; padding: 6px 8px; background: var(--bg); border: 1px solid var(--line); border-left: 4px solid var(--sw); border-radius: var(--radius); }

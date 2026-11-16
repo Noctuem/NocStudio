@@ -1445,7 +1445,11 @@
     const a = new Audio(); a.preload = 'auto'; a.src = rel(API.src(url));
     const btn = h('button', { class: 'play', type: 'button', 'aria-label': 'Play ' + (label || 'sound'), html: ICON_PLAY });
     const wave = h('canvas', { class: 'wave' }); const time = h('span', { class: 't' }, '');
-    const el = h('div', { class: 'player' }, btn, wave, time);
+    const shows = [], loud = () => { a.volume = VOL.v.level; a.muted = VOL.v.muted; shows.forEach((fn) => fn()); };
+    const quiet = VOL.on(loud); loud();
+    const vol = volumeControl(() => p.toggle(), (fn) => shows.push(fn));
+    vol.addEventListener('click', (e) => e.stopPropagation());
+    const el = h('div', { class: 'player' }, btn, wave, time, vol);
     let peaks = null, seconds = 0, raf = 0;
     function draw() {
       const dpr = Math.min(2, (window.devicePixelRatio || 1) * cz(wave)), w = Math.round(wave.clientWidth * dpr), hh = Math.round(wave.clientHeight * dpr);
@@ -1474,7 +1478,7 @@
       stop() { a.pause(); a.currentTime = 0; },
       toggle() { if (a.paused) p.play(); else p.stop(); },
       done: () => new Promise((ok) => { const fin = () => { a.removeEventListener('ended', fin); a.removeEventListener('pause', fin); ok(); }; a.addEventListener('ended', fin); a.addEventListener('pause', fin); }),
-      destroy() { a.pause(); a.removeAttribute('src'); players.delete(p); cancelAnimationFrame(raf); },
+      destroy() { a.pause(); a.removeAttribute('src'); players.delete(p); cancelAnimationFrame(raf); quiet(); shows.length = 0; },
     };
     btn.addEventListener('click', (e) => { e.stopPropagation(); seq.token++; p.toggle(); });
     wave.addEventListener('click', (e) => { const r = wave.getBoundingClientRect(); const dur = seconds || a.duration || 0; if (dur) { a.currentTime = dur * (e.clientX - r.left) / r.width; draw(); } });
@@ -1609,6 +1613,28 @@
       silent: () => v.muted || v.level <= 0,
     };
   })();
+  // the speaker that mutes and brings the sound back, and the slider from silent to full, for a play bar. onSpace plays
+  // or holds; watch(fn) is how the player tells it the volume moved
+  function volumeControl(onSpace, watch) {
+    const btn = h('button', { class: 'btn small vol', type: 'button', html: ICON_VOL, onclick: (e) => { e.currentTarget.blur(); VOL.toggle(); } });
+    let from = VOL.v.level, held = false;  // the level when the slider was taken hold of, by the pointer or by the keys
+    const take = () => { from = VOL.v.muted ? 0 : VOL.v.level; };
+    const bar = h('input', { type: 'range', class: 'volume', min: 0, max: 100, step: 1, 'aria-label': 'Volume', oninput: () => VOL.level(bar.value / 100), onchange: () => VOL.settle(from),
+      onpointerdown: () => { held = true; take(); window.addEventListener('pointerup', letGo, { once: true }); }, onfocus: () => { if (!held) take(); },
+      onkeydown: (e) => { if (e.key === ' ') { e.preventDefault(); bar.blur(); if (!e.repeat) onSpace(); } } });  // Space on the slider plays, and the keys go back to the view
+    function letGo() { held = false; bar.blur(); }  // let go of the slider, here or past its end, and Space plays again, as after a button
+    const show = () => {
+      const v = VOL.v, off = VOL.silent(), pct = Math.round(100 * v.level);
+      bar.value = String(v.muted ? 0 : pct);
+      btn.classList.toggle('off', off); btn.classList.toggle('low', !off && v.level < 0.5);
+      btn.setAttribute('aria-pressed', String(v.muted));
+      const say = off ? 'Unmute' : 'Mute';
+      btn.title = say; btn.setAttribute('aria-label', say);
+      bar.title = (v.muted ? 'Muted, ' : 'Volume ') + pct + '%';
+    };
+    watch(show); show();
+    return h('span', { class: 'grp volbar' }, btn, bar);
+  }
   const ICON_VOL = '<svg viewBox="0 0 16 14" aria-hidden="true"><path d="M1.5 4.5h3l4-3.5v12l-4-3.5h-3z"/><path class="w1" d="M10.6 4.6a3.2 3.2 0 0 1 0 4.8"/><path class="w2" d="M12.4 2.6a6 6 0 0 1 0 8.8"/><path class="x" d="M10.5 4.5l4.5 5M15 4.5l-4.5 5"/></svg>';
 
   // playing a sound or a clip: play and hold that keep the place, seek, speed, loop all of it, or loop one stretch by
@@ -1661,26 +1687,7 @@
       // play one stretch round and round: id names it, range() says where it is now (it may be dragged meanwhile)
       loopSpan(id, rangeFn) { loop = id ? { id, range: rangeFn } : null; tell('state'); },
       // the speaker that mutes and brings the sound back, and the slider from silent to full, for the play bar
-      volumeBar() {
-        const btn = h('button', { class: 'btn small vol', type: 'button', html: ICON_VOL, onclick: (e) => { e.currentTarget.blur(); VOL.toggle(); } });
-        let from = VOL.v.level, held = false;  // the level when the slider was taken hold of, by the pointer or by the keys
-        const take = () => { from = VOL.v.muted ? 0 : VOL.v.level; };
-        const bar = h('input', { type: 'range', class: 'volume', min: 0, max: 100, step: 1, 'aria-label': 'Volume', oninput: () => VOL.level(bar.value / 100), onchange: () => VOL.settle(from),
-          onpointerdown: () => { held = true; take(); window.addEventListener('pointerup', letGo, { once: true }); }, onfocus: () => { if (!held) take(); },
-          onkeydown: (e) => { if (e.key === ' ') { e.preventDefault(); bar.blur(); if (!e.repeat) tp.toggle(); } } });  // Space on the slider plays, and the keys go back to the view
-        function letGo() { held = false; bar.blur(); }  // let go of the slider, here or past its end, and Space plays again, as after a button
-        const show = () => {
-          const v = VOL.v, off = VOL.silent(), pct = Math.round(100 * v.level);
-          bar.value = String(v.muted ? 0 : pct);
-          btn.classList.toggle('off', off); btn.classList.toggle('low', !off && v.level < 0.5);
-          btn.setAttribute('aria-pressed', String(v.muted));
-          const say = off ? 'Unmute' : 'Mute';
-          btn.title = say; btn.setAttribute('aria-label', say);
-          bar.title = (v.muted ? 'Muted, ' : 'Volume ') + pct + '%';
-        };
-        bars.push(show); show();
-        return h('span', { class: 'grp volbar' }, btn, bar);
-      },
+      volumeBar() { return volumeControl(() => tp.toggle(), (fn) => bars.push(fn)); },
       destroy() { cancelAnimationFrame(raf); raf = 0; loop = null; el.pause(); players.delete(me); subs.length = 0; quiet(); bars.length = 0; },
     };
     el.addEventListener('play', () => { tell('state'); if (!raf) raf = requestAnimationFrame(tick); });
@@ -3633,7 +3640,7 @@
     } catch (e) { /* the plain write below */ }
     return p.then((u) => navigator.clipboard.writeText(u));
   }
-  const copyByHand = (url) => { window.prompt('Copy the link', url); };
+  const copyByHand = (url) => { try { window.prompt('Copy the link', url); } catch (e) { toast('Could not copy the link'); } };
   function copyLink(url) { toClipboard(url).then(() => toast('Link copied'), () => copyByHand(url)); }
   const LINKS = new Map();  // the live link for each set of files, by what was asked: Share again copies it
   const BARS = new Map();  // the Share bars on the page for each set of files, so a change in one shows in all
