@@ -3,7 +3,9 @@
 A share is one record in the home, kept in git so the server's copy has it a minute later:
 
     <home>/shares/<id>.json    {"id", "token", "title", "files": [{"path", "name", "size", "group"?}], "batches"?,
-                                "created", "expires", "stopped"}
+                                "items", "created", "expires", "stopped"}
+
+A live link's end can be moved to now plus a new time (`retime`), and a clip's still can follow the link (`add_still`).
 
 The link is the public address of the share server, then the token: https://example.com/share/<token>/
 Only the files named in the record are reachable through it, and only until it expires or is stopped. A file is
@@ -337,6 +339,7 @@ def make(studio: Studio, files: list, *, title: str = "", hours: str | int = "7d
         "hours": hours,
         "stopped": None,
         "by": by,
+        "items": [str(i) for i in files],  # as asked, so the page finds the link it made for the same files
     }
     if batches:
         rec["batches"] = [b["id"] for b in batches]
@@ -380,6 +383,43 @@ def stop(studio: Studio, share_id: str) -> dict:
     return dict(rec, state="stopped", url=link(studio, rec))
 
 
+def _live(studio: Studio, share_id: str) -> tuple[Path, dict]:
+    """A live link's record and where it is kept; refused for any other id."""
+    if not SHARE_ID.fullmatch(share_id or ""):
+        raise StudioError(f"no share {share_id!r}")
+    path = _folder(studio) / f"{share_id}.json"
+    rec = read_json(path)
+    if not isinstance(rec, dict) or rec.get("id") != share_id or not rec.get("token"):
+        raise StudioError(f"no share {share_id!r}")
+    if state_of(rec) != "live":
+        raise StudioError(f"{share_id} has ended; share it again for a new link")
+    return path, rec
+
+
+def retime(studio: Studio, share_id: str, time: str | int) -> dict:
+    """A live link's end moved to now plus that time, 1 hour to 90 days."""
+    path, rec = _live(studio, share_id)
+    hours = hours_of(time)
+    now = _now().replace(microsecond=0)
+    rec["expires"] = (now + datetime.timedelta(hours=hours)).isoformat().replace("+00:00", "Z")
+    rec["hours"] = hours
+    write_json(path, rec)
+    return dict(rec, state=state_of(rec), url=link(studio, rec), clip_url=clip_link(studio, rec))
+
+
+def add_still(studio: Studio, share_id: str, still) -> dict:
+    """One frame of a live link's first clip, kept beside its record for a chat's preview."""
+    path, rec = _live(studio, share_id)
+    files = rec.get("files") or []
+    if not files or not _is_clip(str(files[0].get("name") or "")):
+        raise StudioError(f"{share_id} does not open with a clip; a still goes only with a clip")
+    data = check_still(still)
+    (_folder(studio) / f"{share_id}.jpg").write_bytes(data)  # before the record, so a record that says so has it
+    rec["still"] = True
+    write_json(path, rec)
+    return dict(rec, state=state_of(rec), url=link(studio, rec), clip_url=clip_link(studio, rec))
+
+
 class _Stay(urllib.request.HTTPRedirectHandler):
     """Refuse to follow a redirect, so a sign-in page elsewhere never reads as the link working."""
 
@@ -395,6 +435,8 @@ def check_live(studio: Studio, share_id: str, timeout: float = 4.0) -> dict:
     if not isinstance(rec, dict) or not rec.get("token"):
         raise StudioError(f"no share {share_id!r}")
     url = link(studio, rec)
+    if state_of(rec) != "live":  # stopped or run out, here or elsewhere: the page lets it go
+        return {"public": bool(url), "live": False, "ended": True}
     if not url:
         return {"public": False, "live": False}
     req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "NocStudio link check"})

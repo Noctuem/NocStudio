@@ -146,6 +146,13 @@ def cmd_share(a):
             print(f"{share.stop(s, sid)['id']}: stopped")
         sync.page_wrote(s.home, started, "/api/share", now=False)
         return
+    if a.action == "time":
+        if len(a.items) != 2:
+            raise StudioError("say: share time <id> <time>, as 1h, 3d or 90d")
+        rec = share.retime(s, a.items[0], a.items[1])
+        sync.page_wrote(s.home, started, "/api/share", now=False)
+        print(f"{rec['id']}: until {rec['expires']}")
+        return
     rows = share.listing(s)
     for r in rows:
         if a.all or r["state"] == "live":
@@ -875,8 +882,8 @@ def main(argv=None) -> int:
     c.set_defaults(fn=cmd_serve_shares)
 
     c = sub.add_parser("share", help="links that let someone outside see a few library files, or a batch's candidates, until a set time")
-    c.add_argument("action", choices=["make", "list", "stop"])
-    c.add_argument("items", nargs="*", help="make: library files or version folders, a batch, or <batch>/<candidate>; stop: share ids")
+    c.add_argument("action", choices=["make", "list", "stop", "time"])
+    c.add_argument("items", nargs="*", help="make: library files or version folders, a batch, or <batch>/<candidate>; stop: share ids; time: a share id and its new time from now")
     c.add_argument("--title", default="", help="what the page they open is called")
     c.add_argument("--for", dest="time", default="7d", help="how long the link works: 12h, 7d, 2w (90 days at most)")
     c.add_argument("--all", action="store_true", help="list: expired and stopped links too")
