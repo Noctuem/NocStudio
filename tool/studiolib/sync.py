@@ -92,6 +92,16 @@ def page_wrote(home, since_ns: int, path: str) -> None:
                     found.add(f.relative_to(studio.home).as_posix())
             except OSError:
                 continue
+    for name in [f for f in found if f.startswith("shares/sh-")]:  # a link made: the files it names go with it, so it works on the server's copy
+        try:
+            rec = read_json(studio.home / name, {}) or {}
+        except StudioError:
+            continue
+        for f in rec.get("files") or []:
+            rel = str(f.get("path") or "") if isinstance(f, dict) else ""
+            for path in ([rel] + (["/".join(rel.split("/")[:2]) + "/batch.json"] if rel.startswith("batches/") else [])):
+                if path and ".." not in path.split("/") and (studio.home / path).is_file():
+                    found.add(path)
     if not found:
         return
     listed = studio.home / "live" / CLICKED

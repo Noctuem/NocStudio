@@ -1203,7 +1203,7 @@ def main() -> int:
                 share.make(studio, bad); check(False, f"sharing {bad} is refused")
             except StudioError:
                 pass
-        check(True, "a share takes library files alone: never a batch file, a path out of the library, or nothing")
+        check(True, "a share never takes a file named inside a batch, a path out of the library, or nothing")
         os.environ["STUDIO_SHARE_URL"] = "https://example.test/share"
         rec = share.make(studio, ["library/test.script/v1"], title="Take one", hours="2d")
         other = share.make(studio, ["/library/test.script/v1/script.md"], hours="1h")
@@ -1245,6 +1245,95 @@ def main() -> int:
             share.make(studio, ["library/test.script/v1"], hours="91d"); check(False, "a link longer than 90 days is refused")
         except StudioError:
             check(True, "every link ends: 90 days at most")
+
+        # share links from the inbox: a batch's or one candidate's own files, under its name, and nothing else in the batch
+        shot = studio.load_batch(batch["id"])
+        bfolder, sid = studio.batch_dir(shot["id"]), shot["id"]
+        whole = share.make(studio, [sid], hours="12h")
+        one = share.make(studio, [f"batches/{sid}/b"], title="Just B")
+        check([(f["path"], f["group"]) for f in whole["files"]] == [(f"batches/{sid}/files/a/quiet_a.wav", "A"), (f"batches/{sid}/files/b/quiet_b.wav", "B")]
+              and whole["title"] == "Shot" and whole["batches"] == [sid] and whole["hours"] == 12
+              and [(f["path"], f["group"]) for f in one["files"]] == [(f"batches/{sid}/files/b/quiet_b.wav", "B")] and one["title"] == "Just B",
+              "a batch shares every candidate's own files under the candidate's name and the batch's title, and <batch>/<candidate> shares one")
+        fake = studio.new_batch("lent", kind="audio", ask="x", look_at=["x"], sample=True)
+        studio.add_candidate(fake["id"], [src / "quiet_a.wav"])
+        (bfolder / "marks").mkdir(exist_ok=True); make_png(bfolder / "marks" / "a.png", 8, 10)
+        (bfolder / "files" / "a" / "extra.txt").write_text("not listed", encoding="utf-8")
+        for bad in ([f"{sid}/z"], [fake["id"]], [f"samples/{fake['id']}/a"], [f"batches/{sid}/batch.json"], [f"batches/{sid}/files/a/quiet_a.wav"],
+                    [f"{sid}/../studio.toml"], [f"{sid}/.."], ["../library"], ["slots"], [f"{sid}/marks"]):
+            try:
+                share.make(studio, bad); check(False, f"sharing {bad} is refused")
+            except StudioError:
+                pass
+        check(True, "a sample, a candidate not in the batch, a file named inside a batch, its record, its marks, or a path that climbs out are refused")
+        wip = studio.new_batch("wip", title="Work in progress", kind="audio")
+        studio.add_candidate(wip["id"], [src / "quiet_a.wav"], title="Half done")
+        refused = []
+        for bad in ([wip["id"]], [f"{wip['id']}/a"], [sid.upper()], [f"{sid.upper()}/a"]):
+            try:
+                share.make(studio, bad)
+            except StudioError as e:
+                refused.append(str(e))
+        check(len(refused) == 4 and "not filed yet" in refused[0] and "not filed yet" in refused[1]
+              and share.candidate_file(home, f"batches/{wip['id']}/files/a/quiet_a.wav") is None
+              and share.candidate_file(home, f"batches/{sid.upper()}/files/a/quiet_a.wav") is None
+              and share.candidate_file(home, f"batches/{sid}/files/a/QUIET_A.wav") is None
+              and share.candidate_file(home, f"batches/{sid}/files/a/quiet_a.wav") is not None,
+              "a batch not yet filed is never shared, and a batch or file named in the wrong case is refused, so a link never names a path the server's copy lacks")
+        shutil.rmtree(studio.batch_dir(wip["id"]))
+        kept = (bfolder / "batch.json").read_text(encoding="utf-8")
+        raw = json.loads(kept)
+        raw["candidates"][0]["files"] += [{"path": p} for p in ("files/a/../../batch.json", "verdict.json", "files/_context/x.png", "marks/a.png", "files/a/link.wav")]
+        (bfolder / "batch.json").write_text(json.dumps(raw), encoding="utf-8")
+        try:
+            os.symlink(home / "studio.toml", bfolder / "files" / "a" / "link.wav"); linked = True
+        except OSError:
+            linked = False  # Windows without the right to make links: the check below runs without one
+        climbed = share.make(studio, [f"{sid}/a"])
+        inside = [share.candidate_file(home, f"batches/{sid}/{p}") for p in ("files/a/../../batch.json", "batch.json", "verdict.json", "marks/a.png",
+                                                                             "files/a/extra.txt", "files/a/link.wav", "files/a/quiet_a.wav")]
+        check([f["name"] for f in climbed["files"]] == ["quiet_a.wav"] and inside[:-1] == [None] * 6 and inside[-1] == bfolder / "files" / "a" / "quiet_a.wav"
+              and share.candidate_file(home, f"samples/{fake['id']}/files/a/quiet_a.wav") is None
+              and share.candidate_file(home, f"batches/{fake['id']}/files/a/quiet_a.wav") is None,
+              "only a file batch.json lists in the candidate's own folder is shared: one it names that climbs out, its internals, a file it does not list"
+              + (", a link" if linked else "") + " and a sample's file are left out")
+        (bfolder / "batch.json").write_text(kept, encoding="utf-8")
+        (bfolder / "files" / "a" / "extra.txt").unlink()
+        if linked:
+            (bfolder / "files" / "a" / "link.wav").unlink()
+        shutil.rmtree(studio.batch_dir(fake["id"]))
+        st, hd, body = sget(whole["token"] + "/")
+        text = body.decode("utf-8")
+        check(st == 200 and "<h1>Shot</h1>" in text and text.index("<h2>A</h2>") < text.index("quiet_a.wav") < text.index("<h2>B</h2>") < text.index("quiet_b.wav")
+              and "<audio" in text and "Which shot?" not in text and "Listen" not in text and "verdict" not in text.lower() and "<script" not in text,
+              "the link opens the batch's title, then each candidate's files under its name, with no ask, look-at points or verdict")
+        st, hd, body = sget(f"{whole['token']}/1/quiet_b.wav")
+        refused = [sget(p)[0] for p in (f"{whole['token']}/1/batch.json", f"{whole['token']}/2/quiet_b.wav", f"{one['token']}/0/quiet_a.wav")]
+        check(st == 200 and body == (bfolder / "files/b/quiet_b.wav").read_bytes() and hd.get("Content-Type") == "audio/wav" and set(refused) == {404},
+              "the public server hands a batch link's files and nothing beside them")
+        forged = dict(whole, id="sh-0000beef", token="f" * 43, files=[{"path": f"batches/{sid}/{p}", "name": Path(p).name, "size": 1}
+                                                                      for p in ("batch.json", "marks/a.png", "files/a/../../batch.json")])
+        share.write_json(home / "shares" / "sh-0000beef.json", forged)
+        check([sget(p)[0] for p in ("f" * 43 + "/", "f" * 43 + "/0/batch.json", "f" * 43 + "/1/a.png")] == [404, 404, 404],
+              "a record that names a batch's own record or marks reaches nothing, as a stopped link")
+        (home / "shares" / "sh-0000beef.json").unlink()
+        (bfolder / "files/b/quiet_b.wav").rename(bfolder / "quiet_b.away")
+        st, _, body = sget(whole["token"] + "/")
+        half = st == 200 and b"quiet_a.wav" in body and b"<h2>B</h2>" not in body and b"One file in this link is no longer here." in body
+        (bfolder / "files/a/quiet_a.wav").rename(bfolder / "quiet_a.away")
+        check(half and sget(whole["token"] + "/")[0] == 404 and sget(f"{whole['token']}/0/quiet_a.wav")[0] == 404,
+              "a batch deleted since: its link shows the files still there and says how many are gone, and stops once none are left")
+        (bfolder / "quiet_a.away").rename(bfolder / "files/a/quiet_a.wav"); (bfolder / "quiet_b.away").rename(bfolder / "files/b/quiet_b.wav")
+        lib = share.make(studio, ["library/test.script/v1/script.md"], title="Old kind")
+        st, _, body = sget(lib["token"] + "/")
+        check(st == 200 and "group" not in lib["files"][0] and "batches" not in lib and b"<section>" not in body and b"<h2>" not in body
+              and b"<ul><li>" in body and b"no longer here" not in body, "a library link opens as before: one list of its files, no headings")
+        said = tool_cli("share", "make", f"{sid}/a", "--for", "12h")
+        check(said.returncode == 0 and ": 1 file(s) until " in said.stdout and tool_cli("share", "make", fake["id"]).returncode == 2,
+              "the command takes <batch>/<candidate>, and refuses a sample")
+        for x in share.listing(studio):
+            if x["state"] == "live":
+                share.stop(studio, x["id"])
         sh.shutdown(); sh.server_close(); del os.environ["STUDIO_SHARE_URL"]
         (home / "library/test.script/v1/page.html").unlink()
         # a video's parts in its own Library group: working copies the user hears, and a script they edit there
@@ -1446,6 +1535,34 @@ def main() -> int:
         check(status == 200 and made["note"]["id"] in sent and not any(x.get("id") == "half-done" for x in Studio(phone).hands())
               and "overview/hands.json" in subprocess.run(["git", "-C", str(home), "status", "--porcelain"], capture_output=True, text=True).stdout,
               "a note typed on the PC page reaches the phone at once while a session works, and the session's own changes wait for its save")
+        lent = studio.new_batch("lend", title="Lend", kind="audio", ask="Which?", look_at=["x"])
+        studio.add_candidate(lent["id"], [src / "quiet_b.wav"], title="Soft")
+        studio.add_candidate(lent["id"], [src / "quiet_a.wav"], title="Softer")
+        check(studio.publish(lent["id"])["ready"], "the batch to lend is filed, as only a filed batch is shared")
+        studio.set_hand("half-done-2", title="Another unfinished row of the session's", status="open")
+        bad_status, bad = http("POST", f"http://127.0.0.1:{pc.server_address[1]}/api/share", {"files": ["sample-sounds"]})
+        status, made = http("POST", f"http://127.0.0.1:{pc.server_address[1]}/api/share", {"files": [lent["id"] + "/a"], "title": "For a friend", "time": "12h"})
+        time.sleep(0.2)
+        for _ in range(150):
+            if not sync.KICKS[str(home.resolve())].locked():
+                break
+            time.sleep(0.1)
+        sync.step(Studio(phone), "always")
+        from studiolib import share as shares
+        far_side = ThreadingHTTPServer(("127.0.0.1", 0), shares.make_share_handler([phone]))
+        threading.Thread(target=far_side.serve_forever, daemon=True).start()
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{far_side.server_address[1]}/{made['share']['token']}/0/quiet_b.wav", timeout=10) as res:
+                there = res.status == 200 and res.read() == (src / "quiet_b.wav").read_bytes()
+        except urllib.error.HTTPError:
+            there = False
+        far_side.shutdown(); far_side.server_close()
+        check(bad_status == 400 and "sample" in bad.get("error", "") and status == 200 and made["share"]["files"][0]["group"] == "Soft"
+              and made["share"]["hours"] == 12 and (phone / f"batches/{lent['id']}/files/a/quiet_b.wav").is_file()
+              and (phone / f"batches/{lent['id']}/batch.json").is_file() and there
+              and not any(x.get("id") == "half-done-2" for x in Studio(phone).hands()),
+              "a candidate shared from the PC page while a session works takes its file and its batch's record to the phone, where the link opens it")
+        shares.stop(studio, made["share"]["id"])
         (home / "live" / "s-busy.json").unlink()
         pc.shutdown(); pc.server_close()
 
