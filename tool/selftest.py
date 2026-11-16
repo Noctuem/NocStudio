@@ -1296,6 +1296,23 @@ def main() -> int:
         check(studio.set_ui(theme="light") == {"scale": 2.0, "theme": "light"} and Studio.ui()["theme"] == "light",
               "the theme the user picks is kept with it, one answer for every Studio")
 
+        # the play bar's volume is kept with them, so every project and address on this PC plays as loud
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), None)
+        httpd.RequestHandlerClass = server.make_handler(studio.home, {f"127.0.0.1:{httpd.server_address[1]}"}, quiet=True)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        base = f"http://127.0.0.1:{httpd.server_address[1]}"
+        status, body = http("POST", base + "/api/ui", {"volume": {"level": 0.4, "muted": True, "back": 0.4}})
+        check(status == 200 and Studio.ui()["volume"] == {"level": 0.4, "muted": True, "back": 0.4} and Studio.ui()["theme"] == "light",
+              "the volume the page sends is kept, muted or not, beside the size and theme")
+        status, body = http("POST", base + "/api/ui", {"volume": {"level": 7, "muted": "yes", "back": -1}})
+        check(status == 200 and body["ui"]["volume"] == {"level": 1.0, "muted": False, "back": 0.0}, "a volume past either end is kept at that end")
+        status, body = http("POST", base + "/api/ui", {"volume": {"level": "loud"}})
+        check(status == 400 and Studio.ui()["volume"]["level"] == 1.0, "a volume that is not a number is refused, and the kept one stays")
+        status, body = http("POST", base + "/api/ui", {"theme": "dark"})
+        check(status == 200 and body["ui"]["volume"]["level"] == 1.0, "setting the theme leaves the volume as it was")
+        check(http("GET", base + "/api/state")[1]["ui"]["volume"]["level"] == 1.0, "the page's data carries the kept volume, for the page to start at")
+        httpd.shutdown()
+
         # the record: a session saves the home, and the save reaches the remote
         for key, value in (("GIT_AUTHOR_NAME", "Self-test"), ("GIT_AUTHOR_EMAIL", "selftest@example.invalid"),
                            ("GIT_COMMITTER_NAME", "Self-test"), ("GIT_COMMITTER_EMAIL", "selftest@example.invalid")):

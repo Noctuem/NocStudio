@@ -1577,7 +1577,8 @@
     return tl;
   }
 
-  // the volume of the sound and clip views, kept on this PC so the next file and the next visit play as loud. level is
+  // the volume of the sound and clip views, kept on this PC (by the Studio, for every project, and in this browser to start
+  // with) so the next file and the next visit play as loud. level is
   // from 0 (silent) to 1 (full); muted keeps the level, so the sound comes back where it was; back is the level the
   // slider was last left at above silent, for the speaker to bring back after it was taken to 0. With no storage it plays at full
   const VOL = (() => {
@@ -1593,15 +1594,18 @@
     const tell = () => subs.forEach((fn) => fn());
     window.addEventListener('storage', (e) => { if (e.key === KEY) { try { take(JSON.parse(e.newValue || 'null')); } catch (x) { /* as above */ } tell(); } });  // another tab moved it
     const save = () => { try { localStorage.setItem(KEY, JSON.stringify(v)); } catch (e) { /* as above */ } tell(); };
+    const keep = () => API.ui({ volume: { level: v.level, muted: v.muted, back: v.back } }).catch(() => {});  // once it is let go, not on every step of a drag
     return {
       v,
+      // the level the Studio kept, which every project and address on this PC shares
+      use(o) { take(o); save(); },
       on(fn) { subs.add(fn); return () => subs.delete(fn); },
       // the slider: a level from 0 to 1; moving it while muted brings the sound back at that level
       level(x) { v.level = Math.min(1, Math.max(0, +x || 0)); v.muted = false; save(); },
       // the slider let go: where it was left, or where it was taken from when it was taken down to silent
-      settle(from) { if (v.level > 0) v.back = v.level; else if (from > 0) v.back = from; save(); },
+      settle(from) { if (v.level > 0) v.back = v.level; else if (from > 0) v.back = from; save(); keep(); },
       // the speaker: mute, or bring the sound back at the level before
-      toggle() { if (v.muted || v.level <= 0) { v.muted = false; if (v.level <= 0) v.level = v.back || 1; } else v.muted = true; save(); },
+      toggle() { if (v.muted || v.level <= 0) { v.muted = false; if (v.level <= 0) v.level = v.back || 1; } else v.muted = true; save(); keep(); },
       silent: () => v.muted || v.level <= 0,
     };
   })();
@@ -1662,7 +1666,8 @@
         let from = VOL.v.level, held = false;  // the level when the slider was taken hold of, by the pointer or by the keys
         const take = () => { from = VOL.v.muted ? 0 : VOL.v.level; };
         const bar = h('input', { type: 'range', class: 'volume', min: 0, max: 100, step: 1, 'aria-label': 'Volume', oninput: () => VOL.level(bar.value / 100), onchange: () => VOL.settle(from),
-          onpointerdown: () => { held = true; take(); window.addEventListener('pointerup', letGo, { once: true }); }, onfocus: () => { if (!held) take(); } });
+          onpointerdown: () => { held = true; take(); window.addEventListener('pointerup', letGo, { once: true }); }, onfocus: () => { if (!held) take(); },
+          onkeydown: (e) => { if (e.key === ' ') { e.preventDefault(); bar.blur(); if (!e.repeat) tp.toggle(); } } });  // Space on the slider plays, and the keys go back to the view
         function letGo() { held = false; bar.blur(); }  // let go of the slider, here or past its end, and Space plays again, as after a button
         const show = () => {
           const v = VOL.v, off = VOL.silent(), pct = Math.round(100 * v.level);
@@ -2764,7 +2769,7 @@
       document.removeEventListener('keydown', key); view.destroy(); el.remove(); document.body.style.overflow = '';
     };
     const key = (e) => {
-      if (e.key === 'Escape') { if (!/^(TEXTAREA|INPUT)$/.test((e.target || {}).tagName || '')) { close(); e.stopPropagation(); } return; }
+      if (e.key === 'Escape') { if (!/^(TEXTAREA|INPUT)$/.test((e.target || {}).tagName || '') || e.target.type === 'range') { close(); e.stopPropagation(); } return; }  // the volume slider is not a place to type
       if (view.keys && view.keys(e)) e.stopPropagation();
     };
     const send = h('button', { class: 'btn primary', type: 'button', onclick: async () => {
@@ -2992,7 +2997,7 @@
     const app = $('#app'), rail = keep && $('.rail'), railAt = rail ? rail.scrollTop : 0;
     try {
       if (!S.state) S.state = await API.state();
-      if (!UI.synced) { UI.synced = true; const ui = S.state.ui || {}; if (ui.scale) setScale(ui.scale); if (ui.theme && !SHELL) setTheme(ui.theme); }
+      if (!UI.synced) { UI.synced = true; const ui = S.state.ui || {}; if (ui.scale) setScale(ui.scale); if (ui.theme && !SHELL) setTheme(ui.theme); if (ui.volume) VOL.use(ui.volume); }
       let page;
       if (r.startsWith('b.')) page = await batchPage(r.slice(2));
       else if (r.startsWith('s.')) page = slotPage(r.slice(2));

@@ -432,7 +432,7 @@ def make_handler(home: Path, allowed_hosts: set[str], quiet: bool = False, hub: 
                                                   confirm_note=str(data.get("confirm_note") or ""))
                         return self.send_json({"ok": True, "triage": entry})
                     if parts == ["api", "ui"]:
-                        return self.send_json({"ok": True, "ui": studio.set_ui(scale=data.get("scale"), theme=data.get("theme"))})
+                        return self.send_json({"ok": True, "ui": studio.set_ui(scale=data.get("scale"), theme=data.get("theme"), volume=data.get("volume"))})
                     if parts == ["api", "setup"]:  # the Getting organised box hidden, or brought back
                         return self.send_json({"ok": True, "page": studio.hide_setup(bool(data.get("hidden")))})
                     if parts == ["api", "note"]:
