@@ -224,6 +224,7 @@ details.brief summary { cursor: pointer; font-weight: 600; }
 .call { flex: 1 1 0; min-width: 68px; border: 1px solid var(--line); background: var(--bg); border-radius: var(--radius); padding: 7px 6px; font-weight: 600; display: flex; gap: 6px; justify-content: center; align-items: center; }
 .call kbd { font: 600 10px/1 var(--font-mono); color: var(--faint); border: 1px solid var(--line); border-radius: 2px; padding: 2px 3px; }
 .call:hover { border-color: var(--faint); }
+.over.boxkey .call[data-call="redo"] kbd { display: none; }
 .call.on[data-call="winner"], .call.on[data-call="approve"] { background: var(--win); border-color: var(--win); color: var(--win-ink); }
 .call.on[data-call="keep"] { background: color-mix(in srgb, var(--keep) 16%, transparent); border-color: var(--keep); color: var(--keep); }
 .call.on[data-call="redo"] { background: color-mix(in srgb, var(--redo) 16%, transparent); border-color: var(--redo); color: var(--redo); }

@@ -2284,7 +2284,7 @@
     const video = h('video', { src, playsinline: true, preload: 'auto' });
     let copy = null;  // the second copy of the clip, made when a frame is first wanted: a clip only looked at is read once
     const frames = () => copy || (copy = clipFrames(src));
-    let tl = null, list = null, lane = null, alive = true, editable = () => false, broke = null;
+    let tl = null, list = null, lane = null, alive = true, editable = () => false, takes = () => false, broke = null;  // takes: the marks can be changed, once the clip is read
     let bad = '', lost = false;  // bad: why the clip cannot be marked, once that is known; lost: its file does not say how long it is
     let fps = facts.fps > 0 ? facts.fps : 0, measured = false, asked = false, vw = 0, vh = 0, shown = 1, seen = null, pin = null;
     let stroke = null, drawing = null, scrub = false, press = null, inkKey = '';
@@ -2342,6 +2342,7 @@
     // the Box tool on or off. Turned on with a mark chosen that the playhead is not inside, the playhead goes to the
     // mark's start, so the box drawn is that mark's and shows at once
     function setBox(on) {
+      if (boxDrag && boxDrag.moved) boxUp({ pointerId: boxDrag.id });  // a box being drawn, moved or sized is kept as it is
       boxing = !!on && editable(); boxDrag = null;
       if (boxing) { pen.on = false; pen.erase = false; const c = tl.get(tl.chosen); if (c && !inside(c, nowFrame())) { const to = snap(c.t0); if (tp.playing()) { pin = to; tp.hold(); } tp.seek(to); } }
       showPen();
@@ -2544,13 +2545,21 @@
       return ((Math.abs(p[1] - b.top) <= ty ? 'n' : Math.abs(p[1] - y1) <= ty ? 's' : '') + (Math.abs(p[0] - b.left) <= tx ? 'w' : Math.abs(p[0] - x1) <= tx ? 'e' : '')) || 'move';
     }
     const BOX_CURSOR = { n: 'ns-resize', s: 'ns-resize', e: 'ew-resize', w: 'ew-resize', nw: 'nwse-resize', se: 'nwse-resize', ne: 'nesw-resize', sw: 'nesw-resize', move: 'move' };
-    // a press with the Box tool on: on the box of the mark it works on, ready to move or size it; elsewhere, ready to
-    // draw that mark's box again (with Shift, or with the playhead in no mark, a new moment here gets the box).
+    // the mark a point on the picture works on, and the part of its box there: the box of the mark the Box tool works
+    // on, else another box on screen under the point, else the mark the Box tool works on, to draw its box again
+    function boxHit(n, p) {
+      const s = boxTarget(n), part = s && s.box ? boxPart(s.box, p) : '';
+      if (part || !s) return [s, part];
+      const hit = shownBoxes(n).reverse().find(([x]) => x !== s && boxPart(x.box, p));
+      return hit ? [hit[0], boxPart(hit[0].box, p)] : [s, ''];
+    }
+    // a press with the Box tool on: on a box, ready to move or size it; elsewhere, ready to draw the box of the mark
+    // the tool works on again (with Shift, or with the playhead in no mark, a new moment here gets the box).
     // Nothing changes until the pointer moves; the clip is held
     function boxDown(e) {
       const n = nowFrame(), p = toShare(e.clientX, e.clientY);
       if (tp.playing()) { pin = fps ? mid(n) : tp.time(); tp.hold(); }
-      const s = e.shiftKey ? null : boxTarget(n), part = s && s.box ? boxPart(s.box, p) : '';
+      const [s, part] = e.shiftKey ? [null, ''] : boxHit(n, p);
       boxDrag = { id: e.pointerId, x: e.clientX, y: e.clientY, p, n, t: fps ? mid(n) : tp.time(), span: s ? s.id : null, part: part || 'new', from: s && s.box ? Object.assign({}, s.box) : null, moved: false };
     }
     function boxMove(e) {
@@ -2603,7 +2612,7 @@
       ring(e.clientX, e.clientY);
       if (stroke) penMove(e.clientX, e.clientY);
       else if (boxDrag) boxMove(e);
-      else if (boxing && tl && vw) { const s = boxTarget(nowFrame()), part = s && s.box ? boxPart(s.box, toShare(e.clientX, e.clientY)) : ''; stage.style.cursor = BOX_CURSOR[part] || 'crosshair'; }
+      else if (boxing && tl && vw) stage.style.cursor = BOX_CURSOR[boxHit(nowFrame(), toShare(e.clientX, e.clientY))[1]] || 'crosshair';
     });
     const lift = (e) => {
       if (boxDrag) { boxUp(e); return; }
@@ -2783,7 +2792,7 @@
       // put a set of marks on the clip: they are drawn on the lane, listed beside it, painted on, and the keys work them
       attach(marks, o) {
         if (lane) lane.destroy();
-        tl = marks; editable = () => !!(o.editable() && len() && vw); broke = o.broken || null;
+        tl = marks; takes = o.editable; editable = () => !!(takes() && len() && vw); broke = o.broken || null;
         tl.describe = clipWhere;
         hadBox.clear(); boxSeen.clear(); boxKey = '';
         for (const s of tl.spans) { boxSeen.set(s.id, boxSig(s)); if (s.box) hadBox.add(s.id); }
@@ -2809,7 +2818,7 @@
           if (e.code === 'Period' || key === '.' || key === '>') { step(e.shiftKey ? 10 : 1); return true; }
           if (key === 'i' || key === 'o') { if (editable() && !e.repeat) edge(key === 'i'); return true; }
           if (key === 'b') { if (!e.repeat) setPen(!pen.on); return true; }
-          if (key === 'r') { if (!e.repeat) setBox(!boxing); return true; }
+          if (key === 'r') { if (bad || !takes()) return false; if (!e.repeat) setBox(!boxing); return true; }  // R is the Box tool; on a clip that takes no marks it sets Redo
           if ((key === 'Delete' || key === 'Backspace') && boxing) return dropBox();  // with the Box tool on, Delete takes the box away and leaves the mark; with no box there, the mark
           return false;
         } });
@@ -2847,7 +2856,8 @@
         for (const [id, blob] of own || []) await API.putMark(b.id, cand.id, id, blob).catch((e) => { if (view.unsent) view.unsent(id); failed(e); });  // a mark's own picture; none takes it away
       }).catch(failed));
     };
-    view.attach(tl, { editable, flush: send, broken: () => { if (tools) tools.hidden = true; } });
+    el.classList.toggle('boxkey', view.kind === 'video' && editable());  // R draws a box on a clip, so the Redo call shows no key
+    view.attach(tl, { editable, flush: send, broken: () => { if (tools) tools.hidden = true; el.classList.remove('boxkey'); } });
     tl.subs.push((what) => {
       // a change can come late, from a clip held after its closer look was closed (its frames a second, measured then): it
       // is dropped once the page has gone to another batch or another closer look has opened, which may be of this same clip
