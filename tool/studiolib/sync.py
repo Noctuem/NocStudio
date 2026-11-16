@@ -29,6 +29,7 @@ TOOL = Path(__file__).resolve().parent.parent
 ATTRS = ("*.json merge=studio-json", "*.jsonl merge=union", "INDEX.md merge=studio-ours", "decisions/DECISIONS.md merge=studio-ours")
 STARTED: set[str] = set()
 KICKS: dict[str, threading.Lock] = {}
+STEPPING: list = []  # one entry for each sync running now
 CLICKED = "page-wrote.json"  # live/: the files the page changed that no sync has sent yet
 
 
@@ -149,8 +150,23 @@ def _commit_clicked(studio: Studio, out: dict) -> None:
     write_json(listed, [])
 
 
+def busy() -> bool:
+    """Whether a sync is running in this process now: the app does not start again on new code in the middle of one."""
+    return bool(STEPPING)
+
+
 def step(studio: Studio, commit: str = "") -> dict:
     """One sync. Returns, and keeps in live/sync.json, what happened."""
+    mark = object()
+    STEPPING.append(mark)
+    try:
+        return _step(studio, commit)
+    finally:
+        STEPPING.remove(mark)
+
+
+def _step(studio: Studio, commit: str = "") -> dict:
+    """One sync, as step() runs it."""
     commit = commit or settings(studio)["commit"]
     out = {"at": iso_now(), "committed": "", "took": 0, "pushed": 0, "error": "", "waiting": ""}
     try:

@@ -2038,6 +2038,68 @@ def main() -> int:
             hub.close()
         check(app._get(url + "api/state") is None and app._get(hub.url + "api/hub") is None, "closing the app stops every Studio it started")
 
+        # new code: the app notices its own Python change, waits for it to be still and for nothing to be cut off
+        from studiolib import sync as sync_mod, talk as talk_mod
+        kit = tmp / "kit-tool"
+        (kit / "studiolib" / "__pycache__").mkdir(parents=True); (kit / "web").mkdir()
+        for name in ("studio.py", "studio_app.pyw", "studiolib/__init__.py", "studiolib/app.py", "studiolib/__pycache__/app.cpython-311.pyc", "web/app.js"):
+            (kit / name).write_text("x = 1\n", encoding="utf-8")
+        now, busy_with = [100.0], []
+        updates = app.Updates(kit, settle=5.0, held=lambda: list(busy_with), clock=lambda: now[0])
+        check(sorted(app.code_files(kit)) == ["studio.py", "studio_app.pyw", "studiolib/__init__.py", "studiolib/app.py"] and updates.look() == "",
+              "the app watches its own Python: studio.py, studio_app.pyw and studiolib, not __pycache__ or the page's files")
+        (kit / "studiolib/__pycache__/app.cpython-311.pyc").write_text("y = 2\n", encoding="utf-8"); (kit / "web/app.js").write_text("y = 2\n", encoding="utf-8")
+        check(updates.look() == "", "a page file or a compiled file changing does not start the app again")
+        (kit / "studiolib/app.py").write_text("x = 22\n", encoding="utf-8")
+        first = updates.look()
+        now[0] += 3; (kit / "studio.py").write_text("x = 33\n", encoding="utf-8")
+        second = updates.look()
+        now[0] += 4
+        check(first == "settling" and second == "settling" and updates.look() == "settling",
+              "new Python waits until it has been still for a few seconds, so a deploy that copies several files is taken whole")
+        now[0] += 2
+        busy_with.append("a session")
+        check(updates.look() == "held", "with a session in the middle of a turn, the app does not start again")
+        busy_with.clear()
+        check(updates.look() == "ready", "once nothing would be cut off, the app starts again on the new code")
+        updates.keep()
+        check(updates.look() == "", "new code that did not load is let be until the next change")
+        (kit / "studiolib/app.py").write_text("def broken(:\n", encoding="utf-8")
+        check("studiolib/app.py" in app.loads(kit) and app.loads() == "", "code that does not load is named, and the app's own code loads")
+        fake = types.SimpleNamespace(busy=lambda: True, repo=Path("Game"), home=tmp / "elsewhere", waits=lambda: "", proc=types.SimpleNamespace(poll=lambda: None), stop=lambda: None)
+        talk_mod.TALKS["fake-busy"] = fake
+        sync_mod.STEPPING.append("x")
+        found = app.held()
+        spawned, popen, quit_ = [], subprocess.Popen, os._exit
+        subprocess.Popen = lambda *a, **k: spawned.append(a)  # never a real start again in the test
+        os._exit = lambda code: spawned.append(code)
+        try:
+            again_hub = app.Hub(registry=menu, port=0)
+            refused = app.restart(again_hub)
+            still = (app._get(again_hub.url + "api/hub") or {}).get("studio_hub")
+        finally:
+            subprocess.Popen, os._exit = popen, quit_
+            del talk_mod.TALKS["fake-busy"]
+            sync_mod.STEPPING.remove("x")
+        again_hub.close()
+        after = app.held()
+        check({"a session in Game", "a sync"} <= set(found) and refused is False and spawned == [] and still and "a sync" not in after and "a session in Game" not in after,
+              "the app never starts again while a session is mid-turn or a sync runs: it keeps serving and starts nothing")
+        os.environ[app.AGAIN] = json.dumps({"port": free, "homes": [str(home)], "window": {"pid": 1}, "log": False})
+        handed = app.handed()
+        check(handed["homes"] == [str(home)] and app.AGAIN not in os.environ and app.handed() == {},
+              "the new run takes what the old one had open, and does not hand it on to what it starts")
+        holder = socket.socket(); holder.bind(("127.0.0.1", 0))
+        handed["port"] = holder.getsockname()[1]
+        threading.Timer(0.6, holder.close).start()
+        back = app.rebind(handed, tries=40)
+        if back is not None:
+            back.registry = menu
+        check(back is not None and back.port == handed["port"] and back.open(str(home)) == url and (app._get(url + "api/state") or {}).get("home"),
+              "the new run waits for the old one to let the port go, takes the same port, and opens the same Studio again")
+        if back is not None:
+            back.close()
+
         # a Studio for another project: a home of its own, a free port, the skill in its repo
         other = tmp / "Other Project"
         other.mkdir()

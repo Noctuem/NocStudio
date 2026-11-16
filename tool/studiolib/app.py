@@ -89,6 +89,9 @@ class Hub:
         self.running: dict[int, Server] = {}
         self.seen = time.monotonic()
         self.watch = Watch()  # what lands in Needs you in the Studios opened here, for one notification each
+        self.opened: list[str] = []  # the Studios opened here, opened again when the app starts again on new code
+        self.window: dict = {}  # the window this app waits on: its process id, and on Windows a handle to it
+        self.closing = False
         self.httpd = Server(("127.0.0.1", port), self._handler())
         self.port = self.httpd.server_address[1]
         self.url = f"http://127.0.0.1:{self.port}/"
@@ -118,6 +121,8 @@ class Hub:
         if row is None:
             raise StudioError("that Studio is not in the list any more")
         Studio(row["home"])  # the folder must still be there
+        if row["home"] not in self.opened:
+            self.opened.append(row["home"])
         port = int(row["port"])
         url = f"http://127.0.0.1:{port}/"
         with self.lock:
@@ -140,7 +145,7 @@ class Hub:
         return url
 
     def close(self) -> None:
-        for httpd in [self.httpd, *self.running.values()]:
+        for httpd in [*self.running.values(), self.httpd]:  # the menu last: a new run of the app waits for its port, and then finds the Studios' free
             httpd.shutdown()
             httpd.server_close()
         self.running.clear()
@@ -297,31 +302,220 @@ def linger(hub: Hub, every: float = 2.0) -> None:
     print("every session has finished its turn", flush=True)
 
 
-def main(quiet: bool = False) -> int:
-    if sys.stderr is None or sys.stdout is None:  # started with no console: keep what would be printed
-        DATA.mkdir(parents=True, exist_ok=True)
-        sys.stdout = sys.stderr = open(DATA / "app.log", "w", encoding="utf-8", buffering=1)
+# ------------------------------------------------------------------- new code: the app starts again on it
+SELF_EVERY = 3.0   # how often the app looks at its own Python
+SELF_SETTLE = 5.0  # how long that Python must be still first: a deploy copies several files
+AGAIN = "STUDIO_APP_AGAIN"  # hands the new run what the old one had open
+LOGGED = False  # what is printed goes to app.log
+
+
+def code_files(root: Path = WEB.parent) -> dict[str, tuple[int, int]]:
+    """The app's own Python (studio.py, studio_app.pyw, studiolib/*.py), each with when it last changed and its size."""
+    out = {}
+    for f in [root / "studio.py", root / "studio_app.pyw", *sorted((root / "studiolib").glob("*.py"))]:
+        try:
+            st = f.stat()
+        except OSError:
+            continue
+        out[f.relative_to(root).as_posix()] = (st.st_mtime_ns, st.st_size)
+    return out
+
+
+def held() -> list[str]:
+    """What starting again now would cut off: a session in the middle of a turn, a sync, files of notes on
+    the move, or a run the user started from a button."""
+    from . import buttons, notefiles, talk
+    out = [f"a session in {t.repo.name}" for t in talk.busy()]
+    out += ["a sync"] if sync.busy() else []
+    out += ["files of notes"] if any(lock.locked() for lock in list(notefiles.LOCKS.values())) else []
+    out += [f"the run {key[1]}" for key, proc in list(buttons.PROCS.items()) if proc.poll() is None]
+    return out
+
+
+class Updates:
+    """Notices when the app's own Python changes, and says when the app may start again on it."""
+
+    def __init__(self, root: Path = WEB.parent, settle: float = SELF_SETTLE, held=held, clock=time.monotonic):
+        self.root, self.settle, self.held, self.clock = root, settle, held, clock
+        self.base = self.last = code_files(root)
+        self.moved = clock()
+
+    def look(self) -> str:
+        """"" (the code in hand), "settling" (it changed a moment ago), "held" (something would be cut off) or "ready"."""
+        now = code_files(self.root)
+        if now != self.last:
+            self.last, self.moved = now, self.clock()
+        if now == self.base:
+            return ""
+        if self.clock() - self.moved < self.settle:
+            return "settling"
+        return "held" if self.held() else "ready"
+
+    def keep(self) -> None:
+        """Take the code there now as the code in hand: it did not load, so wait for the next change."""
+        self.base = self.last
+
+
+def loads(root: Path = WEB.parent) -> str:
+    """Whether the new code loads: every file compiles and the app imports. "" when it does, else why not."""
+    for name in code_files(root):
+        try:
+            compile((root / name).read_bytes(), str(root / name), "exec")
+        except (OSError, SyntaxError, ValueError) as err:
+            return f"{name}: {err}"
     try:
-        hub = Hub()
-    except OSError:
-        other = f"http://127.0.0.1:{HUB_PORT}/"
-        if (_get(other + "api/hub") or {}).get("studio_hub"):  # the app is open already: one more window on it
-            window(other, quiet)
-            return 0
-        hub = Hub(port=0)  # something else holds the usual port
-    print(f"{NAME} at {hub.url}")
-    started = time.monotonic()
-    proc = window(hub.url, quiet)
-    if proc is None:
-        import webbrowser
-        webbrowser.open(hub.url)
+        run = subprocess.run([sys.executable, "-c", f"import sys; sys.path.insert(0, {str(root)!r}); import studiolib.app"],
+                             capture_output=True, timeout=60, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except (OSError, subprocess.SubprocessError) as err:
+        return str(err)
+    return "" if run.returncode == 0 else ((run.stderr or b"").decode("utf-8", "replace").strip().splitlines() or ["it did not import"])[-1]
+
+
+def restart(hub: Hub) -> bool:
+    """Start this app again on its new code: the same interpreter and arguments, the same port, the Studios it
+    had open and the window it has, with no new window. Sessions between turns are stopped; each carries on
+    from where it stopped when the user next says something. Returns False when it did not start again."""
+    from . import talk
+    if held():
+        return False
+    for t in list(talk.TALKS.values()):
+        t.stop()
+    for _ in range(600):  # a sync that began a moment ago
+        if not sync.busy():
+            break
+        time.sleep(0.2)
+    state = {"port": hub.port, "homes": list(hub.opened), "window": dict(hub.window), "log": LOGGED}
+    kw: dict = {"env": dict(os.environ, **{AGAIN: json.dumps(state)}), "cwd": os.getcwd()}
+    handle = int(hub.window.get("handle") or 0)
+    if os.name == "nt" and handle:  # the new run waits on the same window, by a handle it is given
+        os.set_handle_inheritable(handle, True)
+        kw["startupinfo"] = subprocess.STARTUPINFO(lpAttributeList={"handle_list": [handle]})
+    if LOGGED:
+        kw.update(stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        subprocess.Popen([sys.executable, *sys.orig_argv[1:]], **kw)
+    except OSError as err:
+        print(f"the app's code changed, but it could not start again: {err}", flush=True)
+        return False
+    print(f"the app's code changed; starting again on it at {hub.url}", flush=True)
+    hub.closing = True
+    hub.close()
+    os._exit(0)
+
+
+def keep_current(hub: Hub, every: float = SELF_EVERY) -> threading.Thread:
+    """Watch the app's own Python while it runs; once it has changed and been still, and nothing would be cut
+    off, start again on it."""
+    updates = Updates()
+
+    def run():
+        while not hub.closing:
+            time.sleep(every)
+            if hub.closing or updates.look() != "ready":
+                continue
+            why = loads()
+            if why:
+                print(f"the app's new code does not load; staying on the old code: {why}", flush=True)
+                updates.keep()
+            elif not restart(hub):
+                updates.moved = updates.clock()  # try again once it has settled again
+
+    thread = threading.Thread(target=run, daemon=True, name="studio-app-code")
+    thread.start()
+    return thread
+
+
+def handed() -> dict:
+    """What the run before this one had open, when this run is that app starting again on new code."""
+    raw = os.environ.pop(AGAIN, "")
+    try:
+        state = json.loads(raw) if raw else {}
+    except ValueError:
+        return {}
+    return state if isinstance(state, dict) and state.get("port") else {}
+
+
+def rebind(state: dict, tries: int = 60) -> Hub | None:
+    """The menu again on its old port, once the old run has let it go."""
+    for _ in range(tries):
+        try:
+            return Hub(port=int(state["port"]))
+        except OSError:
+            time.sleep(0.25)
+    return None
+
+
+def wait_window(win: dict, every: float = 2.0) -> None:
+    """Wait for the window an earlier run of this app opened to close."""
+    pid = int(win.get("pid") or 0)
+    if os.name == "nt":
+        import ctypes
+        k = ctypes.WinDLL("kernel32")
+        k.OpenProcess.restype = ctypes.c_void_p
+        handle = int(win.get("handle") or 0)
+        if handle and k.WaitForSingleObject(ctypes.c_void_p(handle), 0xFFFFFFFF) & 0xFFFFFFFF != 0xFFFFFFFF:
+            return
+        handle = k.OpenProcess(0x00100000, False, pid) if pid else None  # SYNCHRONIZE
+        if handle:
+            k.WaitForSingleObject(ctypes.c_void_p(handle), 0xFFFFFFFF)
+        return
+    while pid:
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            return
+        time.sleep(every)
+
+
+def main(quiet: bool = False) -> int:
+    global LOGGED
+    state = handed()
+    if sys.stderr is None or sys.stdout is None or state.get("log"):  # started with no console: keep what would be printed
+        DATA.mkdir(parents=True, exist_ok=True)
+        sys.stdout = sys.stderr = open(DATA / "app.log", "a" if state else "w", encoding="utf-8", buffering=1)
+        LOGGED = True
+    hub = rebind(state) if state else None
+    if hub is not None:  # started again on new code: the same Studios, the same window
+        for home in state.get("homes") or []:
+            try:
+                hub.open(home)
+            except StudioError as err:
+                print(f"{home}: {err}")
+        hub.window = state.get("window") or {}
+        print(f"{NAME} at {hub.url}, started again on its new code", flush=True)
+        keep_current(hub)
+        if hub.window:
+            wait_window(hub.window)
+        else:
+            while time.monotonic() - hub.seen < IDLE_SECONDS:
+                time.sleep(2)
     else:
-        proc.wait()
-    if proc is None or time.monotonic() - started < 8:
-        # no window of its own to wait on (an everyday browser took the page): stop when the pages go quiet
-        hub.touch()
-        while time.monotonic() - hub.seen < IDLE_SECONDS:
-            time.sleep(2)
+        try:
+            hub = Hub()
+        except OSError:
+            other = f"http://127.0.0.1:{HUB_PORT}/"
+            if (_get(other + "api/hub") or {}).get("studio_hub"):  # the app is open already: one more window on it
+                window(other, quiet)
+                return 0
+            hub = Hub(port=0)  # something else holds the usual port
+        print(f"{NAME} at {hub.url}")
+        started = time.monotonic()
+        proc = window(hub.url, quiet)
+        if proc is not None:
+            hub.window = {"pid": proc.pid, "handle": int(getattr(proc, "_handle", 0) or 0)}
+        keep_current(hub)
+        if proc is None:
+            import webbrowser
+            webbrowser.open(hub.url)
+        else:
+            proc.wait()
+        if proc is None or time.monotonic() - started < 8:
+            # no window of its own to wait on (an everyday browser took the page): stop when the pages go quiet
+            hub.window = {}
+            hub.touch()
+            while time.monotonic() - hub.seen < IDLE_SECONDS:
+                time.sleep(2)
+    hub.closing = True  # no starting again once the window is closed
     linger(hub)
     hub.close()
     print("closed")
