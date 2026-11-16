@@ -3546,7 +3546,7 @@
       s.notes ? h('p', { class: 'muted', style: 'max-width:80ch' }, s.notes) : null,
       cur ? h('div', { class: 'closed' }, h('h3', {}, (cur.working || cur.edited_by_user ? 'Latest: v' : 'Approved: v') + cur.version + (cur.title ? ' · ' + cur.title : '') + (cur.score ? ' · ' + cur.score + '/10' : '')),
         cur.note ? h('blockquote', {}, cur.note) : null,
-        h('p', { class: 'sub muted' }, [cur.date ? String(cur.date).slice(0, 10) : '', cur.source || ''].filter(Boolean).join(' · '))) : null,
+        cur.date || cur.source ? h('p', { class: 'sub muted' }, [cur.date ? String(cur.date).slice(0, 10) : '', cur.source || ''].filter(Boolean).join(' · ')) : null) : null,
       s.project_path ? h('p', { class: 'mono muted' }, 'Used at ' + s.project_path) : null));
 
     S.opts.clip = ''; S.opts.rotate = false; S.opts.wire = false; S.opts.loop = false; S.opts.rate = 1;
@@ -3559,7 +3559,7 @@
         const tog = (label, key) => { let on = key === 'ref' || key === 'playing'; const btn = h('button', { class: 'btn small' + (on ? ' on' : ''), type: 'button', onclick: () => { on = !on; btn.classList.toggle('on', on); v.set({ [key]: on }); } }, label); return btn; };
         S.cleanup.push(() => v.destroy && v.destroy());
         v.el.classList.add('tall'); stage.append(v.el);
-        return h('article', { class: 'tile wide' }, h('div', { class: 'thead' }, h('h3', {}, f.label), sel,
+        return h('article', { class: 'tile wide' }, h('div', { class: 'thead', style: 'flex-wrap:wrap' }, h('h3', { style: 'flex:1 1 140px' }, f.label), sel,
           f.clip ? [tog('Play', 'playing'), rateButtons(() => v.set({ rate: S.opts.rate }))] : null,
           tog('Turntable', 'rotate'), f.clip ? null : tog('Wireframe', 'wire'), tog('1.8 m figure', 'ref'), STATIC ? null : markButton(f)), stage);
       }
@@ -3567,7 +3567,7 @@
         const p = audioPlayer(f.url, f.label); S.cleanup.push(() => p.destroy());
         stage.append(p.el);
         return h('article', { class: 'tile' }, h('div', { class: 'thead' }, h('span', { class: 'mono muted grow', style: 'overflow-wrap:anywhere' }, f.label),
-          STATIC ? null : h('button', { class: 'btn small', type: 'button', title: 'Mark moments and stretches of it, with a note for each, and send them to Claude', onclick: () => { p.stop(); markTimedOver(f, s); } }, 'Mark')), stage);
+          STATIC ? null : h('button', { class: 'btn small', type: 'button', onclick: () => { p.stop(); markTimedOver(f, s); } }, 'Mark')), stage);
       }
       let facts = null;
       if (f.kind === 'video') {  // with its sound: a cut is judged heard; the first frame shows before it plays, and its length and size by its name
@@ -3586,13 +3586,12 @@
       else stage.append(h('img', { class: 'fit', src: f.url, alt: f.label, loading: 'lazy', onclick: (e) => shot(e.target.src) }));
       return h('article', { class: 'tile' }, stage, h('div', { class: 'thead' }, h('span', { class: 'mono muted grow', style: 'overflow-wrap:anywhere' }, f.label), facts,
         (f.kind === 'image' || f.kind === 'texture') && !STATIC ? markButton(f) : null,
-        f.kind === 'video' && !STATIC ? h('button', { class: 'btn small', type: 'button', title: 'Mark moments and stretches of it, paint on a frame, with a note for each mark, and send them to Claude',
+        f.kind === 'video' && !STATIC ? h('button', { class: 'btn small', type: 'button',
           onclick: () => { const v = $('video', stage); if (v) v.pause(); markTimedOver(f, s); } }, 'Mark') : null));
     };
-    function markButton(f) { return h('button', { class: 'btn small', type: 'button', title: 'Mark parts of it in colours, with a note for each, and send it to Claude', onclick: () => markOver(f, s) }, 'Mark'); }
+    function markButton(f) { return h('button', { class: 'btn small', type: 'button', onclick: () => markOver(f, s) }, 'Mark'); }
     const mo = motionOf(s.motion);
-    if (mo) main.append(h('section', {}, h('h2', {}, 'The motion, looping in place'),
-      h('p', { class: 'muted', style: 'max-width:80ch' }, 'Baked from the project\'s own drawing of it' + (mo.seconds ? ', ' + mo.seconds.toFixed(2) + ' s a loop' : '') + '. The light here is the page\'s, not the hall\'s.'),
+    if (mo) main.append(h('section', {}, h('h2', {}, 'The motion' + (mo.seconds ? ' · ' + mo.seconds.toFixed(2) + ' s' : '')),
       h('div', { class: 'grid', style: '--tile:760px' }, show({ kind: 'model', url: mo.url, label: mo.clip.replace(/_/g, ' '), clip: mo.clip }))));
     for (const [from, title] of [['repo', 'In the project today'], ['library', cur && (cur.working || cur.edited_by_user) ? 'In the Studio' : 'The approved master']]) {
       const rows = files.filter((f) => f.from === from).sort((a, b) => (b.kind === s.kind) - (a.kind === s.kind));
@@ -3603,7 +3602,7 @@
         panel ? panel.el : null,
         h('div', { class: 'grid', style: '--tile:' + (wide ? 760 : rows[0].kind === 'audio' ? 380 : 420) + 'px' }, rows.map(show))));
     }
-    if (!files.length && !mo) main.append(h('div', { class: 'empty' }, s.status === 'needed' ? 'Nothing exists for this yet.' : 'This has no file you can open here: it lives in the project as numbers or motion data' + (s.kind === 'in_app' ? ', and is judged in the running project.' : '.')));
+    if (!files.length && !mo) main.append(h('div', { class: 'empty' }, s.status === 'needed' ? 'Nothing yet.' : 'No file here.'));
     const past = (s.history || []).slice(0, -1).reverse();
     if (past.length) main.append(h('section', {}, h('h2', {}, 'Earlier versions'), h('div', { class: 'rows' }, past.map((v) => h('div', { class: 'row' },
       h('span', { class: 'mono muted' }, 'v' + v.version), h('div', { class: 'grow' }, v.title || v.candidate || ''), h('span', { class: 'sub' }, v.date ? String(v.date).slice(0, 10) : ''))))));
@@ -4402,10 +4401,9 @@
     }
     draw();
     return h('main', {},
-      h('section', {}, h('h1', {}, 'What the project needs, and where each stands'),
+      h('section', {}, h('h1', {}, 'Library'),
         h('div', { class: 'bar-status', role: 'img', 'aria-label': order.filter((s) => counts[s]).map((s) => counts[s] + ' ' + SLOT[s]).join(', ') },
           order.filter((s) => counts[s]).map((s) => h('i', { class: 'st-' + s, style: 'width:' + (100 * counts[s] / slots.length) + '%' }))),
-        h('div', { class: 'legend' }, order.filter((s) => counts[s]).map((s) => h('span', {}, h('span', { class: 'dot st-' + s }), h('b', {}, String(counts[s])), ' ' + SLOT[s]))),
         h('div', { class: 'filters' }, chips, gsel, find)),
       sharesSection(),
       list);
@@ -4418,7 +4416,7 @@
     const tags = Object.keys(tagCount).filter((t) => !t.includes('.')).sort((a, b) => tagCount[b] - tagCount[a]).slice(0, 12);
     let q = '', tag = '', limit = 30;
     const list = h('div', { class: 'rows' }), more = h('button', { class: 'btn', type: 'button', onclick: () => { limit += 60; draw(); } }, 'Show more');
-    const search = h('input', { class: 'field', type: 'search', id: 'dec-search', placeholder: 'Search rulings and your own words', 'aria-label': 'Search decisions', oninput: () => { q = search.value.toLowerCase(); limit = 30; draw(); } });
+    const search = h('input', { class: 'field', type: 'search', id: 'dec-search', placeholder: 'Search rulings', 'aria-label': 'Search decisions', oninput: () => { q = search.value.toLowerCase(); limit = 30; draw(); } });
     const tagBtns = tags.map((t) => { const btn = h('button', { class: 'btn small', type: 'button', onclick: () => { tag = tag === t ? '' : t; tagBtns.forEach((x) => x.classList.toggle('on', x === btn && tag === t)); limit = 30; draw(); } }, t); return btn; });
     function draw() {
       const hits = all.filter((d) => (!tag || (d.tags || []).includes(tag)) && (!q || [d.id, d.legacy, d.title, d.his_words, d.ruling].join(' ').toLowerCase().includes(q)));
@@ -4442,18 +4440,17 @@
       more.hidden = hits.length <= limit; more.textContent = 'Show more (' + Math.max(0, hits.length - limit) + ' left)';
     }
     draw();
-    const title = h('input', { class: 'field', id: 'new-title', placeholder: 'What it settles, in a few words', 'aria-label': 'Title' });
-    const words = h('textarea', { class: 'field', id: 'new-words', rows: 3, placeholder: 'Your ruling, in your own words', 'aria-label': 'Your words' });
+    const title = h('input', { class: 'field', id: 'new-title', placeholder: 'Title', 'aria-label': 'Title' });
+    const words = h('textarea', { class: 'field', id: 'new-words', rows: 3, placeholder: 'Your ruling', 'aria-label': 'Your words' });
     const add = h('button', { class: 'btn primary', type: 'button', onclick: async () => {
       if (!title.value.trim()) { toast('Give it a title'); return; }
       try { await API.addDecision({ title: title.value, his_words: words.value }); S.state = await API.state(); toast('On the record'); render(); } catch (e) { toast(e.message); }
     } }, 'Put it on the record');
     return h('main', {},
       h('section', {}, h('h1', {}, all.length + ' rulings on the record'),
-        h('p', { class: 'muted', style: 'max-width:70ch' }, 'Newest first. The quoted lines are your words as they were written down; open a ruling to read what was taken from them. Every verdict you submit lands here by itself when Claude closes it.'),
         search, h('div', { class: 'filters' }, tagBtns)),
       h('section', {}, list, more),
-      h('section', {}, h('div', { class: 'sec-head' }, h('h2', {}, 'Rule on something now'), h('p', {}, 'For a decision that did not come from a batch.')), h('div', { class: 'form' }, title, words, h('div', {}, add))));
+      h('section', {}, h('div', { class: 'sec-head' }, h('h2', {}, 'Rule on something now')), h('div', { class: 'form' }, title, words, h('div', {}, add))));
   }
 
   // ------------------------------------------------------------ the notes box
@@ -4493,8 +4490,8 @@
     const closed = n.status === 'done' || n.status === 'parked';
     return h('div', { class: 'nfiles' }, files.map((f) => {
       const url = noteFileUrl(n, f), away = !f.here;
-      const label = h('span', { class: 'nfname' }, f.name, h('span', { class: 'muted' }, ' · ' + bytes(f.size || 0) + (away ? (closed ? ' · in the archive' : ' · on its way from the other copy') : '')));
-      const off = open ? h('button', { class: 'btn small', type: 'button', title: 'Take this file off the note', onclick: async () => {
+      const label = h('span', { class: 'nfname' }, f.name, h('span', { class: 'muted' }, ' · ' + bytes(f.size || 0) + (away ? (closed ? ' · in the archive' : ' · on its way') : '')));
+      const off = open ? h('button', { class: 'btn small', type: 'button', title: 'Take it off', onclick: async () => {
         try { await API.note(n.id, 'unfile', { name: f.name }); await afterNote('Taken off'); } catch (e) { toast(e.message); } } }, '×') : null;
       if (PICTURE.test(f.name) && !(away && !closed)) return h('figure', { class: 'nfile pic' }, h('a', { href: url, target: '_blank', rel: 'noopener' }, h('img', { src: url, alt: f.name, loading: 'lazy' })), h('figcaption', {}, label, off));
       return h('div', { class: 'nfile' }, away && !closed ? label : h('a', { href: url, target: '_blank', rel: 'noopener', download: f.name }, label), off);
@@ -4505,7 +4502,7 @@
   function categoryMenu(value, pick, what) {
     const menu = h('select', { 'aria-label': what, onchange: () => pick(menu.value) }, NOTE_CAT.map(([k, label]) => h('option', { value: k }, label)));
     menu.value = value || ''; // set once the options are in: a value given before them does not hold
-    return h('label', { class: 'cat', title: 'Unsorted leaves it to a session to say what kind of note it is' }, h('span', {}, 'Category'), menu);
+    return h('label', { class: 'cat' }, h('span', {}, 'Category'), menu);
   }
 
   // where the user types: one box, the same on the Notes page and behind the Note button on every page
@@ -4517,7 +4514,7 @@
       h('button', { class: 'x', type: 'button', title: 'Leave this file out', onclick: () => { D.files.splice(i, 1); drawTray(); } }, '×'))));
     const take = (fs) => { for (const f of fs) { f.studioName = stampName(f); D.files.push(f); } drawTray(); };
     drawTray();
-    const text = h('textarea', { class: 'field', rows: 2, placeholder: 'An order, a bug, a question, a half-formed idea. Enter sends it; Shift+Enter starts a new line.', 'aria-label': 'A note for the project',
+    const text = h('textarea', { class: 'field', rows: 2, 'aria-label': 'A note for the project',
       value: D.text, oninput: (e) => { D.text = e.target.value; } });
     const category = categoryMenu(D.kind, (k) => { D.kind = k; }, 'Category of the new note');
     const send = async () => {
@@ -4534,7 +4531,7 @@
     };
     text.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); } });
     text.addEventListener('paste', (e) => { const fs = pastedFiles(e); if (fs.length) { e.preventDefault(); take(fs); } });
-    const attach = h('button', { class: 'btn small', type: 'button', title: 'Put a file on the note. You can also paste a screenshot into the box, or drop files on it.', onclick: () => pickFiles(take) }, 'Attach');
+    const attach = h('button', { class: 'btn small', type: 'button', onclick: () => pickFiles(take) }, 'Attach');
     const box = h('div', { class: 'notebox' }, text, tray, h('div', { class: 'picks' }, h('span', { class: 'grow' }), category, attach, h('button', { class: 'btn small primary', type: 'button', onclick: send }, 'Send')));
     dropTarget(box, take);
     return { el: box, text };
@@ -4558,15 +4555,15 @@
 
   function noteWhere(n) {
     const who = (x) => clip(x, 46);
-    if (n.status === 'new') return n.handed ? 'Handed to ' + who(n.handed.name) + ' ' + when(n.handed.at) + '; not read yet' : 'Waiting for a session to read it';
-    if (n.status === 'confirm') return n.choice_at === 'reading' ? 'Pick what you meant' : 'Confirm what Claude took it to mean';
+    if (n.status === 'new') return n.handed ? 'Handed to ' + who(n.handed.name) + ' ' + when(n.handed.at) + '; not read yet' : 'Waiting for a session';
+    if (n.status === 'confirm') return n.choice_at === 'reading' ? 'Pick what you meant' : 'Confirm the reading';
     if (n.status === 'go') {
-      if (n.waits === 'you') return 'Pick one before it is worked in';
+      if (n.waits === 'you') return 'Pick one';
       if (n.handed) return 'Handed to ' + who(n.handed.name) + ' ' + when(n.handed.at);
-      if (n.to === '') return 'No session is on this part of the project';
-      return 'Waiting for ' + (n.to === '*' ? 'the first session to reach a break' : who(n.to_name)) + ' to reach a break';
+      if (n.to === '') return 'No session on it';
+      return 'Waiting for ' + (n.to === '*' ? 'a session' : who(n.to_name));
     }
-    if (n.status === 'talk') return n.waits === 'you' ? (n.choice_at === null || n.choice_at === undefined ? 'Claude answered' : 'Claude answered: pick one') : (n.handed ? 'Handed to ' + who(n.handed.name) + ' ' + when(n.handed.at) : 'Waiting for a session to answer');
+    if (n.status === 'talk') return n.waits === 'you' ? (n.choice_at === null || n.choice_at === undefined ? 'Claude answered' : 'Claude answered: pick one') : (n.handed ? 'Handed to ' + who(n.handed.name) + ' ' + when(n.handed.at) : 'Waiting for a session');
     if (n.status === 'later') return 'Kept for later';
     return n.status === 'done' ? (n.closed_by === 'you' ? 'Closed by you' : 'Done') : (n.closed_by === 'you' ? 'Set aside by you' : 'Left with you');
   }
@@ -4580,7 +4577,7 @@
     const words = (hint) => h('textarea', { class: 'field', rows: 1, placeholder: hint, 'aria-label': hint + ' (' + n.id + ')', value: S.notes[key] || '', oninput: (e) => { S.notes[key] = e.target.value; },
       onpaste: (e) => { const fs = pastedFiles(e); if (fs.length) { e.preventDefault(); addFiles(fs); } } });
     const btn = (label, fn, cls) => h('button', { class: 'btn small' + (cls ? ' ' + cls : ''), type: 'button', onclick: fn }, label);
-    const category = takes ? categoryMenu(n.kind, (k) => { if (k !== (n.kind || '')) act('kind', { kind: k }, k === 'later' ? 'Kept for later' : k ? 'Category: ' + NOTE[k] : 'Unsorted: a session will sort it'); }, 'Category of note ' + n.id) : null;
+    const category = takes ? categoryMenu(n.kind, (k) => { if (k !== (n.kind || '')) act('kind', { kind: k }, k === 'later' ? 'Kept for later' : k ? 'Category: ' + NOTE[k] : 'Unsorted'); }, 'Category of note ' + n.id) : null;
     const attach = takes ? btn('Attach', () => pickFiles(addFiles)) : null;
     const close = btn('Close', () => act('done', {}, 'Closed'));
     const tail = [h('span', { class: 'grow' }), category, attach];
@@ -4599,18 +4596,18 @@
       return h('div', { class: 'choices', role: 'group', 'aria-label': live ? 'Pick one' : 'The choices given' }, opts.map((o, i) => {
         const mine = said !== null && said === o.name;
         const inside = [h('span', { class: 'ck' }, String.fromCharCode(65 + i)), h('span', { class: 'cn' }, o.name), mine ? h('span', { class: 'chip accent' }, 'Your pick') : null, o.what ? h('span', { class: 'cw' }, o.what) : null];
-        return live ? h('button', { class: 'choice', type: 'button', title: 'Pick this one: it goes to the session as your reply', onclick: () => pick(o) }, inside) : h('div', { class: 'choice' + (mine ? ' picked' : '') }, inside);
+        return live ? h('button', { class: 'choice', type: 'button', onclick: () => pick(o) }, inside) : h('div', { class: 'choice' + (mine ? ' picked' : '') }, inside);
       }));
     };
     let controls = null;
     if (n.status === 'confirm') {
-      const t = words(asks ? 'What you meant, if it is none of these' : 'Anything to add, or what you meant instead');
+      const t = words(asks ? 'Or what you meant' : 'Anything to add');
       controls = [t, h('div', { class: 'jf' }, asks ? null : btn(n.kind === 'rule' ? 'Confirm the rule' : 'Confirm, work it in', () => act('confirm', { text: t.value }, 'Confirmed'), 'primary'),
         btn('Not what I meant', () => (t.value.trim() ? act('back', { text: t.value }, 'Sent back') : toast('Say what you meant instead'))), close, tail)];
     } else if (open) {
       const t = words(n.status === 'talk' ? 'Your reply' : 'Add to it'), sessions = ((S.state.overview || {}).live || {}).sessions || [];
       const sendTo = n.status === 'go' ? h('select', { 'aria-label': 'Send ' + n.id + ' to a session', onchange: (e) => { if (e.target.value) act('send', { session: e.target.value === '*' ? '' : e.target.value }, 'Sent'); } },
-        h('option', { value: '' }, 'Send it to…'), h('option', { value: '*' }, 'Whichever session is free first'),
+        h('option', { value: '' }, 'Send it to…'), h('option', { value: '*' }, 'First free session'),
         sessions.filter((s) => s.state !== 'ended').map((s) => h('option', { value: s.id }, clip(s.title || s.prompt || 'A session', 50)))) : null;
       controls = [t, h('div', { class: 'jf' }, btn('Reply', () => (t.value.trim() ? act('reply', { text: t.value }, 'Sent') : toast('Write your reply first')), n.status === 'talk' || n.waits === 'you' ? 'primary' : ''), sendTo, close, tail)];
     } else if (n.status === 'later') controls = h('div', { class: 'jf' }, close, tail);
@@ -4620,7 +4617,7 @@
         h('span', { class: 'where' }, noteWhere(n)), h('span', { class: 'd' }, when(n.created))),
       h('blockquote', {}, n.text),
       noteFiles(n, takes),
-      n.from ? h('span', { class: 'sub' }, 'Part of ' + n.from + ', split off so each part gets its own answer.') : null,
+      n.from ? h('span', { class: 'sub' }, 'Part of ' + n.from) : null,
       n.reading ? h('div', { class: 'answer' }, h('span', { class: 'label' }, n.status === 'confirm' ? 'Claude takes this to mean' : 'Taken to mean'), h('span', { html: inline(n.reading) }), choices(n.reading_options, 'reading')) : null,
       thread.map((m, i) => h('div', { class: 'msg ' + m.who }, h('span', {}, m.who === 'you' ? 'You' : 'Claude', h('br'), when(m.at)), m.who === 'you' ? h('div', { class: 'said' }, m.text) : [md(m.text), choices(m.options, i)])),
       n.result ? h('div', { class: 'answer' }, h('span', { class: 'label' }, n.status === 'parked' ? 'Why it was left' : 'What was done'), h('span', { html: inline(n.result) }),
@@ -4642,15 +4639,13 @@
     function draw() {
       const test = views.find((v) => v[0] === S.noteView)[2];
       const rows = all.filter(test).sort((a, b) => (b.waits === 'you') - (a.waits === 'you'));
-      list.replaceChildren(...(rows.length ? rows.map(noteCard) : [h('div', { class: 'empty' }, all.length ? 'Nothing here.' : (S.state.static ? 'No notes in this sample.' : 'No notes yet. Type one above.'))]));
+      list.replaceChildren(...(rows.length ? rows.map(noteCard) : [h('div', { class: 'empty' }, all.length ? 'Nothing here.' : 'No notes.')]));
     }
     draw();
     return h('main', {},
       h('section', {}, h('h1', {}, 'Notes'),
-        h('p', { class: 'muted', style: 'max-width:76ch' }, 'Type whatever comes to mind and carry on. A session is handed your notes when it finishes a turn, or between steps once a note has waited a while, so nothing is spent checking for them. ',
-          'A change or a rule comes back to you to confirm before anything is done; a question becomes a thread you answer here.'),
         S.state.static ? null : noteBox().el,
-        ov.hooks_notes === false && !S.state.static ? h('div', { class: 'say' }, h('span', {}, 'Sessions are not being handed your notes yet. In the project, say to Claude Code:'), h('code', {}, 'turn on the Studio\'s live reporting'), copyButton('turn on the Studio\'s live reporting')) : null),
+        ov.hooks_notes === false && !S.state.static ? h('div', { class: 'say' }, h('span', {}, 'Notes are not reaching sessions. Say to Claude Code:'), h('code', {}, 'turn on the Studio\'s live reporting'), copyButton('turn on the Studio\'s live reporting')) : null),
       h('section', {}, h('div', { class: 'filters' }, tabs.slice(0, 3), h('span', { class: 'split' }), tabs.slice(3)), list)); // three statuses, then the seven categories as the Category menu names them
   }
 
@@ -4667,7 +4662,6 @@
     const head = h('div', { class: 'thead' });
     const tray = h('div', { class: 'nfiles pending' });
     const text = h('textarea', { class: 'field', rows: 3, 'aria-label': 'Your message to the session',
-      placeholder: 'Talk to the session. Enter sends; Shift+Enter starts a new line. Paste a screenshot or drop files to attach them.',
       value: T.draft, oninput: (e) => { T.draft = e.target.value; } });
     let busy = false, ended = false, cur = '';
     const working = () => cur === 'working' || cur === 'asking';
@@ -4676,12 +4670,10 @@
       try { await call('POST', '/api/talk/' + encodeURIComponent(T.key), { action: 'interrupt' }); poll(); } catch (e) { toast(e.message); }
     }
     function drawActs() {
-      text.placeholder = working() ? 'It is working. Enter sends: it reads your message at its next step, as in the terminal. Esc stops it.'
-        : 'Talk to the session. Enter sends; Shift+Enter starts a new line. Paste a screenshot or drop files to attach them.';
       acts.replaceChildren(...[h('button', { class: 'btn small', type: 'button', onclick: () => pickFiles(take) }, 'Attach'),
-        working() ? h('button', { class: 'btn small', type: 'button', title: 'Stop what it is doing now (Esc); the session stays', onclick: stopIt }, 'Stop') : null,
-        working() ? h('button', { class: 'btn small', type: 'button', title: 'Stop what it is doing, then send this as your next message', onclick: () => send(undefined, true) }, 'Stop and send') : null,
-        h('button', { class: 'btn small primary', type: 'button', title: working() ? 'It reads this at its next step, without stopping' : 'Send (Enter)', onclick: () => send() }, 'Send')].filter(Boolean));
+        working() ? h('button', { class: 'btn small', type: 'button', title: 'Esc', onclick: stopIt }, 'Stop') : null,
+        working() ? h('button', { class: 'btn small', type: 'button', onclick: () => send(undefined, true) }, 'Stop and send') : null,
+        h('button', { class: 'btn small primary', type: 'button', title: 'Enter', onclick: () => send() }, 'Send')].filter(Boolean));
     }
 
     const drawTray = () => tray.replaceChildren(...T.files.map((f, i) => h('span', { class: 'chip' }, f.studioName || f.name, ' · ' + bytes(f.size),
@@ -4714,7 +4706,7 @@
     }
     function drawAsks(list) {
       asks.replaceChildren(...list.map((a) => {
-        const why = h('input', { class: 'field', type: 'text', placeholder: 'Why not (optional, the session reads it)', 'aria-label': 'Why not' });
+        const why = h('input', { class: 'field', type: 'text', placeholder: 'Why not', 'aria-label': 'Why not' });
         const act = async (action) => { try { await call('POST', '/api/talk/' + encodeURIComponent(T.key), { action, ask: a.id, text: why.value }); poll(); } catch (e) { toast(e.message); } };
         return h('div', { class: 'task' }, h('span', { class: 'label' }, 'The session asks to'), h('code', { class: 'cmd' }, a.line), a.why ? h('div', { class: 'muted' }, a.why) : null,
           h('div', { class: 'jf' }, h('button', { class: 'btn small primary', type: 'button', onclick: () => act('allow') }, 'Allow'), h('button', { class: 'btn small', type: 'button', onclick: () => act('deny') }, 'Deny'), why));
@@ -4728,11 +4720,11 @@
     }
     function drawHead(state) {
       if (state !== cur) { cur = state; drawActs(); }
-      const label = state ? TALK_STATE[state] || state : (T.resume ? 'Not started here yet' : 'New session');
+      const label = state ? TALK_STATE[state] || state : (T.resume ? 'Not started' : '');
       head.replaceChildren(...[h('h2', { class: 'grow' }, T.title || (T.key || T.resume ? 'A session' : 'A new session')),
-        h('span', { class: 'chip' + (state === 'asking' ? ' accent' : state === 'ended' ? ' bad' : '') }, label),
-        state === 'working' || state === 'asking' ? h('button', { class: 'btn small', type: 'button', title: 'Stop what it is doing now (Esc); the session stays', onclick: stopIt }, 'Stop') : null,
-        sid() && state !== 'working' && state !== 'asking' ? h('button', { class: 'btn small primary', type: 'button', title: 'Carry this session on in the Claude desktop app: the same session, with all of it',
+        label ? h('span', { class: 'chip' + (state === 'asking' ? ' accent' : state === 'ended' ? ' bad' : '') }, label) : null,
+        state === 'working' || state === 'asking' ? h('button', { class: 'btn small', type: 'button', title: 'Esc', onclick: stopIt }, 'Stop') : null,
+        sid() && state !== 'working' && state !== 'asking' ? h('button', { class: 'btn small primary', type: 'button',
           onclick: toDesktop }, 'Open in Claude app') : null].filter(Boolean));
     }
     function sid() { return T.key && !T.key.startsWith('new-') ? T.key : T.resume; }
@@ -4741,7 +4733,7 @@
       try {
         toast('Opening it in the Claude app…');
         await call('POST', '/api/talk/desktop', { id });
-        toast('It is in the Claude app now. Carry on there.');
+        toast('In the Claude app now');
         Object.assign(T, { key: '', resume: '', title: '' }); log.replaceChildren(); asks.replaceChildren(); btns.replaceChildren(); btnKey = ''; drawHead(''); list();
       } catch (e) { toast(e.message); }
     }
@@ -4795,8 +4787,8 @@
       try { d = await call('GET', '/api/talk'); } catch (e) { side.replaceChildren(h('div', { class: 'empty' }, e.message)); return; }
       const rows = [];
       rows.push(h('div', { class: 'jf' }, h('button', { class: 'btn small primary', type: 'button', onclick: () => pick(null) }, 'New session'),
-        d.past.length ? h('button', { class: 'btn small', type: 'button', title: 'Like claude -c: the last session in this project', onclick: () => pick(d.past[0], !!d.past[0].live && d.past[0].live !== 'ended') }, 'Carry on with the last') : null,
-        !I.stage ? h('button', { class: 'btn small', type: 'button', title: 'Work a loose idea over with Claude, a few questions at a time, until it is a spec', onclick: () => { I.shaping = true; drawIdea(); } }, 'Shape an idea') : null));
+        d.past.length ? h('button', { class: 'btn small', type: 'button', title: 'claude -c', onclick: () => pick(d.past[0], !!d.past[0].live && d.past[0].live !== 'ended') }, 'Carry on with the last') : null,
+        !I.stage ? h('button', { class: 'btn small', type: 'button', onclick: () => { I.shaping = true; drawIdea(); } }, 'Shape an idea') : null));
       if (d.talks.length) {
         rows.push(h('h3', {}, 'Going here'));
         for (const t of d.talks) rows.push(h('button', { class: 'trow' + (t.key === T.key ? ' on' : ''), type: 'button', onclick: () => show(t) },
@@ -4808,7 +4800,7 @@
         rows.push(h('h3', {}, 'Earlier sessions'));
         for (const p of past) {
           const elsewhere = p.live && p.live !== 'ended';
-          rows.push(h('button', { class: 'trow' + (p.id === T.resume ? ' on' : ''), type: 'button', title: elsewhere ? 'Open in a terminal now: carrying on here makes a copy, so the two do not trip over each other' : 'Show it; send a message to carry on with it',
+          rows.push(h('button', { class: 'trow' + (p.id === T.resume ? ' on' : ''), type: 'button',
             onclick: () => pick(p, elsewhere) }, h('span', { class: 'tt' }, p.title || clip(p.prompt, 80) || p.id), h('span', { class: 'd' }, (elsewhere ? 'open elsewhere · ' : '') + when(p.at))));
         }
       }
@@ -4821,7 +4813,7 @@
     });
     text.addEventListener('paste', (e) => { const fs = pastedFiles(e); if (fs.length) { e.preventDefault(); take(fs); } });
     drawActs();
-    const box = h('div', { class: 'tbox' }, tray, text, h('div', { class: 'jf' }, h('span', { class: 'grow muted' }, 'Auto mode decides what it may do. What it asks about comes here.'), acts));
+    const box = h('div', { class: 'tbox' }, tray, text, h('div', { class: 'jf' }, h('span', { class: 'grow' }), acts));
     dropTarget(box, take);
 
     // the idea loop: docs/idea.md beside the talk, kept by the session; start it, then say when it is done
@@ -4830,12 +4822,11 @@
     function drawIdea() {
       if (!I.stage && !I.shaping) { ideaBox.replaceChildren(); ideaBox.hidden = true; return; }
       ideaBox.hidden = false;
-      const parts = [h('div', { class: 'jf' }, h('span', { class: 'label grow' }, I.stage === 'loop' ? 'The idea so far (Claude keeps this as you talk)' : I.stage === 'done' ? 'The idea, done: the spec is written from it' : 'The idea loop'),
-        I.stage === 'loop' ? h('button', { class: 'btn small primary', type: 'button', title: 'Claude writes docs/spec.md from this and finishes setting the project up', onclick: ideaDone }, 'Done: write the spec') : null)];
+      const parts = [h('div', { class: 'jf' }, h('span', { class: 'label grow' }, I.stage === 'loop' ? 'The idea so far' : I.stage === 'done' ? 'The idea, done' : 'The idea loop'),
+        I.stage === 'loop' ? h('button', { class: 'btn small primary', type: 'button', onclick: ideaDone }, 'Done: write the spec') : null)];
       if (I.stage === 'idea' || (!I.stage && I.shaping)) {
-        const first = h('textarea', { class: 'field', rows: 3, 'aria-label': 'The idea', placeholder: 'The idea, however loose', value: I.first || '' });
-        parts.push(h('p', { class: 'muted' }, 'Claude asks 3 to 5 questions at a time, each with what it recommends, and names the holes it sees. What gets settled goes into docs/idea.md, shown here. Say "done" with the button when it is clear.'),
-          first, h('div', { class: 'jf' }, h('span', { class: 'grow' }), !I.stage ? h('button', { class: 'btn small', type: 'button', onclick: () => { I.shaping = false; drawIdea(); } }, 'Not now') : null,
+        const first = h('textarea', { class: 'field', rows: 3, 'aria-label': 'The idea', placeholder: 'The idea', value: I.first || '' });
+        parts.push(first, h('div', { class: 'jf' }, h('span', { class: 'grow' }), !I.stage ? h('button', { class: 'btn small', type: 'button', onclick: () => { I.shaping = false; drawIdea(); } }, 'Not now') : null,
             h('button', { class: 'btn small primary', type: 'button', onclick: () => ideaStart(first.value) }, 'Start the loop')));
       }
       if (I.text && I.stage) parts.push(h('div', { class: 'ideadoc' }, md(I.text.replace(/^# .*\n/, ''))));
@@ -4873,9 +4864,8 @@
   function testRunsPage() {
     const sessions = S.state.test_runs;
     const main = h('main', {});
-    main.append(h('section', {}, h('h1', {}, 'What you said in test runs, and what became of it'),
-      h('p', { class: 'muted', style: 'max-width:70ch' }, 'Each F8 report is listed with what was done about it. When a note is marked fixed, try the build and say whether it is.')));
-    if (!sessions.length) main.append(h('div', { class: 'empty' }, 'No test-run folder is set yet (studio.toml, [test_runs] dirs), or it holds no session.'));
+    main.append(h('section', {}, h('h1', {}, 'Test runs')));
+    if (!sessions.length) main.append(h('div', { class: 'empty' }, 'No test runs.'));
     for (const p of sessions) {
       const tot = { pass: 0, fail: 0, untested: 0 }; p.checklist.forEach((c) => { tot[c.result] = (tot[c.result] || 0) + 1; });
       const ptUrl = (rep, name) => S.state.static ? API.src('/pt/' + p.root + '/' + p.name + '/' + rep + '/' + name) : '/pt/' + p.root + '/' + encodeURIComponent(p.name) + '/' + rep + '/' + name;
@@ -4883,13 +4873,13 @@
         h('div', { class: 'pt-head' }, h('h3', {}, 'Build ' + p.build), h('span', { class: 'mono muted' }, [p.date, p.machine].filter(Boolean).join(' · ')),
           h('span', { class: 'chip ok' }, tot.pass + ' pass'), tot.fail ? h('span', { class: 'chip bad' }, tot.fail + ' fail') : null, tot.untested ? h('span', { class: 'chip' }, tot.untested + ' untested') : null,
           Object.entries(p.sliders || {}).map(([k, val]) => h('span', { class: 'chip' }, k + ' ' + val + '/5'))),
-        p.end_note ? h('div', { class: 'endnote' }, h('h2', {}, 'What you wrote on the end screen'), h('blockquote', {}, p.end_note)) : null,
-        p.checklist.length ? h('details', { class: 'brief' }, h('summary', {}, 'The checklist, item by item'),
+        p.end_note ? h('div', { class: 'endnote' }, h('h2', {}, 'End screen'), h('blockquote', {}, p.end_note)) : null,
+        p.checklist.length ? h('details', { class: 'brief' }, h('summary', {}, 'Checklist'),
           h('div', { class: 'marks', style: 'padding-top:8px' }, p.checklist.map((c) => h('div', { class: 'mark' }, h('b', { class: c.result }, c.result), h('span', {}, c.feature))))) : null,
         h('div', { class: 'notes' }, p.reports.map((rep) => {
           const t = rep.triage || { status: 'open' };
           const label = { open: ['Not answered yet', 'reject'], planned: ['Planned', 'keep'], fixed: ['Fixed' + (t.build ? ' in ' + t.build : ''), 'ok'], wontfix: ['Not doing', ''], question: ['Claude has a question', 'redo'] }[t.status] || [t.status, ''];
-          const said = h('textarea', { class: 'field', rows: 1, placeholder: 'What is still wrong (optional)', 'aria-label': 'What is still wrong' }); said.value = t.confirm_note || '';
+          const said = h('textarea', { class: 'field', rows: 1, placeholder: 'What is still wrong', 'aria-label': 'What is still wrong' }); said.value = t.confirm_note || '';
           const confirm = async (ok) => { try { await API.confirm(rep.key, ok, said.value); S.state = await API.state(); toast(ok ? 'Marked fixed for you' : 'Sent back'); render(); } catch (e) { toast(e.message); } };
           return h('article', { class: 'note' },
             rep.screenshot ? h('img', { class: 'shot', src: ptUrl(rep.id, rep.screenshot), alt: 'Screenshot for this note', loading: 'lazy', onclick: (e) => shot(e.target.src) }) : null,
@@ -4909,7 +4899,7 @@
     const group = { t: { z: 1, cx: 0.5, cy: 0.5 }, panes: [] };
     const pane = zoomPane(src, group);
     const el = h('div', { class: 'over', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Screenshot' },
-      h('div', { class: 'bar' }, h('h3', {}, 'Screenshot'), h('span', { class: 'hint' }, 'Scroll or pinch to zoom'), h('button', { class: 'btn small', type: 'button', onclick: () => closeOver() }, 'Close (Esc)')),
+      h('div', { class: 'bar' }, h('h3', {}, 'Screenshot'), h('button', { class: 'btn small', type: 'button', onclick: () => closeOver() }, 'Close (Esc)')),
       h('div', { class: 'panes' }, h('div', { class: 'pane' }, pane.el)));
     const esc2 = (e) => { if (e.key === 'Escape') closeOver(); };
     document.addEventListener('keydown', esc2);
