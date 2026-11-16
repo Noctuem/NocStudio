@@ -199,7 +199,9 @@ details.brief summary { cursor: pointer; font-weight: 600; }
 .thead h3 { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .stage { background: var(--stage); position: relative; min-height: 60px; display: flex; flex-direction: column; overflow: hidden; }
 .stage.checker { background-image: conic-gradient(#3a3a3a 25%, #2a2a2a 0 50%, #3a3a3a 0 75%, #2a2a2a 0); background-size: 20px 20px; }
-.stage img.fit { width: 100%; height: auto; display: block; cursor: zoom-in; }
+.stage img.fit { width: 100%; height: auto; max-height: calc(78vh / var(--scale, 1)); object-fit: contain; display: block; cursor: zoom-in; }
+/* a clip is held to the screen's height at its own shape, so a tall one (9:16) is seen whole; the stage shows round it */
+.stage video.media { display: block; align-self: center; width: auto; height: auto; max-width: 100%; max-height: calc(70vh / var(--scale, 1)); background: #000; }
 .stage .tex { width: 100%; aspect-ratio: 4 / 3; background-repeat: repeat; cursor: zoom-in; image-rendering: auto; }
 .stage canvas.three { width: 100%; aspect-ratio: 4 / 5; display: block; touch-action: none; cursor: grab; }
 .stage .fallback { padding: 28px 16px; color: var(--muted); text-align: center; }

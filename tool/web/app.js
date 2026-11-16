@@ -3569,7 +3569,14 @@
         return h('article', { class: 'tile' }, h('div', { class: 'thead' }, h('span', { class: 'mono muted grow', style: 'overflow-wrap:anywhere' }, f.label),
           STATIC ? null : h('button', { class: 'btn small', type: 'button', title: 'Mark moments and stretches of it, with a note for each, and send them to Claude', onclick: () => { p.stop(); markTimedOver(f, s); } }, 'Mark')), stage);
       }
-      if (f.kind === 'video') stage.append(h('video', { src: f.url, controls: true, playsinline: true, preload: 'metadata', style: 'width:100%;display:block' }));  // with its sound: a cut is judged heard
+      let facts = null;
+      if (f.kind === 'video') {  // with its sound: a cut is judged heard; the first frame shows before it plays, and its length and size by its name
+        const v = h('video', { class: 'media', src: f.url + '#t=0.001', controls: true, playsinline: true, preload: 'metadata' });
+        facts = h('span', { class: 'sub muted' });
+        v.addEventListener('loadedmetadata', () => { const s = v.duration, m = Math.floor(s / 60), sec = Math.round(s - m * 60);
+          facts.textContent = (isFinite(s) ? m + ':' + String(sec).padStart(2, '0') : '') + (v.videoWidth ? ' · ' + v.videoWidth + ' × ' + v.videoHeight : ''); });
+        stage.append(v);
+      }
       else if (f.kind === 'text') {
         const holder = h('div', { class: 'option' }, 'Loading'), mine = f.from === 'library' && cur && !STATIC;
         API.bytes(f.url).then((buf) => { const t = new TextDecoder().decode(buf); if (mine) holder.replaceWith(libText(s, f, t)); else holder.replaceChildren(md(t)); }).catch(() => holder.replaceChildren('Could not read the file.'));
@@ -3577,7 +3584,7 @@
         if (mine) return h('article', { class: 'tile' }, stage);
       }
       else stage.append(h('img', { class: 'fit', src: f.url, alt: f.label, loading: 'lazy', onclick: (e) => shot(e.target.src) }));
-      return h('article', { class: 'tile' }, stage, h('div', { class: 'thead' }, h('span', { class: 'mono muted grow', style: 'overflow-wrap:anywhere' }, f.label),
+      return h('article', { class: 'tile' }, stage, h('div', { class: 'thead' }, h('span', { class: 'mono muted grow', style: 'overflow-wrap:anywhere' }, f.label), facts,
         (f.kind === 'image' || f.kind === 'texture') && !STATIC ? markButton(f) : null,
         f.kind === 'video' && !STATIC ? h('button', { class: 'btn small', type: 'button', title: 'Mark moments and stretches of it, paint on a frame, with a note for each mark, and send them to Claude',
           onclick: () => { const v = $('video', stage); if (v) v.pause(); markTimedOver(f, s); } }, 'Mark') : null));
@@ -3863,7 +3870,7 @@
         views.push(p); stage.append(p.el);
       }
     } else if (file.kind === 'video') {
-      stage.append(h('video', { src: API.src(fileUrl(b.id, file.path)), controls: true, loop: true, muted: true, playsinline: true, preload: 'auto', style: 'width:100%;display:block' }));
+      stage.append(h('video', { class: 'media', src: API.src(fileUrl(b.id, file.path)), controls: true, loop: true, muted: true, playsinline: true, preload: 'auto' }));
     } else if (file.kind === 'text') {
       const holder = h('div', { class: 'option' }, 'Loading');
       API.bytes(fileUrl(b.id, file.path)).then((buf) => holder.replaceWith(textCard(cand, new TextDecoder().decode(buf)))).catch(() => holder.replaceChildren('Could not read the file.'));
