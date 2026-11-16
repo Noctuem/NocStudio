@@ -96,7 +96,18 @@
                     "note": { "type": "string", "description": "The user's note on this mark, exact" },
                     "where": { "type": "string", "description": "A sentence the page writes: the times, the bar and beat, what it measured there" },
                     "facts": { "type": "object", "description": "On a sound: numbers the page measured in the stretch (peak and RMS in dBFS, the share of energy in five bands, and the same for the whole sound)" },
-                    "strokes": { "type": "array", "description": "On a clip: paint on the frame at t0, as on a picture, in the pixels of size" }
+                    "strokes": { "type": "array", "description": "On a clip: paint on the frame at t0, as on a picture, in the pixels of size" },
+                    "box": {
+                      "type": "object",
+                      "description": "On a clip: a part of the picture the user points at, on screen for the whole of the mark (at t0 only for a moment). Shares of the frame from its top left corner, kept inside it. With a box on a stretch, its middle and last frames have pictures too, at marks/<candidate>/<id>-middle.png and <id>-end.png.",
+                      "required": ["left", "top", "width", "height"],
+                      "properties": {
+                        "left": { "type": "number", "minimum": 0, "maximum": 1 },
+                        "top": { "type": "number", "minimum": 0, "maximum": 1 },
+                        "width": { "type": "number", "minimum": 0, "maximum": 1 },
+                        "height": { "type": "number", "minimum": 0, "maximum": 1 }
+                      }
+                    }
                   }
                 }
               }

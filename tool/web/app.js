@@ -1570,6 +1570,7 @@
         const o = { id: s.id, c: s.c, tag: s.tag, t0: s.t0, t1: s.t1, note: (s.note || '').trim(), where: tl.where(s) };
         if (s.facts) o.facts = s.facts;
         if (s.strokes && s.strokes.length) o.strokes = s.strokes;
+        if (s.box) o.box = s.box;  // on a clip: a part of the picture, in shares of the frame
         return o;
       });
       return out;
@@ -2341,10 +2342,12 @@
     const video = h('video', { src, playsinline: true, preload: 'auto' });
     let copy = null;  // the second copy of the clip, made when a frame is first wanted: a clip only looked at is read once
     const frames = () => copy || (copy = clipFrames(src));
-    let tl = null, list = null, lane = null, alive = true, editable = () => false, broke = null;
+    let tl = null, list = null, lane = null, alive = true, editable = () => false, takes = () => false, broke = null;  // takes: the marks can be changed, once the clip is read
     let bad = '', lost = false;  // bad: why the clip cannot be marked, once that is known; lost: its file does not say how long it is
     let fps = facts.fps > 0 ? facts.fps : 0, measured = false, asked = false, vw = 0, vh = 0, shown = 1, seen = null, pin = null;
     let stroke = null, drawing = null, scrub = false, press = null, inkKey = '';
+    let boxing = false, boxDrag = null, boxKey = '';  // the Box tool is on; a box being drawn, moved or sized; what the boxes on screen show
+    const boxSeen = new Map(), hadBox = new Set();  // the box each mark's "where" was last written for; marks that had a box when they were put on the clip
     const pen = { on: false, size: 1, erase: false, colour: '' };  // the brush: what newInk keeps for a picture
     const layers = new Map();  // the paint of each mark on a layer of its own: id -> { sig, c }
     const sent = new Map(), bare = new Set();  // what each mark's own picture last showed, and the marks known to have none
@@ -2361,8 +2364,8 @@
     const nowFrame = () => (fps && seen !== null && !video.seeking && seen <= video.currentTime + 1e-3 && video.currentTime - seen < 1.2 / fps ? frameOf(seen + 0.5 / fps) : frameOf(tp.time()));
     const secs = (t) => t.toFixed(2) + ' s';
 
-    const ink = h('canvas', { class: 'ink' }), brush = h('div', { class: 'brush', hidden: true });
-    const stage = h('div', { class: 'clipframe' }, video, ink, brush);
+    const ink = h('canvas', { class: 'ink' }), brush = h('div', { class: 'brush', hidden: true }), boxes = h('div', { class: 'boxes' });
+    const stage = h('div', { class: 'clipframe' }, video, ink, boxes, brush);
     const ruler = h('canvas', { class: 'timeruler' }), over = h('canvas');
     const strip = h('div', { class: 'timelane' }, over), head = h('div', { class: 'timehead', hidden: true });
     const track = h('div', { class: 'timewave track' }, ruler, strip, head);
@@ -2379,19 +2382,34 @@
     const penBtn = btn('Paint', 'Paint on the frame, in the colour of its mark (B). Painting holds the clip', () => setPen(!pen.on));
     const sizes = ['S', 'M', 'L'].map((label, i) => btn(label, ['Small', 'Medium', 'Large'][i] + ' brush', () => { pen.size = i; showPen(); }));
     const rub = btn('Rub out', 'Rub paint out of the mark on this frame', () => { pen.erase = !(pen.on && pen.erase); setPen(true); });
-    const tools = h('div', { class: 'grp marktools' }, penBtn, h('span', { class: 'sizes' }, sizes), rub);
+    // the Box tool: a box on the picture that stays on screen for the whole of its mark, and the button that takes it away
+    const boxBtn = btn('Box', 'Draw a box round a part of the picture: it stays on screen for the whole of its mark (R)', () => setBox(!boxing));
+    const unbox = btn('No box', 'Take the box away from this mark (Delete while Box is on)', () => dropBox());
+    unbox.hidden = true;
+    const tools = h('div', { class: 'grp marktools' }, penBtn, h('span', { class: 'sizes' }, sizes), rub, boxBtn, unbox);
     function showPen() {
       penBtn.classList.toggle('on', pen.on); penBtn.setAttribute('aria-pressed', String(pen.on));
       sizes.forEach((b, i) => b.classList.toggle('on', i === pen.size)); rub.classList.toggle('on', pen.on && pen.erase);
-      stage.classList.toggle('pen', pen.on);
+      boxBtn.classList.toggle('on', boxing); boxBtn.setAttribute('aria-pressed', String(boxing));
+      stage.classList.toggle('pen', pen.on); stage.classList.toggle('boxing', boxing);
       if (!pen.on) brush.hidden = true;
+      if (!boxing) stage.style.cursor = '';
+      drawBoxes();
     }
-    function setPen(on) { pen.on = !!on && editable(); if (!pen.on) pen.erase = false; showPen(); }
+    function setPen(on) { pen.on = !!on && editable(); if (!pen.on) pen.erase = false; else boxing = false; showPen(); }
+    // the Box tool on or off. Turned on with a mark chosen that the playhead is not inside, the playhead goes to the
+    // mark's start, so the box drawn is that mark's and shows at once
+    function setBox(on) {
+      if (boxDrag && boxDrag.moved) boxUp({ pointerId: boxDrag.id });  // a box being drawn, moved or sized is kept as it is
+      boxing = !!on && editable(); boxDrag = null;
+      if (boxing) { pen.on = false; pen.erase = false; const c = tl.get(tl.chosen); if (c && !inside(c, nowFrame())) { const to = snap(c.t0); if (tp.playing()) { pin = to; tp.hold(); } tp.seek(to); } }
+      showPen();
+    }
 
     const map = { time: (cx) => { const r = strip.getBoundingClientRect(); return (cx - r.left) / (r.width || 1) * len(); },
       x: (t) => { const r = strip.getBoundingClientRect(); return r.left + t / (len() || 1) * r.width; } };
     // a mark's time as the list shows it, and as the sheet does
-    const listWhen = (s) => (s.t1 > s.t0 ? s.t0.toFixed(2) + ' to ' + secs(s.t1) + (fps ? ' · frames ' + frameOf(s.t0) + ' to ' + frameOf(s.t1) : '') : secs(s.t0) + (fps ? ' · frame ' + frameOf(s.t0) : ''));
+    const listWhen = (s) => (s.t1 > s.t0 ? s.t0.toFixed(2) + ' to ' + secs(s.t1) + (fps ? ' · frames ' + frameOf(s.t0) + ' to ' + frameOf(s.t1) : '') : secs(s.t0) + (fps ? ' · frame ' + frameOf(s.t0) : '')) + (s.box ? ' · box' : '');
     const sheetWhen = (s) => (s.t1 > s.t0 ? secs(s.t0) + ' to ' + secs(s.t1) + ' (' + secs(s.t1 - s.t0) + (fps ? ', frames ' + frameOf(s.t0) + ' to ' + frameOf(s.t1) : '') + ')' : 'at ' + secs(s.t0) + (fps ? ' (frame ' + frameOf(s.t0) + ')' : ''));
 
     // the paint of one mark, drawn on its layer again only when its strokes have changed
@@ -2429,14 +2447,15 @@
       head.hidden = !d; head.style.left = (d ? 100 * t / d : 0) + '%';
       playBtn.textContent = tp.playing() ? 'Hold' : 'Play';
       time.textContent = d ? secs(t) + ' / ' + secs(d) + (fps ? ' · frame ' + frameOf(t) + ' of ' + count() : '') : '';
-      drawInk();
+      drawInk(); drawBoxes();
     }
     // the layer of paint lies over the clip's picture, wherever that sits in its box
     function place() {
       const bw = stage.clientWidth, bh = stage.clientHeight;
       if (!bw || !bh || !vw) return;
       shown = Math.min(bw / vw, bh / vh);
-      Object.assign(ink.style, { left: (bw - vw * shown) / 2 + 'px', top: (bh - vh * shown) / 2 + 'px', width: vw * shown + 'px', height: vh * shown + 'px' });
+      const at = { left: (bw - vw * shown) / 2 + 'px', top: (bh - vh * shown) / 2 + 'px', width: vw * shown + 'px', height: vh * shown + 'px' };
+      Object.assign(ink.style, at); Object.assign(boxes.style, at);
     }
     function say() {
       status.textContent = bad || (!vw ? (lost ? 'This clip does not say how long it is. Play it through once and marks can be made on it.' : 'Reading the clip') : vw + ' x ' + vh + (fps ? ' · ' + fps + ' frames a second' + (measured ? ', measured here' : '') : asked === 'busy' ? ' · measuring its frames a second' : ' · its frames a second are not known: a step is 1/30 s'));
@@ -2542,13 +2561,119 @@
       inkRing(brush, stage, x, y, pen);
       if (!pen.erase && !MARK_HEX[pen.colour]) brush.style.borderColor = '';
     }
+
+    // A box is kept in shares of the frame from its top left corner: { left, top, width, height }, so the clip's size
+    // does not matter. It is on screen while the playhead is inside its mark, from its first frame to its last
+    const boxSig = (s) => (s.box ? [s.box.left, s.box.top, s.box.width, s.box.height].join(',') : '');
+    const share4 = (x) => Math.round(x * 1e4) / 1e4;
+    const inside = (s, n) => frameOf(s.t0) <= n && n <= frameOf(s.t1);
+    // the mark the Box tool works on: the chosen one when the playhead is inside it, else one the playhead is inside
+    // that has a box, else the shortest one it is inside
+    function boxTarget(n) {
+      const c = tl.get(tl.chosen);
+      if (c && inside(c, n)) return c;
+      const here = tl.spans.filter((s) => inside(s, n)).sort((a, b) => (a.t1 - a.t0) - (b.t1 - b.t0));
+      return here.find((s) => s.box) || here[0] || null;
+    }
+    // the boxes on screen, each with the mark's number in time order
+    const shownBoxes = (n) => tl.sorted().map((s, i) => [s, i + 1]).filter(([s]) => s.box && inside(s, n));
+    // the boxes over the picture: every mark's the playhead is inside, in its colour with its number and note; with the
+    // Box tool on, the one it works on has handles on its corners and edges
+    function drawBoxes() {
+      if (!vw || !tl) { if (boxKey) { boxes.replaceChildren(); boxKey = ''; } return; }
+      const n = frameOf(tp.time()), live = boxing && editable() ? boxTarget(n) : null, on = shownBoxes(n);
+      unbox.hidden = !(live && live.box);
+      const key = on.map(([s, k]) => [s.id, k, s.c, boxSig(s), s.note || ''].join('|')).join(' ') + '/' + (live ? live.id : '');
+      if (key === boxKey) return;
+      boxKey = key;
+      boxes.replaceChildren(...on.map(([s, k]) => {
+        const b = s.box, note = (s.note || '').trim().split('\n')[0];
+        return h('div', { class: 'clipbox' + (s === live ? ' edit' : '') + (b.top < 0.08 ? ' low' : ''), 'data-id': s.id,
+          style: '--sw:' + (MARK_HEX[s.c] || MARK_HEX.red) + ';left:' + b.left * 100 + '%;top:' + b.top * 100 + '%;width:' + b.width * 100 + '%;height:' + b.height * 100 + '%' },
+        h('span', { class: 'lab' }, String(k) + (note ? ' ' + note : '')),
+        s === live ? ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'].map((p) => h('i', { class: 'hd ' + p })) : null);
+      }));
+    }
+    const toShare = (x, y) => { const r = ink.getBoundingClientRect(); return [Math.min(1, Math.max(0, (x - r.left) / (r.width || 1))), Math.min(1, Math.max(0, (y - r.top) / (r.height || 1)))]; };
+    // the part of a box a point on the picture is on: a corner or an edge ('nw', 'n'...), the inside ('move'), or none
+    function boxPart(b, p) {
+      const r = ink.getBoundingClientRect(), tx = Math.min(7 / (r.width || 1), b.width / 4), ty = Math.min(7 / (r.height || 1), b.height / 4);
+      const x1 = b.left + b.width, y1 = b.top + b.height;
+      if (p[0] < b.left - tx || p[0] > x1 + tx || p[1] < b.top - ty || p[1] > y1 + ty) return '';
+      return ((Math.abs(p[1] - b.top) <= ty ? 'n' : Math.abs(p[1] - y1) <= ty ? 's' : '') + (Math.abs(p[0] - b.left) <= tx ? 'w' : Math.abs(p[0] - x1) <= tx ? 'e' : '')) || 'move';
+    }
+    const BOX_CURSOR = { n: 'ns-resize', s: 'ns-resize', e: 'ew-resize', w: 'ew-resize', nw: 'nwse-resize', se: 'nwse-resize', ne: 'nesw-resize', sw: 'nesw-resize', move: 'move' };
+    // the mark a point on the picture works on, and the part of its box there: the box of the mark the Box tool works
+    // on, else another box on screen under the point, else the mark the Box tool works on, to draw its box again
+    function boxHit(n, p) {
+      const s = boxTarget(n), part = s && s.box ? boxPart(s.box, p) : '';
+      if (part || !s) return [s, part];
+      const hit = shownBoxes(n).reverse().find(([x]) => x !== s && boxPart(x.box, p));
+      return hit ? [hit[0], boxPart(hit[0].box, p)] : [s, ''];
+    }
+    // a press with the Box tool on: on a box, ready to move or size it; elsewhere, ready to draw the box of the mark
+    // the tool works on again (with Shift, or with the playhead in no mark, a new moment here gets the box).
+    // Nothing changes until the pointer moves; the clip is held
+    function boxDown(e) {
+      const n = nowFrame(), p = toShare(e.clientX, e.clientY);
+      if (tp.playing()) { pin = fps ? mid(n) : tp.time(); tp.hold(); }
+      const [s, part] = e.shiftKey ? [null, ''] : boxHit(n, p);
+      boxDrag = { id: e.pointerId, x: e.clientX, y: e.clientY, p, n, t: fps ? mid(n) : tp.time(), span: s ? s.id : null, part: part || 'new', from: s && s.box ? Object.assign({}, s.box) : null, moved: false };
+    }
+    function boxMove(e) {
+      const d = boxDrag;
+      if (!d || e.pointerId !== d.id) return;
+      if (!d.moved) {
+        if (Math.hypot(e.clientX - d.x, e.clientY - d.y) < 4) return;
+        d.moved = true;
+        let s = tl.get(d.span);
+        if (s) { tl.keep(); tl.choose(s); } else { s = tl.add(d.t, d.t); if (!s) { boxDrag = null; return; } d.span = s.id; }
+      }
+      const s = tl.get(d.span), b = d.from, p = toShare(e.clientX, e.clientY);
+      if (!s) return;
+      let x0, y0, x1, y1;
+      if (d.part === 'new') { [x0, y0] = d.p; [x1, y1] = p; }
+      else if (d.part === 'move') {  // the whole box goes with the pointer, and stays inside the frame
+        x0 = b.left + Math.min(1 - b.left - b.width, Math.max(-b.left, p[0] - d.p[0])); y0 = b.top + Math.min(1 - b.top - b.height, Math.max(-b.top, p[1] - d.p[1]));
+        x1 = x0 + b.width; y1 = y0 + b.height;
+      } else {  // the edges under the pointer go with it; dragged past the other side, the box turns over
+        x0 = b.left; y0 = b.top; x1 = b.left + b.width; y1 = b.top + b.height;
+        if (d.part.includes('w')) x0 = p[0]; if (d.part.includes('e')) x1 = p[0]; if (d.part.includes('n')) y0 = p[1]; if (d.part.includes('s')) y1 = p[1];
+      }
+      s.box = { left: share4(Math.min(x0, x1)), top: share4(Math.min(y0, y1)), width: share4(Math.abs(x1 - x0)), height: share4(Math.abs(y1 - y0)) };
+      drawBoxes();
+    }
+    // let go: the box is kept, unless it is too small to see; a click with no drag chooses the mark of the box under it
+    function boxUp(e) {
+      const d = boxDrag;
+      if (!d || e.pointerId !== d.id) return;
+      boxDrag = null;
+      if (!d.moved) { const hit = shownBoxes(d.n).reverse().find(([s]) => boxPart(s.box, d.p)); if (hit) tl.choose(hit[0]); return; }
+      const s = tl.get(d.span);
+      if (s && s.box && (s.box.width < 0.01 || s.box.height < 0.01)) { tl.undo(); toast('Drag across the part of the picture the box goes round'); return; }
+      if (s) { tl.stale(s); tl.changed('marks'); }
+    }
+    // the box comes off the mark the Box tool works on; the mark stays
+    function dropBox() {
+      const s = tl && editable() ? boxTarget(nowFrame()) : null;
+      if (!s || !s.box) return false;
+      tl.keep(); delete s.box; tl.stale(s); tl.changed('marks');
+      return true;
+    }
     stage.addEventListener('pointerdown', (e) => {
       if (e.button !== 0) return;
       if (pen.on && editable()) { stage.setPointerCapture(e.pointerId); e.preventDefault(); press = null; penDown(e.clientX, e.clientY); return; }
+      if (boxing && editable()) { stage.setPointerCapture(e.pointerId); e.preventDefault(); press = null; boxDown(e); return; }
       press = [e.clientX, e.clientY];
     });
-    stage.addEventListener('pointermove', (e) => { ring(e.clientX, e.clientY); if (stroke) penMove(e.clientX, e.clientY); });
+    stage.addEventListener('pointermove', (e) => {
+      ring(e.clientX, e.clientY);
+      if (stroke) penMove(e.clientX, e.clientY);
+      else if (boxDrag) boxMove(e);
+      else if (boxing && tl && vw) stage.style.cursor = BOX_CURSOR[boxHit(nowFrame(), toShare(e.clientX, e.clientY))[1]] || 'crosshair';
+    });
     const lift = (e) => {
+      if (boxDrag) { boxUp(e); return; }
       if (stroke) penUp();
       else if (press && e.type === 'pointerup' && Math.hypot(e.clientX - press[0], e.clientY - press[1]) < 5) tp.toggle();  // a click on the clip plays or holds it
       press = null;
@@ -2579,6 +2704,12 @@
       const L = layerOf(s), at = L ? inkPlace(L, vw, vh) : null;
       if (at) parts.push('paint ' + (s.t1 > s.t0 ? 'on its first frame, ' : '') + (at.pos === 'the middle' ? 'in the middle' : /^(left|right)$/.test(at.pos) ? 'on the ' + at.pos : 'in the ' + at.pos)
         + ' (x ' + at.x0 + ' to ' + at.x1 + ', y ' + at.y0 + ' to ' + at.y1 + ' of ' + vw + ' x ' + vh + '), ' + pct(at.share) + ' of the frame');
+      if (s.box) {  // a box: where it is in words, in shares and in pixels, and that it is up for the whole mark
+        const b = s.box, fx = b.left + b.width / 2, fy = b.top + b.height / 2, p100 = (x) => Math.round(x * 100) + '%';
+        const pos = fx > 1 / 3 && fx < 2 / 3 && fy > 1 / 3 && fy < 2 / 3 ? 'in the middle' : ((w) => (/^(left|right)$/.test(w) ? 'on the ' + w : 'in the ' + w))([thirds(fy, ['upper', '', 'lower']), thirds(fx, ['left', 'centre', 'right'])].filter(Boolean).join(' '));
+        parts.push('a box ' + pos + ' (left ' + p100(b.left) + ', top ' + p100(b.top) + ', ' + p100(b.width) + ' wide and ' + p100(b.height) + ' high; x ' + Math.round(b.left * vw) + ' to ' + Math.round((b.left + b.width) * vw)
+          + ', y ' + Math.round(b.top * vh) + ' to ' + Math.round((b.top + b.height) * vh) + ' of ' + vw + ' x ' + vh + '), on screen ' + (s.t1 > s.t0 ? 'for the whole of the mark' : 'on that frame only'));
+      }
       return { where: parts.join('; ') };
     }
     // a mark's paint burned into a picture: at half strength, so the fault shows through, with a thin light line and a
@@ -2594,6 +2725,21 @@
       }
       ctx.globalAlpha = 0.5; ctx.drawImage(layer, x, y, w, hh); ctx.globalAlpha = 1;
     }
+    // a mark's box drawn into a picture of one of its frames at x, y, w by hh: a line in its colour with a dark one
+    // round it, so it shows on any picture, and the mark's number on a flag at its corner
+    function boxDraw(ctx, s, num, x, y, w, hh) {
+      const b = s.box, hex = MARK_HEX[s.c] || MARK_HEX.red, lw = Math.max(2, Math.round(w / 400));
+      const bx = x + b.left * w, by = y + b.top * hh, bw = b.width * w, bh = b.height * hh;
+      ctx.save(); ctx.beginPath(); ctx.rect(x, y, w, hh); ctx.clip();
+      ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)'; ctx.lineWidth = lw * 3; ctx.strokeRect(bx, by, bw, bh);
+      ctx.strokeStyle = hex; ctx.lineWidth = lw; ctx.strokeRect(bx, by, bw, bh);
+      const fs = Math.max(11, Math.round(w / 70)), fh = Math.round(fs * 1.4);
+      ctx.font = '600 ' + fs + 'px system-ui, sans-serif';
+      const fw = ctx.measureText(String(num)).width + fs, fy = by - fh - lw >= y ? by - fh - lw / 2 : by + lw / 2;  // over the box, or just inside it at the top of the frame
+      ctx.fillStyle = hex; ctx.fillRect(bx - lw / 2, fy, fw, fh);
+      ctx.fillStyle = '#111'; ctx.textBaseline = 'middle'; ctx.fillText(String(num), bx - lw / 2 + fs / 2, fy + fh / 2 + 1);
+      ctx.restore();
+    }
     // the sheet Claude reads: the whole clip in eight frames with the time under each, then for each of the first twelve
     // marks a band (its number, kind and time) over its frame, or over the frames at its start, middle and end, the
     // paint on the first at half strength; then the legend with the notes. 1600 across
@@ -2603,7 +2749,7 @@
       if (!len() || !vw) return Promise.resolve(undefined);
       const c = count(), near = fps ? 1.01 / fps : 0, get = (t) => frames().frame(fps ? mid(frameOf(t)) : t, 'small', near);
       const whole = Array.from({ length: 8 }, (_, i) => (c ? mid(Math.round(i * (c - 1) / 7)) : (i + 0.5) / 8 * len()));
-      const cells = tl.sorted().slice(0, CLIP_ROWS).map((s) => { const ts = s.t1 > s.t0 ? [s.t0, (s.t0 + s.t1) / 2, s.t1] : [s.t0]; return { s, ts, got: ts.map(get), layer: layerOf(s) }; });
+      const cells = tl.sorted().slice(0, CLIP_ROWS).map((s) => { const ts = s.t1 > s.t0 ? [s.t0, (s.t0 + s.t1) / 2, s.t1] : [s.t0]; return { s, ts, got: ts.map(get), layer: layerOf(s), box: s.box ? { c: s.c, box: Object.assign({}, s.box) } : null }; });
       return Promise.all([Promise.all(whole.map(get)), Promise.all(cells.map((x) => Promise.all(x.got)))]).then(([top8, rows]) => {
         if (!alive) return undefined;  // thrown away while its frames were read
         const W = 1600, pad = 16, gap = 6, title = 34, cap = 20, band = 26;
@@ -2642,33 +2788,54 @@
             const px = at.x + j * (fw + 4), py = at.y + band;
             put(rows[i][j], px, py, fw, fh);
             if (j === 0 && cell.layer) burn(ctx, cell.layer, px, py, fw, fh);
+            if (cell.box) boxDraw(ctx, cell.box, i + 1, px, py, fw, fh);  // the box is up on every frame of its mark
             under(t, px, py + fh, fw, cell.ts.length > 1 ? ['start ', 'middle ', 'end '][j] : '');
           });
         });
         return spanLegend(top, tl, sheetWhen);
       });
     }
-    // each mark's own picture, for the first twelve: the frame at its start at the clip's own size, its paint burned in.
-    // Only those that changed since they were last asked for, or with `all` every one; nothing for a mark takes its
-    // picture away. A view thrown away answers with nothing at all
+    // the frames a mark's own pictures show: its first; with a box on a stretch, its middle and last as well, where
+    // those are other frames. Each is [the end of the picture's name, a time in the middle of the frame]
+    function ownFrames(s) {
+      const at = (t) => (fps ? mid(frameOf(t)) : t), out = [['', at(s.t0)]];
+      if (!s.box || !(s.t1 > s.t0)) return out;
+      const f0 = frameOf(s.t0), f1 = frameOf(s.t1), half = (s.t0 + s.t1) / 2, fm = frameOf(half);
+      if (fm !== f0 && fm !== f1) out.push(['-middle', at(half)]);
+      if (f1 !== f0) out.push(['-end', at(s.t1)]);
+      return out;
+    }
+    // each mark's own pictures, for the first twelve: the frame at its start at the clip's own size, its paint burned
+    // in and its box drawn on, and with a box the middle and last frames with the box. Only those that changed since
+    // they were last asked for, or with `all` every one; nothing for a picture takes it away. A view thrown away
+    // answers with nothing at all
     function shots(all) {
       if (!alive) return Promise.resolve(undefined);
       if (!tl || !len() || !vw) return Promise.resolve([]);
       const jobs = [], near = fps ? 1.01 / fps : 0;
       tl.sorted().forEach((s, i) => {
-        if (i >= CLIP_ROWS) { if (!bare.has(s.id)) { bare.add(s.id); sent.delete(s.id); jobs.push(Promise.resolve([s.id, null])); } return; }
-        const t = fps ? mid(frameOf(s.t0)) : s.t0, sig = Math.round(t * 1000) + '|' + sigOf(s);
-        bare.delete(s.id);
-        if (!all && sent.get(s.id) === sig) return;
-        sent.set(s.id, sig);
-        const layer = layerOf(s);
-        jobs.push(frames().frame(t, 'full', near).then((img) => {
-          if (!img) { sent.delete(s.id); return null; }
-          const out = h('canvas', { width: img.width, height: img.height }), ctx = out.getContext('2d');
-          ctx.drawImage(img, 0, 0);
-          if (layer) burn(ctx, layer, 0, 0, out.width, out.height);
-          return new Promise((ok) => out.toBlob((blob) => { if (!blob) sent.delete(s.id); ok(blob ? [s.id, blob] : null); }, 'image/png'));
-        }));
+        const want = i < CLIP_ROWS ? ownFrames(s) : [];
+        for (const part of ['', '-middle', '-end']) {  // a picture no longer wanted is taken away: the box's ones only when it was sent, or may be left from an earlier visit
+          const name = s.id + part;
+          if (want.some(([p]) => p === part) || bare.has(name) || (part && !sent.has(name) && !hadBox.has(s.id))) continue;
+          bare.add(name); sent.delete(name); jobs.push(Promise.resolve([name, null]));
+        }
+        const box = s.box ? { c: s.c, box: Object.assign({}, s.box) } : null;
+        want.forEach(([part, t]) => {
+          const name = s.id + part, sig = Math.round(t * 1000) + '|' + sigOf(s) + (box ? '|' + boxSig(s) + '|' + (i + 1) : '');
+          bare.delete(name);
+          if (!all && sent.get(name) === sig) return;
+          sent.set(name, sig);
+          const layer = part ? null : layerOf(s);  // paint is on the first frame only
+          jobs.push(frames().frame(t, 'full', near).then((img) => {
+            if (!img) { sent.delete(name); return null; }
+            const out = h('canvas', { width: img.width, height: img.height }), ctx = out.getContext('2d');
+            ctx.drawImage(img, 0, 0);
+            if (layer) burn(ctx, layer, 0, 0, out.width, out.height);
+            if (box) boxDraw(ctx, box, i + 1, 0, 0, out.width, out.height);
+            return new Promise((ok) => out.toBlob((blob) => { if (!blob) sent.delete(name); ok(blob ? [name, blob] : null); }, 'image/png'));
+          }));
+        });
       });
       return Promise.all(jobs).then((made) => (alive ? made.filter(Boolean) : undefined));
     }
@@ -2679,31 +2846,38 @@
       unsent(id) { sent.delete(id); bare.delete(id); },  // a mark's own picture did not arrive: it is made again at the next send
       slow: true,  // its pictures are frames read from the clip: it must not be thrown away until they are sent
       hint: ['Drag along the lane: a stretch · ', h('kbd', {}, 'M'), ' a moment · ', h('kbd', {}, 'I'), ' ', h('kbd', {}, 'O'), ' its start and end · ', h('kbd', {}, ','), ' ', h('kbd', {}, '.'),
-        ' a frame, with Shift ten · ', h('kbd', {}, 'B'), ' paints · ', h('kbd', {}, 'Space'), ' plays · ', h('kbd', {}, '['), ' ', h('kbd', {}, ']'), ' step · ', h('kbd', {}, 'Enter'), ' its note · ', h('kbd', {}, 'Del'), ' takes it away'],
+        ' a frame, with Shift ten · ', h('kbd', {}, 'B'), ' paints · ', h('kbd', {}, 'R'), ' a box · ', h('kbd', {}, 'Space'), ' plays · ', h('kbd', {}, '['), ' ', h('kbd', {}, ']'), ' step · ', h('kbd', {}, 'Enter'), ' its note · ', h('kbd', {}, 'Del'), ' takes it away'],
       // put a set of marks on the clip: they are drawn on the lane, listed beside it, painted on, and the keys work them
       attach(marks, o) {
         if (lane) lane.destroy();
-        tl = marks; editable = () => !!(o.editable() && len() && vw); broke = o.broken || null;
+        tl = marks; takes = o.editable; editable = () => !!(takes() && len() && vw); broke = o.broken || null;
         tl.describe = clipWhere;
+        hadBox.clear(); boxSeen.clear(); boxKey = '';
+        for (const s of tl.spans) { boxSeen.set(s.id, boxSig(s)); if (s.box) hadBox.add(s.id); }
         list = spanList(tl, { editable, when: listWhen, goto: (s) => tp.seek(s.t0), loop: spanLoop(tl, tp), looping: () => tp.looping(),
           none: () => bad || (o.editable() ? 'No marks yet. Press M to mark the frame the clip is on, I and O for the start and end of a stretch, or drag along the lane under the bar.' : 'No marks on this clip.') });
         side.replaceChildren(list.el);
         lane = spanLane(strip, tl, map, { editable, seek: (t) => tp.seek(t), fixed: pinned });
         tl.subs.push((what) => {
-          if (what === 'notes') return;
+          if (what === 'notes') { drawBoxes(); return; }  // a box shows its mark's note
           if (what === 'marks') {
             for (const s of tl.spans) for (const k of s.strokes || []) if (k.c !== 'erase' && k.c !== s.c) k.c = s.c;  // paint wears its mark's colour
-            for (const id of [...sent.keys()]) if (!tl.get(id)) sent.delete(id);
+            for (const id of [...sent.keys()]) if (!tl.get(id.split('-')[0])) sent.delete(id);
             for (const id of [...layers.keys()]) if (!tl.get(id)) layers.delete(id);
+            let moved = false;  // a box changed by Undo: what Claude is told of its mark is written again
+            for (const s of tl.spans) { const k = boxSig(s); if (boxSeen.has(s.id) && boxSeen.get(s.id) !== k) { tl.stale(s); moved = true; } boxSeen.set(s.id, k); }
+            if (moved && list) list.draw();
             if (tl.spans.length && editable()) frames();  // pictures will be wanted: the second copy starts to load
           }
-          drawLane(); drawInk();
+          drawLane(); drawInk(); drawBoxes();
         });
         api.keys = spanKeys(tl, tp, { editable, note: (id) => list.focus(id), more: (e, key) => {
           if (e.code === 'Comma' || key === ',' || key === '<') { step(e.shiftKey ? -10 : -1); return true; }
           if (e.code === 'Period' || key === '.' || key === '>') { step(e.shiftKey ? 10 : 1); return true; }
           if (key === 'i' || key === 'o') { if (editable() && !e.repeat) edge(key === 'i'); return true; }
           if (key === 'b') { if (!e.repeat) setPen(!pen.on); return true; }
+          if (key === 'r') { if (bad || !takes()) return false; if (!e.repeat) setBox(!boxing); return true; }  // R is the Box tool; on a clip that takes no marks it sets Redo
+          if ((key === 'Delete' || key === 'Backspace') && boxing) return dropBox();  // with the Box tool on, Delete takes the box away and leaves the mark; with no box there, the mark
           return false;
         } });
         if (bad && broke) broke();
@@ -2740,7 +2914,8 @@
         for (const [id, blob] of own || []) await API.putMark(b.id, cand.id, id, blob).catch((e) => { if (view.unsent) view.unsent(id); failed(e); });  // a mark's own picture; none takes it away
       }).catch(failed));
     };
-    view.attach(tl, { editable, flush: send, broken: () => { if (tools) tools.hidden = true; } });
+    el.classList.toggle('boxkey', view.kind === 'video' && editable());  // R draws a box on a clip, so the Redo call shows no key
+    view.attach(tl, { editable, flush: send, broken: () => { if (tools) tools.hidden = true; el.classList.remove('boxkey'); } });
     tl.subs.push((what) => {
       // a change can come late, from a clip held after its closer look was closed (its frames a second, measured then): it
       // is dropped once the page has gone to another batch or another closer look has opened, which may be of this same clip
@@ -2780,13 +2955,15 @@
         const sheet = view.picture(), each = view.shots ? view.shots(true) : null;  // both start now, so a clip's frames are read in one go; every note carries each mark's own picture
         const blob = await sheet, own = new Map(((await each) || []).filter(([, pic]) => pic));
         if (blob === undefined) throw new Error('The pictures of the marks could not be made, so the note was not sent');
-        const ownName = (i) => 'marks ' + s.id + ' mark ' + (i + 1) + '.png';
+        const BOXED = [['-middle', 'middle'], ['-end', 'last']];  // the pictures of a box on a stretch besides its first frame
+        const ownName = (i, part) => 'marks ' + s.id + ' mark ' + (i + 1) + (part ? ' ' + BOXED.find(([p]) => p === part)[1] : '') + '.png';
+        const boxed = (m, i) => BOXED.filter(([p]) => own.has(m.id + p)).map(([p, at]) => 'the box on its ' + at + ' frame: ' + ownName(i, p)).join(', ');
         const lines = ['Marks on ' + s.title + ' (' + s.id + ', ' + f.label + '), ' + (clip ? 'a clip ' + tl.length.toFixed(2) + ' s' : 'a sound ' + clock(tl.length)) + ' long. The picture of them is attached; each mark is quoted with when it is. KEEP: that part must stay as it is. CUT: that stretch goes.'];
         if (words.value.trim()) lines.push('', words.value.trim());
         lines.push('');
-        data.spans.forEach((m, i) => lines.push('- ' + (i + 1) + '. ' + tagWord(m) + ' (' + m.c + '): ' + (m.note ? '"' + m.note + '"' : '(no note)') + (m.where ? '. Where: ' + m.where : '') + (own.has(m.id) ? '. Its own picture: ' + ownName(i) : '')));
+        data.spans.forEach((m, i) => lines.push('- ' + (i + 1) + '. ' + tagWord(m) + ' (' + m.c + '): ' + (m.note ? '"' + m.note + '"' : '(no note)') + (m.where ? '. Where: ' + m.where : '') + (own.has(m.id) ? '. Its own picture: ' + ownName(i) : '') + (boxed(m, i) ? '; ' + boxed(m, i) : '')));
         const files = blob ? [new File([blob], 'marks ' + s.id + '.png', { type: 'image/png' })] : [];
-        data.spans.forEach((m, i) => { if (own.has(m.id)) files.push(new File([own.get(m.id)], ownName(i), { type: 'image/png' })); });
+        data.spans.forEach((m, i) => { for (const p of ['', ...BOXED.map(([x]) => x)]) if (own.has(m.id + p)) files.push(new File([own.get(m.id + p)], ownName(i, p), { type: 'image/png' })); });
         const made = (await API.addNote(lines.join('\n'), '', false)).note;
         await sendFiles(made.id, files);
         busy = false; close(); await afterNote(files.length > 1 ? 'Noted, with the pictures of the marks' : 'Noted, with the picture of the marks');

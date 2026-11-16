@@ -438,6 +438,64 @@ def main() -> int:
               and "- **2. CUT, 2.02 s to 2.68 s (0.67 s), yellow**" in brief and f"Its own picture: `batches/{cut['id']}/marks/a/m1.png`" in brief,
               "the brief for the next round says the same of a clip")
         shutil.rmtree(studio.batch_dir(cut["id"]))
+        unboxed_steps = " ".join(item["steps"])
+        # a box on a clip: a part of the picture, on screen for the whole of its mark; Claude gets its place, its times and its frames
+        from studiolib.store import clean_box
+        logo = {"left": 0.125, "top": 0.25, "width": 0.5, "height": 0.4}
+        boxed = clean_marks({"kind": "video", "file": "clip_bars.mp4", "length": 4.0, "fps": 30, "size": [640, 360], "spans": [
+            {"id": "m1", "c": "blue", "tag": "change", "t0": 1.0, "t1": 2.0, "note": "the logo", "box": dict(logo, extra=1)},
+            {"id": "m2", "c": "red", "t0": 3.0, "box": {"left": -0.2, "top": 0.9, "width": 0.5, "height": 0.5}},
+            {"id": "m3", "c": "green", "t0": 3.5, "box": {"left": 0.5, "top": 0.5, "width": 0, "height": 0.2}},
+            {"id": "m4", "c": "yellow", "t0": 3.6, "box": [0.1, 0.1, 0.2, 0.2]}]})
+        on_sound = clean_marks({"kind": "sound", "length": 4, "spans": [{"id": "m1", "t0": 1, "note": "x", "box": logo}]})
+        check(boxed["spans"][0]["box"] == logo and boxed["spans"][1]["box"] == {"left": 0.0, "top": 0.9, "width": 0.3, "height": 0.1}
+              and "box" not in boxed["spans"][2] and "box" not in boxed["spans"][3] and "box" not in on_sound["spans"][0]
+              and clean_box(dict(logo, width=float("nan"))) is None and clean_box(dict(logo, left=True)) is None
+              and clean_box({"left": 1.2, "top": 0.1, "width": 0.3, "height": 0.3}) is None,
+              "a box on a clip is kept as sent, in shares of the frame; one that runs off the frame is cut to it; one with no size, "
+              "one off the frame, one that is not a box and one on a sound are dropped")
+        boxcut = studio.new_batch("boxcut", kind="video", mode="rate", ask="Approve the cut?", look_at=["The logo"])
+        studio.add_candidate(boxcut["id"], [clips / "clip_bars.mp4"], title="Bars", made_with={"tool": "selftest"})
+        studio.publish(boxcut["id"])
+        in_box = {"kind": "video", "file": "clip_bars.mp4", "length": 4.0, "fps": 30, "size": [640, 360], "spans": [
+            {"id": "m1", "c": "blue", "tag": "change", "t0": 1.017, "t1": 2.017, "note": "the logo jumps", "where": "from 1.02 s to 2.02 s", "box": logo},
+            {"id": "m2", "c": "red", "tag": "keep", "t0": 3.017, "t1": 3.017, "note": "", "where": "at 3.02 s",
+             "box": {"left": 0.5, "top": 0.5, "width": 0.25, "height": 0.25}}]}
+        saved, _ = http("PUT", base + f"/api/batch/{boxcut['id']}/draft", {"candidates": {"a": {"marks": in_box}}})
+        own = lambda span: studio.mark_picture(boxcut["id"], "a", span)  # noqa: E731
+        sent = [put_mark("a", n, png, boxcut["id"]) for n in ("", "m1", "m1-middle", "m1-end", "m2")]
+        refused = [put_mark("a", n, png, boxcut["id"]) for n in ("m1-start", "m1-middle-end", "-end")]
+        check(saved == 200 and sent == [200] * 5 and refused == [400] * 3 and own("m1-end") == studio.batch_dir(boxcut["id"]) / "marks" / "a" / "m1-end.png"
+              and own("m1-middle").read_bytes() == png,
+              "a stretch with a box takes pictures of its middle and last frames beside its first; any other name is refused")
+        http("PUT", base + f"/api/batch/{boxcut['id']}/draft", {"candidates": {"a": {"marks": dict(in_box, spans=[{k: v for k, v in in_box["spans"][0].items() if k != "box"}, in_box["spans"][1]])}}})
+        check(own("m1").exists() and not own("m1-middle").exists() and not own("m1-end").exists() and own("m2").exists(),
+              "taking a box away throws away the pictures of its middle and last frames, and keeps the mark's first")
+        http("PUT", base + f"/api/batch/{boxcut['id']}/draft", {"candidates": {"a": {"marks": in_box}}})
+        sent = [put_mark("a", n, png, boxcut["id"]) for n in ("m1-middle", "m1-end")]
+        status, _ = http("POST", base + f"/api/batch/{boxcut['id']}/submit", {"action": "another_round", "candidates": {"a": {"marks": in_box}}})
+        item = next((x for x in studio.todo() if x["batch"] == boxcut["id"]), {"unmarked": [{}], "steps": []})
+        row = item["unmarked"][0].get("marks") or {"spans": [{}, {}]}
+        check(status == 200 and sent == [200, 200] and row["spans"][0].get("box") == logo and row["spans"][0]["picture"] == str(own("m1"))
+              and row["spans"][0].get("box_pictures") == [{"frame": "middle", "picture": str(own("m1-middle"))}, {"frame": "last", "picture": str(own("m1-end"))}]
+              and row["spans"][1].get("box") == {"left": 0.5, "top": 0.5, "width": 0.25, "height": 0.25} and row["spans"][1].get("box_pictures") == [],
+              "Claude gets each box as it was sent, with the pictures of its first, middle and last frames; a box on a moment has its one frame")
+        steps = " ".join(item["steps"])
+        check("A mark on a clip may carry a box" in steps and "shares of the frame" in steps and "carry a box" not in unboxed_steps,
+              "the steps say what a box is when a mark has one, and say nothing of boxes when none has")
+        listed = cli("todo").stdout
+        check("box: left 0.125, top 0.250, width 0.500, height 0.400 of the frame (x 80 to 400, y 90 to 234 of 640 x 360); "
+              "on screen from 1.02 s to 2.02 s, the whole of the mark" in listed
+              and "the box on its middle frame: " + str(own("m1-middle")) in listed and "the box on its last frame: " + str(own("m1-end")) in listed
+              and "box: left 0.500, top 0.500, width 0.250, height 0.250 of the frame (x 320 to 480, y 180 to 270 of 640 x 360); on screen at 3.02 s only" in listed,
+              "todo names each box with its place in shares of the frame and in pixels, the times it is on screen, and the pictures of it")
+        brief = studio.brief(boxcut["id"])
+        check("A mark on a clip may carry a box" in brief and "  Box: left 0.125, top 0.250, width 0.500, height 0.400 of the frame" in brief
+              and f"the box on its last frame: `batches/{boxcut['id']}/marks/a/m1-end.png`" in brief,
+              "the brief for the next round names each box, its times and its pictures")
+        in_schema = json.loads((Path(__file__).resolve().parent / "schemas" / "verdict.schema.json").read_text(encoding="utf-8"))["properties"]["candidates"]["additionalProperties"]["properties"]["marks"]["properties"]
+        check(set(in_schema["spans"]["items"]["properties"]["box"]["properties"]) == set(logo), "the verdict's schema names the box and its four shares")
+        shutil.rmtree(studio.batch_dir(boxcut["id"]))
 
         # the overview: the road, the build in hand, what only the user can do
         studio.set_milestone("M1", name="One room", status="current")
