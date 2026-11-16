@@ -108,21 +108,27 @@ Bake before you file a motion batch, never after.
 
 ## Share links
 
-When the user wants someone outside to see an approved file, make a link that
-shows only those files, until it runs out:
+When the user wants someone outside to see an approved file, or the
+candidates of a batch, make a link that shows only those files, until it runs out:
 
 ```
 S share make library/<slot>/v<n> [more library files] --title "<what it is>" --for 7d
+S share make <batch> --for 7d             # every candidate's files, each under its name
+S share make <batch>/<candidate>          # one candidate's files
 S share list [--all]
 S share stop <id>
 ```
 
-`--for` takes 12h, 3d, 2w and so on, 90 days at most. Only library files can
-be shared. They can also make one with Share on an asset's page, and see or
-stop them all at the top of the Library. Make a link only when they ask for
-one, and give them the link it prints; never send it anywhere yourself. A link
-made with `S share` works once the server has it: commit `shares/<id>.json`
-and push (or `S save`), and it is live a minute later. Stopping one is the same.
+`--for` takes 12h, 3d, 2w and so on, 90 days at most. Only library files and
+a candidate's own files can be shared: never a sample, nor the batch's verdict,
+notes, marks or anything else in its folder. Whoever opens the link sees and
+hears the files alone. They can also make one with Share on an asset's page, on
+a candidate in the Inbox, its closer look, or the batch itself, and see or stop
+them all at the top of the Library. Make a link only when they ask for one, and
+give them the link it prints; never send it anywhere yourself. A link made with
+`S share` works once the server has it: commit `shares/<id>.json` and the files
+it names and push (or `S save`), and it is live a minute later. Stopping one is
+the same.
 
 ## When the user says to process their verdicts
 

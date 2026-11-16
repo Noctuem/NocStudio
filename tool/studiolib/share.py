@@ -1,12 +1,17 @@
-"""Share links: a few files from a Studio's library, for someone outside, until a set time.
+"""Share links: a few files from a Studio's library or inbox, for someone outside, until a set time.
 
 A share is one record in the home, kept in git so the server's copy has it a minute later:
 
-    <home>/shares/<id>.json    {"id", "token", "title", "files": [{"path", "name", "size"}], "created", "expires", "stopped"}
+    <home>/shares/<id>.json    {"id", "token", "title", "files": [{"path", "name", "size", "group"?}], "batches"?,
+                                "created", "expires", "stopped"}
 
 The link is the public address of the share server, then the token: https://example.com/share/<token>/
-Only the files named in the record are reachable through it, only from the library, and only until it expires
-or is stopped. The share server is its own small process (`studio.py serve-shares`): it reads the homes, never
+Only the files named in the record are reachable through it, and only until it expires or is stopped. A file is
+either in the library, or one of a candidate's own files in a batch as its batch.json lists it
+(batches/<batch>/files/<candidate>/<name>: nothing else in the batch, no sample, nothing reached through a link);
+the share server checks that again for every file it sends. A batch's files carry the candidate's name as their
+"group", and the page shows them under it. A file gone since (a batch deleted) is left off the page, which says
+how many are gone; a link whose files are all gone answers as a stopped one. The share server is its own small process (`studio.py serve-shares`): it reads the homes, never
 writes them, answers GET and HEAD alone, and has no route to anything else in a Studio.
 
 Where the public address comes from, first found: STUDIO_SHARE_URL, then [share] url in the home's
@@ -24,10 +29,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit
 
-from .store import Studio, StudioError, iso_now, read_json, tomllib, write_json
+from .store import SAMPLE, Studio, StudioError, iso_now, read_json, tomllib, write_json
 
 TOKEN = re.compile(r"[A-Za-z0-9_-]{32,64}")
 SHARE_ID = re.compile(r"sh-[0-9a-f]{8}")
+BATCH_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,95}")
 MAX_HOURS = 24 * 90          # three months at most: every link ends
 MAX_FILES = 200
 LENGTHS = {"h": 1, "d": 24, "w": 24 * 7}
@@ -122,22 +128,101 @@ def _library_files(studio: Studio, given: list) -> list[Path]:
     return unique
 
 
+def candidate_file(home: Path, rel: str) -> Path | None:
+    """A candidate's own file in a batch, as its batch.json lists it; None for anything else in the batch or the home."""
+    parts = str(rel).split("/")
+    if (len(parts) != 5 or parts[0] != "batches" or parts[2] != "files" or any(p in ("", ".", "..") for p in parts)
+            or not BATCH_ID.fullmatch(parts[1]) or parts[1].startswith(SAMPLE) or parts[3].startswith("_")):
+        return None
+    home = Path(home).resolve()
+    want = home.joinpath(*parts)
+    try:
+        if want.resolve() != want or not want.is_file():  # a link anywhere on the way leads somewhere else: refused
+            return None
+        batch = read_json(home / "batches" / parts[1] / "batch.json")
+    except (OSError, StudioError):
+        return None
+    if not isinstance(batch, dict) or batch.get("sample"):
+        return None
+    for cand in batch.get("candidates") or []:
+        if isinstance(cand, dict) and cand.get("id") == parts[3]:
+            listed = [f.get("path") for f in cand.get("files") or [] if isinstance(f, dict)]
+            return want if f"files/{parts[3]}/{parts[4]}" in listed else None
+    return None
+
+
+def _batch_files(studio: Studio, item: str) -> tuple[dict, list[tuple[Path, str]]]:
+    """A batch, or one candidate of it as <batch>/<candidate>: its candidates' own files, each with the candidate's name."""
+    parts = [p for p in item.replace("\\", "/").split("/") if p]
+    if parts[:1] in (["batches"], ["samples"]):
+        parts = parts[1:]
+    if not 1 <= len(parts) <= 2 or not BATCH_ID.fullmatch(parts[0]):
+        raise StudioError(f"{item}: share files in the library, a batch, or one candidate of it as <batch>/<candidate>")
+    if parts[0].startswith(SAMPLE):
+        raise StudioError(f"{parts[0]}: a sample is made up and is never shared; share a real batch")
+    batch = read_json(studio.batches_dir / parts[0] / "batch.json")
+    if not isinstance(batch, dict):
+        raise StudioError(f"no batch {parts[0]!r}; see: studio.py status")
+    if batch.get("sample"):
+        raise StudioError(f"{parts[0]}: a sample is made up and is never shared; share a real batch")
+    cands = [c for c in batch.get("candidates") or [] if isinstance(c, dict)]
+    if len(parts) == 2:
+        cands = [c for c in cands if c.get("id") == parts[1]]
+        if not cands:
+            raise StudioError(f"batch {parts[0]} has no candidate {parts[1]!r}")
+    out = []
+    for cand in cands:
+        name = str(cand.get("title") or cand.get("id") or "").strip()
+        for f in cand.get("files") or []:
+            path = candidate_file(studio.home, f"batches/{parts[0]}/{f.get('path') if isinstance(f, dict) else ''}")
+            if path is not None:  # anything batch.json names outside the candidate's own folder is left out
+                out.append((path, name))
+    if not out:
+        raise StudioError(f"{item}: nothing to share; " + ("this candidate has" if len(parts) == 2 else "its candidates have") + " no files")
+    return batch, out
+
+
 def make(studio: Studio, files: list, *, title: str = "", hours: str | int = "7d", by: str = "") -> dict:
-    paths = _library_files(studio, files)
+    """A link to library files, to a batch's candidates (<batch>), or to one of them (<batch>/<candidate>)."""
+    found: list[tuple[Path, str, str]] = []  # the file, the candidate's name, its batch
+    batches: list[dict] = []
+    for item in files:
+        raw = Path(str(item).lstrip("/\\"))
+        if raw.is_absolute() or raw.parts[:1] == ("library",):
+            found += [(p, "", "") for p in _library_files(studio, [item])]
+        else:
+            batch, got = _batch_files(studio, str(item))
+            if batch["id"] not in [b["id"] for b in batches]:
+                batches.append(batch)
+            found += [(p, name, batch["id"]) for p, name in got]
+    seen, unique = set(), []
+    for p, name, bid in found:
+        if p not in seen:
+            seen.add(p)
+            unique.append((p, name, bid))
+    if not unique:
+        raise StudioError("name at least one file to share")
+    if len(unique) > MAX_FILES:
+        raise StudioError(f"one link holds {MAX_FILES} files at most")
+    titles = {b["id"]: str(b.get("title") or b["id"]) for b in batches}
     hours = hours_of(hours)
     now = _now().replace(microsecond=0)
+    first = unique[0]
     rec = {
         "id": "sh-" + secrets.token_hex(4),
         "token": secrets.token_urlsafe(32),
-        "title": (title or "").strip()[:120] or paths[0].parent.name,
-        "files": [{"path": p.relative_to(studio.home.resolve()).as_posix(), "name": p.name, "size": p.stat().st_size}
-                  for p in paths],
+        "title": (title or "").strip()[:120] or (titles[first[2]] if first[2] else first[0].parent.name),
+        "files": [dict({"path": p.relative_to(studio.home.resolve()).as_posix(), "name": p.name, "size": p.stat().st_size},
+                       **({"group": titles[bid] + ": " + name if len(batches) > 1 else name} if bid else {}))
+                  for p, name, bid in unique],
         "created": iso_now(),
         "expires": (now + datetime.timedelta(hours=hours)).isoformat().replace("+00:00", "Z"),
         "hours": hours,
         "stopped": None,
         "by": by,
     }
+    if batches:
+        rec["batches"] = [b["id"] for b in batches]
     write_json(_folder(studio) / f"{rec['id']}.json", rec)
     return dict(rec, state="live", url=link(studio, rec))
 
@@ -210,8 +295,11 @@ def shared_file(home: Path, rec: dict, index: int) -> Path | None:
     if not 0 <= index < len(files):
         return None
     lib = (home / "library").resolve()
-    path = (home / str(files[index].get("path") or "")).resolve()
-    return path if path.is_relative_to(lib) and path.is_file() else None
+    rel = str(files[index].get("path") or "")
+    path = (home / rel).resolve()
+    if path.is_relative_to(lib) and path.is_file():
+        return path
+    return candidate_file(home, rel)  # one of a candidate's own files, still listed in its batch, or nothing
 
 
 PAGE_CSP = ("default-src 'none'; img-src 'self'; media-src 'self'; style-src 'unsafe-inline'; "
@@ -227,11 +315,14 @@ def _size(n: int) -> str:
     return ""
 
 
-def page(rec: dict) -> str:
+def page(rec: dict, present: list | None = None) -> str:
+    """The page a link opens: its files, under each candidate's name when they came from a batch; none that are gone."""
     esc = html.escape
     ends = _parse(rec["expires"]).strftime("%d %b %Y, %H:%M UTC")
-    items = []
+    items, groups = [], {}
     for i, f in enumerate(rec.get("files") or []):
+        if present is not None and not (i < len(present) and present[i]):
+            continue
         name = str(f.get("name") or "file")
         href = f"{i}/{quote(name)}"
         ext = Path(name).suffix.lower()
@@ -247,6 +338,14 @@ def page(rec: dict) -> str:
         items.append(f'<li>{show}<div class="row"><span class="name">{esc(name)}</span>'
                      f'<span class="size">{_size(int(f.get("size") or 0))}</span>'
                      f'<a class="dl" href="{href}?dl=1">Download</a></div></li>')
+        groups.setdefault(str(f.get("group") or ""), []).append(items[-1])
+    if any(groups):  # from a batch: each candidate's files under its name
+        body = "".join(f'<section><h2>{esc(g or "Other files")}</h2><ul>{"".join(lis)}</ul></section>' for g, lis in groups.items())
+    else:
+        body = f'<ul>{"".join(items)}</ul>'
+    gone = len(rec.get("files") or []) - len(items)
+    if gone:
+        body = f'<p class="gone">{"One file" if gone == 1 else f"{gone} files"} in this link {"is" if gone == 1 else "are"} no longer here.</p>' + body
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow"><meta name="referrer" content="no-referrer">
@@ -266,10 +365,13 @@ audio {{ display: block; width: calc(100% - 24px); margin: 12px; }}
 .name {{ flex: 1 1 200px; overflow-wrap: anywhere; }}
 .size {{ color: var(--muted); font-size: 13px; }}
 a.dl {{ color: var(--accent); font-weight: 600; text-decoration: none; }}
+section {{ margin: 0 0 28px; }}
+h2 {{ font-size: 17px; margin: 0 0 10px; overflow-wrap: anywhere; }}
+p.gone {{ color: var(--muted); margin: 0 0 16px; }}
 </style></head>
 <body><main><h1>{esc(rec.get("title") or "Shared files")}</h1>
 <p class="until">This link stops working on {esc(ends)}.</p>
-<ul>{"".join(items)}</ul></main></body></html>
+{body}</main></body></html>
 """
 
 
@@ -332,7 +434,10 @@ def make_share_handler(roots: list, quiet: bool = True):
                 self.common(PAGE_CSP)
                 return self.end_headers()
             if len(parts) == 1:
-                body = page(rec).encode()
+                present = [shared_file(home, rec, i) is not None for i in range(len(rec.get("files") or []))]
+                if not any(present):  # every file gone: the link is over
+                    return self.gone()
+                body = page(rec, present).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))

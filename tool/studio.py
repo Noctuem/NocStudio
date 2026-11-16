@@ -863,9 +863,9 @@ def main(argv=None) -> int:
     c.add_argument("--log", action="store_true", help="log each request (tokens are hidden)")
     c.set_defaults(fn=cmd_serve_shares)
 
-    c = sub.add_parser("share", help="links that let someone outside see a few library files until a set time")
+    c = sub.add_parser("share", help="links that let someone outside see a few library files, or a batch's candidates, until a set time")
     c.add_argument("action", choices=["make", "list", "stop"])
-    c.add_argument("items", nargs="*", help="make: library files or version folders; stop: share ids")
+    c.add_argument("items", nargs="*", help="make: library files or version folders, a batch, or <batch>/<candidate>; stop: share ids")
     c.add_argument("--title", default="", help="what the page they open is called")
     c.add_argument("--for", dest="time", default="7d", help="how long the link works: 12h, 7d, 2w (90 days at most)")
     c.add_argument("--all", action="store_true", help="list: expired and stopped links too")

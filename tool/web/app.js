@@ -3604,7 +3604,7 @@
   }
 
   // ------------------------------------------------------------ share links
-  const SHARE_TIMES = [['1h', '1 hour'], ['1d', '1 day'], ['3d', '3 days'], ['7d', '7 days'], ['30d', '30 days'], ['90d', '90 days']];
+  const SHARE_TIMES = [['1h', '1 hour'], ['12h', '12 hours'], ['1d', '1 day'], ['3d', '3 days'], ['7d', '7 days'], ['30d', '30 days'], ['90d', '90 days']];
   const whenEnds = (iso) => new Date(iso).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
   function shareResult(rec, onStop) {
     const box = h('div', { class: 'shareout' });
@@ -3623,16 +3623,17 @@
     draw();
     return box;
   }
-  function sharePanel(files, title) {
+  // `items` in place of ticks: a batch or one candidate of it, shared whole, with `said` for what they will see
+  function sharePanel(files, title, items, said) {
     const el = h('div', { class: 'sharepanel', hidden: true });
-    const button = h('button', { class: 'btn small', type: 'button', onclick: () => { el.hidden = !el.hidden; if (!el.hidden) draw(); } }, 'Share');
+    const button = h('button', { class: 'btn small', type: 'button', 'aria-expanded': 'false', onclick: () => { el.hidden = !el.hidden; button.setAttribute('aria-expanded', String(!el.hidden)); if (!el.hidden) draw(); } }, 'Share');
     function draw() {
-      const ticks = files.map((f) => { const box = h('input', { type: 'checkbox', checked: true }); box.dataset.path = f.url.replace(/^\//, ''); return { box, f }; });
+      const ticks = items ? [] : files.map((f) => { const box = h('input', { type: 'checkbox', checked: true }); box.dataset.path = f.url.replace(/^\//, ''); return { box, f }; });
       const name = h('input', { class: 'field', value: title, maxlength: 120, 'aria-label': 'What the page they open is called' });
       const time = h('select', { 'aria-label': 'How long the link works' }, SHARE_TIMES.map(([v, label]) => h('option', { value: v, selected: v === '7d' }, label)));
       const out = h('div', {});
       const make = h('button', { class: 'btn small primary', type: 'button', onclick: async () => {
-        const chosen = ticks.filter((t) => t.box.checked).map((t) => t.box.dataset.path);
+        const chosen = items || ticks.filter((t) => t.box.checked).map((t) => t.box.dataset.path);
         if (!chosen.length) { toast('Tick at least one file'); return; }
         make.disabled = true;
         try { const rec = (await API.share({ files: chosen, title: name.value, time: time.value })).share; out.replaceChildren(shareResult(rec)); make.textContent = 'Make another link'; }
@@ -3640,12 +3641,22 @@
         make.disabled = false;
       } }, 'Make the link');
       el.replaceChildren(...[
-        h('p', { class: 'muted' }, 'A link for someone outside: they see only the files ticked here, and only until it runs out.'),
-        files.length > 1 ? h('div', { class: 'sharefiles' }, ticks.map((t) => h('label', {}, t.box, ' ' + (t.f.label || t.f.url.split('/').pop())))) : null,
+        h('p', { class: 'muted' }, said || 'A link for someone outside: they see only the files ticked here, and only until it runs out.'),
+        files.length > 1 && !items ? h('div', { class: 'sharefiles' }, ticks.map((t) => h('label', {}, t.box, ' ' + (t.f.label || t.f.url.split('/').pop())))) : null,
         h('div', { class: 'shareline' }, h('label', {}, 'Called ', name), h('label', {}, 'Works for ', time), make),
         out].filter(Boolean));
     }
     return { el, button };
+  }
+  // Share on a batch in the Inbox, or on one candidate of it: its files alone, never the verdict, notes or marks; none on a sample
+  function inboxShare(b, cand) {
+    const n = (cand ? [cand] : b.candidates).reduce((t, c) => t + (c.files || []).length, 0);
+    if (STATIC || b.sample || !n) return null;
+    const said = 'A link for someone outside: they see and hear ' + (n === 1 ? 'this one file' : 'these ' + n + ' files') + (cand ? ' of ' + cand.title : ', under each candidate\'s name')
+      + ', and nothing else: no verdict, notes or marks. It works until it runs out.';
+    const panel = sharePanel([], b.title, [b.id + (cand ? '/' + cand.id : '')], said);
+    panel.button.title = cand ? 'A link to ' + cand.title + '\'s files, for someone outside' : 'A link to every candidate\'s files, for someone outside';
+    return panel;
   }
   function sharesSection() {
     const sec = h('section', { hidden: true });
@@ -3654,7 +3665,7 @@
       if (!shares.length) return;
       const live = shares.filter((x) => x.state === 'live'), ended = shares.filter((x) => x.state !== 'live');
       const row = (x) => h('div', { class: 'row' },
-        h('div', { class: 'grow' }, h('div', { class: 'title' }, x.title), h('div', { class: 'sub' }, (x.files.length === 1 ? '1 file' : x.files.length + ' files') + ' · ' + (x.state === 'live' ? 'until ' + whenEnds(x.expires) : x.state === 'expired' ? 'ran out ' + whenEnds(x.expires) : 'stopped'))),
+        h('div', { class: 'grow' }, h('div', { class: 'title' }, x.title), h('div', { class: 'sub' }, (x.files.length === 1 ? '1 file' : x.files.length + ' files') + ((x.batches || []).length ? ' from the Inbox (' + [...new Set(x.files.map((f) => f.group).filter(Boolean))].join(', ') + ')' : '') + ' · ' + (x.state === 'live' ? 'until ' + whenEnds(x.expires) : x.state === 'expired' ? 'ran out ' + whenEnds(x.expires) : 'stopped'))),
         x.state === 'live' && x.url ? copyButton(x.url, 'Copy link') : null,
         x.state === 'live' ? h('button', { class: 'btn small', type: 'button', onclick: async (e) => {
           e.target.disabled = true;
@@ -3968,12 +3979,13 @@
 
     // head
     const parent = b.parent ? S.state.batches.find((x) => x.id === b.parent) : null;
+    const bshare = inboxShare(b, null);
     main.append(h('section', { class: 'bhead' },
       h('div', { class: 'crumb' }, link('inbox', {}, 'Inbox'), h('span', {}, '/'), b.sample ? [link('samples', {}, 'Samples'), h('span', {}, '/')] : null, h('span', { class: 'chip' }, KIND[b.kind] || b.kind),
         b.round > 1 ? h('span', { class: 'chip' }, 'Round ' + b.round) : null,
         parent ? link('b.' + parent.id, {}, 'See round ' + parent.round) : null,
         b.slot ? h('span', { class: 'mono muted' }, b.slot) : null),
-      h('h1', {}, b.title), b.ask ? h('p', { class: 'ask' }, b.ask) : null,
+      bshare ? h('div', { class: 'sechead' }, h('h1', {}, b.title), bshare.button) : h('h1', {}, b.title), bshare ? bshare.el : null, b.ask ? h('p', { class: 'ask' }, b.ask) : null,
       (b.look_at || []).length ? h('ul', { class: 'look', 'aria-label': 'What to look at' }, b.look_at.map((x) => h('li', {}, x))) : null,
       b.brief ? h('details', { class: 'brief' }, h('summary', {}, b.mode === 'question' ? 'Where this comes from' : 'What the makers were told'), md(b.brief)) : null,
       (b.context || []).length ? h('div', { class: 'refs', 'aria-label': 'References' }, b.context.map((c) => (c.kind === 'image' || c.kind === 'texture')
@@ -4067,14 +4079,16 @@
       const m = medias[cand.id] = media(cand, false, null);
       const checks = (cand.checks || []).filter((c) => c.level !== 'ok');
       const box = canCompare ? h('input', { type: 'checkbox', 'aria-label': 'Tick to compare ' + cand.title, onchange: () => { if (box.checked) { if (S.cmp.size >= 4) { box.checked = false; toast('Compare takes four at most'); return; } S.cmp.add(cand.id); } else S.cmp.delete(cand.id); refreshCmp(); } }) : null;
-      const ctl = controls(cand, false);
+      const ctl = controls(cand, false), cshare = inboxShare(b, cand);
       const tile = tiles[cand.id] = h('article', { class: 'tile', 'data-cid': cand.id, 'aria-label': 'Candidate ' + cand.id.toUpperCase() + ': ' + cand.title },
         h('div', { class: 'thead' }, h('span', { class: 'letter' }, cand.id.length <= 2 ? cand.id : cand.id[0]), h('h3', {}, cand.title),
           cand.recommended ? h('span', { class: 'chip accent' }, 'Suggested') : null,
           cand.carried_from ? h('span', { class: 'chip keep', title: 'You kept this in an earlier round' }, 'From last round') : null,
           timed ? h('button', { class: 'btn small', type: 'button', title: editable() ? 'Open it large and mark moments and stretches of it, with a note for each (Enter)' : 'Open it large, with the marks on it (Enter)',
             onclick: () => { seq.token++; if (m.play) m.play.stop(); const v = $('video', m.el); if (v) v.pause(); openOver([cand.id]); } }, editable() ? 'Mark' : 'Look closer') : null,
+          cshare ? cshare.button : null,
           box ? h('label', { class: 'cmp' }, box, 'Compare') : null),
+        cshare ? cshare.el : null,
         m.el,
         h('div', { class: 'tinfo' }, cand.summary && b.kind !== 'question' ? h('p', { class: 'sum' }, cand.summary) : null, markChip(cand.id),
           factsLine(cand) ? h('div', { class: 'facts' }, factsLine(cand)) : null,
@@ -4194,10 +4208,12 @@
       panes.append(pane);
     }
     function mark() { for (const id of Object.keys(caps)) caps[id].pane.style.outline = (!one && id === S.current) ? '2px solid var(--accent-fg)' : ''; }
+    const oshare = one ? inboxShare(b, cands[0]) : null;
     const bar = h('div', { class: 'bar' },
       h('h3', {}, one ? cands[0].title : 'Comparing ' + cands.map((c) => c.id.toUpperCase()).join(', ')),
       h('span', { class: 'hint' }, one ? [h('kbd', {}, '←'), ' ', h('kbd', {}, '→'), ' next · scroll or pinch to zoom · double-click for full size']
         : ['Zoom and turn one, the others follow · point at one, then score or mark it with the keys']),
+      oshare ? oshare.button : null,
       h('button', { class: 'btn small', type: 'button', onclick: closeOver }, 'Close (Esc)'));
     const opts = S.viewTools ? S.viewTools() : [];  // play, speed and the rest, kept in sight while looking closer at a model or a motion
     const el = h('div', { class: 'over', role: 'dialog', 'aria-modal': 'true', 'aria-label': one ? cands[0].title : 'Compare' }, bar,
@@ -4212,6 +4228,7 @@
       const marking = markCandidate(cands[0], medias[0], el, bar);
       el.append(h('div', { class: 'side' }, h('div', {}, kids[0], kids.length > 2 ? kids[1] : null), info, h('div', {}, kids[kids.length - 1], marking)));
     }
+    if (oshare) bar.after(oshare.el);  // under the bar, above the mark tools
     S.current = cands.some((c) => c.id === S.current) ? S.current : cands[0].id;
     S.over = { el, ids: cands.map((c) => c.id), note: noteField, mark, apply: () => medias.forEach((m) => m.set()), destroy: () => medias.forEach((m) => m.destroy()) };
     if (one && medias[0].el.classList.contains('timed')) {  // a sound or a clip: its own hint, and its own keys once it takes marks

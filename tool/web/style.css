@@ -697,3 +697,6 @@ details.setup > :not(summary) { margin: 0 14px 12px; }
 .shareline label { display: flex; align-items: center; gap: 6px; flex: 1 1 220px; }
 .shareout { display: flex; flex-direction: column; gap: 8px; }
 .shareout p { margin: 0; }
+.bhead .sharepanel { margin: 0; }
+.tile > .sharepanel { margin: 0 12px 10px; }
+.over > .sharepanel { margin: 10px var(--gutter); max-width: none; }

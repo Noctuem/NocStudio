@@ -459,7 +459,7 @@ def make_handler(home: Path, allowed_hosts: set[str], quiet: bool = False, hub: 
                             from . import notefiles
                             notefiles.kick(studio)  # closed files go to the archive, reopened ones come back
                         return self.send_json({"ok": True, "note": note})
-                    if parts == ["api", "share"]:  # a link for someone outside: library files only, for a set time
+                    if parts == ["api", "share"]:  # a link for someone outside: library files, or a batch's candidates (<batch>, <batch>/<candidate>), for a set time
                         from . import share
                         if data.get("action") == "stop":
                             return self.send_json({"ok": True, "share": share.stop(studio, str(data.get("id") or ""))})
