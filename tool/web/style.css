@@ -299,6 +299,7 @@ details.brief summary { cursor: pointer; font-weight: 600; }
 .markchip { display: flex; gap: 4px; align-items: center; font-size: 12px; color: var(--muted); margin-top: 4px; }
 .markchip .sw { margin-top: 0; width: 10px; height: 10px; }
 .over .side.marking { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); }
+.over .side.marking.timed { grid-template-columns: minmax(0, 1fr) auto; align-items: end; }
 .marktools .scrub { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; padding-left: 8px; border-left: 1px solid var(--line); }
 .marktools .scrub input[type=range] { width: 180px; }
 .marktools .scrub .t { font-size: 12px; color: var(--muted); min-width: 92px; }
