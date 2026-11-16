@@ -690,15 +690,9 @@ details.setup > :not(summary) { margin: 0 14px 12px; }
 .usagepop .utext { white-space: pre-wrap; font: 12px/1.45 var(--font-mono); color: var(--muted); max-height: 40vh; overflow: auto; margin: 6px 0 0; }
 .tacts { display: flex; gap: 6px; flex-wrap: wrap; }
 .sechead { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.sharepanel { display: flex; flex-direction: column; gap: 10px; margin: 0 0 16px; padding: 12px 14px; background: var(--surface); border: 1px solid var(--line-soft); border-radius: 4px; max-width: 760px; }
-.sharepanel[hidden], section[hidden] { display: none; }
-.sharepanel p { margin: 0; }
-.sharefiles { display: flex; flex-direction: column; gap: 4px; }
-.shareline { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.shareline .field { flex: 1 1 260px; min-width: 0; }
-.shareline label { display: flex; align-items: center; gap: 6px; flex: 1 1 220px; }
-.shareout { display: flex; flex-direction: column; gap: 8px; }
-.shareout p { margin: 0; }
-.bhead .sharepanel { margin: 0; }
-.tile > .sharepanel { margin: 0 12px 10px; }
-.over > .sharepanel { margin: 10px var(--gutter); max-width: none; }
+section[hidden] { display: none; }
+.sharebar { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.sharebar > span { display: contents; }
+.thead:has(> .sharebar) { flex-wrap: wrap; }
+.sharebar select { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 4px 8px; font-size: 12px; }
+.sharebar .btn.wait { opacity: 0.5; }

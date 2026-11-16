@@ -1362,6 +1362,64 @@ def main() -> int:
         else:
             print("  SKIP  ffmpeg is not on PATH here: the command's still is not tried")
 
+        # a live link's end moved to now plus the time picked, 1 hour to 90 days; nothing else about it changes
+        import datetime
+        snd_file = home / "shares" / f"{snd['id']}.json"
+        before = json.loads(snd_file.read_text(encoding="utf-8"))
+        moved = share.retime(studio, snd["id"], "90d")
+        after = json.loads(snd_file.read_text(encoding="utf-8"))
+        late = share._parse(after["expires"]) - (share._now() + datetime.timedelta(days=90))
+        check(abs(late.total_seconds()) < 60 and after["hours"] == 2160 and moved["state"] == "live" and moved["expires"] == after["expires"]
+              and moved["url"] == snd["url"] and {k: v for k, v in after.items() if k not in ("expires", "hours")} == {k: v for k, v in before.items() if k not in ("expires", "hours")}
+              and snd["items"] == ["library/test.snd/v1/tone.wav"],
+              "a live link's end moves to now plus the time picked, and its token, files and the rest stay as they were")
+        soon = share.retime(studio, snd["id"], "1h")
+        check(soon["hours"] == 1 and abs((share._parse(soon["expires"]) - share._now()).total_seconds() - 3600) < 60,
+              "a live link's end moves closer too: 1 hour from now")
+        refused = []
+        for sid, t in ((rec["id"], "1d"), (other["id"], "1d"), (snd["id"], "91d"), (snd["id"], "0h"), (snd["id"], "soon"),
+                       ("sh-00000000", "1d"), ("../studio", "1d")):
+            try:
+                share.retime(studio, sid, t); refused.append("")
+            except StudioError as err:
+                refused.append(str(err))
+        check(all(refused) and "ended" in refused[0] and "ended" in refused[1] and "90 days" in refused[2]
+              and json.loads(snd_file.read_text(encoding="utf-8"))["hours"] == 1
+              and json.loads((home / "shares" / f"{rec['id']}.json").read_text(encoding="utf-8"))["stopped"],
+              "a stopped or ended link keeps its end, as does a live one asked for over 90 days, under 1 hour, a time it cannot read, or an id that is not a link")
+        said = tool_cli("share", "time", snd["id"], "3d")
+        check(said.returncode == 0 and "until" in said.stdout and json.loads(snd_file.read_text(encoding="utf-8"))["hours"] == 72
+              and tool_cli("share", "time", snd["id"]).returncode == 2 and tool_cli("share", "time", rec["id"], "1d").returncode == 2,
+              "the command moves a live link's end, and refuses one with no time or a stopped link")
+
+        # a still sent after the link: only a live link that opens with a clip, kept under its own id, with all of a still's checks
+        late_frame = fake_jpeg(320, 180)
+        got = share.add_still(studio, old["id"], "data:image/jpeg;base64," + base64.b64encode(late_frame).decode())
+        orec = json.loads((home / "shares" / f"{old['id']}.json").read_text(encoding="utf-8"))
+        st, hd, body = sget(f"{old['token']}/still.jpg")
+        check(got["still"] and orec["still"] is True and (home / "shares" / f"{old['id']}.jpg").read_bytes() == late_frame
+              and st == 200 and body == late_frame and orec["token"] == old["token"] and orec["expires"] == old["expires"],
+              "a still sent after a clip's link is kept beside it under its own id and served at its still.jpg, and nothing else changes")
+        ended_clip = share.make(studio, ["library/test.clip/v1/clip.mp4"], title="Stopped clip")
+        share.stop(studio, ended_clip["id"])
+        bare_rec = json.loads((home / "shares" / f"{bare_id}.json").read_text(encoding="utf-8"))
+        share.write_json(home / "shares" / "sh-0000feed.json", dict(bare_rec, token="w" * 43))  # a record kept under one id that names another
+        kept_before = sorted(p.name for p in (home / "shares").iterdir())
+        refused = []
+        for sid, bad in ((bare_id, fake_jpeg(1600, 900)), (bare_id, fake_jpeg(640, 360, pad=share.STILL_MAX)), (bare_id, b"GIF89a, not a JPEG"),
+                         (bare_id, "data:image/jpeg;base64,@@@"), (bare_id, None), (pic["id"], still), (snd["id"], still), (ended_clip["id"], still),
+                         (rec["id"], still), ("sh-0000feed", still), ("sh-00000000", still), ("../" + bare_id, still)):
+            try:
+                share.add_still(studio, sid, bad); refused.append("")
+            except StudioError as err:
+                refused.append(str(err))
+        check(all(refused) and "1280" in refused[0] and "over 1 MB" in refused[1] and "not a JPEG" in refused[2] and "clip" in refused[5]
+              and "ended" in refused[7] and sorted(p.name for p in (home / "shares").iterdir()) == kept_before
+              and not json.loads((home / "shares" / f"{bare_id}.json").read_text(encoding="utf-8")).get("still"),
+              "a late still too wide, over 1 MB or not a JPEG is refused, as is one for a picture, a sound, a stopped link, "
+              "a record kept under another id, or an id that is not a link, and nothing is written")
+        (home / "shares" / "sh-0000feed.json").unlink()
+
         # whether a new link has reached the server: the PC asks the public address, here a local share server standing in
         os.environ["STUDIO_SHARE_URL"] = sbase
         answers = [share.check_live(studio, clip["id"]), share.check_live(studio, rec["id"])]
@@ -1761,6 +1819,16 @@ def main() -> int:
               and 'property="og:video:type" content="video/mp4"' in there and 'property="og:video:width" content="640"' in there,
               "a batch of clips shared from the PC page takes the first clip's still to the server's copy, has no link straight to one clip, "
               "and the page's check says the link works once it is there")
+        # the page's time menu and its late still, as the page sends them
+        made_id, late_frame = made["share"]["id"], fake_jpeg(480, 270)
+        t_status, timed = http("POST", pcbase + "/api/share", {"action": "time", "id": made_id, "time": "30d"})
+        s_status, stilled = http("POST", pcbase + "/api/share", {"action": "still", "id": made_id, "still": "data:image/jpeg;base64," + base64.b64encode(late_frame).decode()})
+        bad = [http("POST", pcbase + "/api/share", body)[0] for body in ({"action": "time", "id": made_id, "time": "91d"}, {"action": "time", "id": "../x", "time": "1d"},
+                                                                         {"action": "still", "id": made_id, "still": "not a picture"}, {"action": "move", "id": made_id})]
+        check(t_status == 200 and timed["share"]["hours"] == 720 and s_status == 200 and stilled["share"]["still"]
+              and (home / "shares" / f"{made_id}.jpg").read_bytes() == late_frame and made["share"]["items"] == [reel["id"]]
+              and json.loads((home / "shares" / f"{made_id}.json").read_text(encoding="utf-8"))["hours"] == 720 and bad == [400] * 4,
+              "the page moves a live link's end and sends a clip's still after the link, and a bad time, id, still or action is refused")
         shares.stop(studio, made["share"]["id"])
         # the page's check changes nothing, so a session's own writes made while it waits are never sent as the user's
         from http.server import BaseHTTPRequestHandler

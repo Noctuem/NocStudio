@@ -469,6 +469,12 @@ def make_handler(home: Path, allowed_hosts: set[str], quiet: bool = False, hub: 
                         from . import share
                         if data.get("action") == "stop":
                             return self.send_json({"ok": True, "share": share.stop(studio, str(data.get("id") or ""))})
+                        if data.get("action") == "time":  # a live link's end: now plus the time picked
+                            return self.send_json({"ok": True, "share": share.retime(studio, str(data.get("id") or ""), str(data.get("time") or ""))})
+                        if data.get("action") == "still":  # one frame of the clip a live link opens with, sent after the link was copied
+                            return self.send_json({"ok": True, "share": share.add_still(studio, str(data.get("id") or ""), data.get("still") or None)})
+                        if data.get("action"):
+                            raise StudioError("say stop, time, still or check")
                         files = data.get("files")
                         if not isinstance(files, list) or not all(isinstance(f, str) for f in files):
                             raise StudioError("name the files to share")
