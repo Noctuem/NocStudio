@@ -745,7 +745,6 @@
     '}'].join('\n');
   // the layer needs WebGL2; without it the brush paints whole faces, as it did before there were strokes
   const paintsFine = () => { const r = renderer3(); return !!(r && r.capabilities.isWebGL2); };
-  const modelHint = () => (paintsFine() ? 'Paint over it' : 'Paint faces') + ' · right-drag turns it · scroll zooms';
   function markModel(v, ink) {
     const meshes = [], byKey = {}, overlays = new Map(), drags = [], V = new THREE.Vector3(), M = new THREE.Matrix4(), ray = new THREE.Raycaster(), tri = new THREE.Triangle();
     const fine = paintsFine();
@@ -3781,11 +3780,10 @@
     const closed = st.batches.filter((b) => b.status === 'processed');
     const main = h('main', {});
     main.append(h('section', {}, inboxSwitch('inbox'),
-      h('h1', {}, mine.length ? (mine.length === 1 ? 'One batch waits for you' : mine.length + ' batches wait for you') : 'Nothing waits for you'),
+      h('h1', {}, mine.length ? (mine.length === 1 ? 'One batch waits for you' : mine.length + ' batches wait for you') : 'Nothing waits'),
       mine.length ? h('div', { class: 'batches' }, mine.map(bcard)) : null));
     if (sent.length) main.append(h('section', {},
       h('div', { class: 'sec-head' }, h('h2', {}, 'Waiting on Claude')),
-      h('div', { class: 'say' }, h('span', {}, 'Say to Claude Code:'), h('code', {}, SAY), copyButton(SAY)),
       h('div', { class: 'rows' }, sent.map((b) => link('b.' + b.id, { class: 'row' },
         h('div', { class: 'grow' }, h('div', { class: 'title' }, b.title), h('div', { class: 'sub' }, (ACTION_SAID[b.action] || b.action) + (b.winners.length ? ': ' + b.winners.join(', ').toUpperCase() : ''))),
         h('span', { class: 'sub' }, when(b.submitted)))))));
@@ -3839,7 +3837,7 @@
   function problem() {
     const b = S.batch, v = S.verdict, calls = Object.values(v.candidates);
     const chosen = calls.filter((c) => c.call === 'winner' || c.call === 'approve').length;
-    if (!v.action) return b.mode === 'question' ? 'Choose an option or write your own answer.' : 'Mark the candidates, then choose what happens next.';
+    if (!v.action) return b.mode === 'question' ? 'Pick an option.' : 'Choose what happens next.';
     if (b.mode === 'question') return (v.action === 'answer' && !chosen && !v.answer) ? 'Pick an option or write your own answer.' : '';
     if ((v.action === 'ship' || v.action === 'ship_and_iterate') && !chosen) return 'Mark a winner, or choose another round.';
     const marked = (c) => c.marks && (Object.values(c.marks.notes || {}).some((x) => x && x.trim()) || spansSay(c.marks));
@@ -4059,7 +4057,6 @@
         h('button', { class: 'btn', type: 'button', onclick: startOver }, 'Start over')))));
     else if (b.status === 'submitted') main.append(h('section', {}, h('div', { class: 'closed' },
       h('h3', {}, 'Your verdict is in: ' + (ACTION_SAID[b.verdict.action] || b.verdict.action)),
-      h('div', { class: 'say' }, h('span', {}, 'Say to Claude Code:'), h('code', {}, SAY), copyButton(SAY)),
       h('div', {}, h('button', { class: 'btn', type: 'button', onclick: async () => { try { await API.reopen(b.id); S.state = await API.state(); render(); } catch (e) { toast(e.message); } } }, 'Change my verdict')))));
     if (b.status === 'processed') {
       const res = b.result || {};

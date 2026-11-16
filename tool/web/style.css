@@ -262,8 +262,6 @@ details.brief summary { cursor: pointer; font-weight: 600; }
 .vbar textarea { min-height: 40px; max-height: calc(40vh / var(--scale, 1)); }
 .switch { display: flex; gap: 6px; margin-bottom: 14px; }
 .lede { color: var(--muted); max-width: 78ch; margin: 6px 0 16px; }
-.samplebar { display: flex; gap: 14px; align-items: center; justify-content: space-between; flex-wrap: wrap; border: 1px dashed var(--accent); border-radius: var(--radius); padding: 9px 14px; font-size: 13px; color: var(--muted); }
-.samplebar b { color: var(--fg); }
 .closed { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
 
 /* focus and compare */
