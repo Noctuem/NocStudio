@@ -78,7 +78,6 @@
     }));
     const form = document.getElementById('vault-dump');
     form.hidden = !data.dump;
-    if (data.dump) document.getElementById('vault-dump-to').textContent = 'Adds to the end of ' + data.dump + '.';
   }
   const text = document.getElementById('vault-text'), said = document.getElementById('vault-said');
   async function add() {
