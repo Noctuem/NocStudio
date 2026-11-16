@@ -3391,9 +3391,9 @@
       onclick: (e) => { e.preventDefault(); e.stopPropagation(); setupShown(true); } }, 'Hide');
     if (left.length && !ov.setup_hidden) col.append(fold('setup', true, 'setup',
       [h('span', { class: 'grow' }, 'Getting organised'), h('span', { class: 'chip accent' }, (todo.length - left.length) + ' of ' + todo.length), hideSetup],
-      h('ul', { class: 'ticks' }, (ov.setup || []).map((x) => h('li', { class: x.done ? 'done' : '' }, h('span', { class: 'tick' }, x.done ? '✓' : ''), x.title))),
+      h('ul', { class: 'ticks' }, (ov.setup || []).map((x) => h('li', { class: x.done ? 'done' : '' }, h('span', { class: 'tick' }, x.done ? '✓' : ''), x.title, x.optional && !x.done ? h('span', { class: 'muted' }, ' (optional)') : null))),
       // one line covers the whole list: the guide in the tool's docs folder walks the agent through every line of it
-      ((say) => h('div', { class: 'say' }, h('code', { style: 'overflow-wrap:anywhere;min-width:0' }, say), copyButton(say)))(
+      ((say) => h('div', { class: 'say' }, h('code', { style: 'flex:1 1 0;min-width:0;overflow-wrap:anywhere' }, say), copyButton(say)))(
         ov.move_in ? 'Read ' + ov.move_in + ' and move this project into NocStudio.' : PLAN_SAY)));
 
     // how far along, in one number

@@ -32,7 +32,7 @@
   .ideabox .row { display: flex; gap: 8px; align-items: center; justify-content: flex-end; }
   .ideabox .said { flex: 1 1 auto; font-size: 13px; }
   .dump { display: flex; flex-direction: column; gap: 8px; max-width: 980px; margin-bottom: 14px; }
-  .dump .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .dump .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; background: none; padding: 0; }
   .dump .said { flex: 1 1 auto; font-size: 13px; color: var(--fg); }
   .vpages { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 520px), 1fr)); gap: 14px; align-items: start; }
   .vpage { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 18px; max-height: 70vh; overflow: auto; min-width: 0; }
@@ -72,7 +72,7 @@
   <section id="vault" hidden>
     <h1>Your notes</h1>
     <div class="dump" id="vault-dump" hidden>
-      <textarea class="field" id="vault-text" rows="2" aria-label="A thought for later"></textarea>
+      <textarea class="field" id="vault-text" rows="2" aria-label="A thought for later" placeholder="Note"></textarea>
       <div class="row"><span class="said" id="vault-said" role="status"></span><button class="btn small primary" type="button" id="vault-add">Add</button></div>
     </div>
     <div class="vpages" id="vault-pages"></div>
