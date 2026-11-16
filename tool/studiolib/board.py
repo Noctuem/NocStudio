@@ -426,7 +426,7 @@ def checklist(studio: Studio, hooks: bool) -> list:
     current = next((m for m in rows if m.get("status") == "current"), None)
     root = studio.repo_root()
     from . import setup
-    skill = bool(root and setup.skill_copies(root))
+    skill = bool(root and setup.skill_copies(root) and setup.taught(root, studio.home))
     return [
         {"id": "goal", "title": "A goal: what the project is and what done looks like", "done": bool(now.get("goal"))},
         {"id": "road", "title": "The milestones from here to done", "done": len(rows) >= 2},

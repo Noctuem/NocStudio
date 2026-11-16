@@ -471,6 +471,19 @@ def main() -> int:
         check(Path(ov["move_in"]).is_file() and ov["move_in"].endswith("MOVE-IN.md") and "Getting organised:" in said
               and all(f"] {x}" in said for x in left),
               "the box's one line names the move-in guide, which is there, and status lists the same unticked lines")
+        taught = tmp / "taught"
+        taught.mkdir()
+        (taught / "CLAUDE.md").write_text("# Notes\n\nNothing about the Studio.\n", encoding="utf-8")
+        before_merge = setup.taught(taught, home)
+        (taught / "AGENTS.md").write_text("S is py -3.11 studio.py --home \"" + str(home).replace("\\", "/").upper() + "\"\n", encoding="utf-8")
+        check(not before_merge and setup.taught(taught, home),
+              "the skill line is ticked only once an instructions file names the Studio, whatever its slashes and case")
+        cli = lambda *args: subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "studio.py"), "--home", str(home), *args],  # noqa: E731
+                                           capture_output=True, text=True, encoding="utf-8")
+        written = tmp / "skillout" / "SKILL.md"
+        cli("skill", "--out", str(written))
+        check(written.read_bytes().decode("utf-8") == cli("skill").stdout.replace("\r\n", "\n"),
+              "skill --out writes the skill as UTF-8, the same as it prints")
 
         # buttons: a session files a line to run or a file to open; the user's click does it on the PC
         from studiolib import buttons

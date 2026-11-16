@@ -102,7 +102,8 @@ def cmd_create(a):
         print(f"  skill     {skill}")
     print(f"  S is      {made['s']}")
     print(f"\nNext, in {made['repo']}: merge {made['section']} into {' and '.join(made['docs'])}, near the top,")
-    print("then move the project in: milestones, the build in hand, slots, rulings (the studio-create skill has the steps).")
+    print("then move the project in: the goal, milestones, slots, live reporting. The steps are in\n"
+          f"{Path(__file__).resolve().parents[1] / 'docs' / 'MOVE-IN.md'} (or the studio-create skill); S status lists what is left.")
 
 
 def cmd_studios(a):
@@ -263,10 +264,10 @@ def cmd_status(a):
     lines = state["overview"].get("setup") or []
     must = [x for x in lines if not x.get("optional")]
     if any(not x["done"] for x in lines):  # the Getting organised list, as the Overview shows it (docs/MOVE-IN.md works through it)
-        print(f"\nGetting organised: {sum(x['done'] for x in must)} of {len(must)}"
+        print(f"\nGetting organised: {sum(x['done'] for x in must)} of {len(must)} needed"
               + ("" if any(not x["done"] for x in must) else " (the box is gone; what is left is only if the project has any)"))
         for x in lines:
-            print(f"  [{'x' if x['done'] else ' '}] {x['id']:6} {x['title']}" + ("  (if it has any)" if x.get("optional") and not x["done"] else ""))
+            print(f"  [{'x' if x['done'] else ' '}] {x['id']:6} {x['title']}" + ("  (only if it has any; not counted)" if x.get("optional") else ""))
     print(f"\nWaiting on the user: {len(groups['open']) + len(groups['draft'])}")
     for b in groups["open"] + groups["draft"]:
         print(f"  {b['id']}  {b['title']}  [{b['kind']}, {b['count']}]" + ("  (they have started)" if b["status"] == "draft" else ""))
@@ -323,8 +324,8 @@ def reminders(s: Studio) -> None:
             source = own.read_text(encoding="utf-8") if own.is_file() else setup.skill_text(s.config.get("project") or root.name, s.home, root)
             if source.replace("\r\n", "\n") != copy.read_text(encoding="utf-8").replace("\r\n", "\n"):
                 print(f"\nThis repo's studio skill has fallen behind the Studio's. Copy it over, and commit it there:\n  "
-                      + (f"{own}  ->  {copy}" if own.is_file() else f"studio.py skill > {copy}"))
-        except OSError:
+                      + (f"{own}  ->  {copy}" if own.is_file() else f"studio.py skill --out {copy}"))
+        except (OSError, ValueError):  # a copy that is not UTF-8 (written by PowerShell's >) is not read
             pass
 
 
@@ -344,8 +345,15 @@ def cmd_skill(a):
     s = Studio(find_home(a.home))
     own = s.home / "claude" / "skills" / "studio" / "SKILL.md"
     root = s.repo_root()
-    sys.stdout.write(own.read_text(encoding="utf-8") if own.is_file()
-                     else setup.skill_text(s.config.get("project") or (root.name if root else s.home.name), s.home, root or s.home))
+    text = (own.read_text(encoding="utf-8") if own.is_file()
+            else setup.skill_text(s.config.get("project") or (root.name if root else s.home.name), s.home, root or s.home))
+    if a.out:  # written by the tool, as UTF-8: PowerShell's > would write UTF-16
+        out = Path(a.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(text, encoding="utf-8", newline="\n")
+        print(f"Wrote {out}")
+        return
+    sys.stdout.write(text)
 
 
 def cmd_todo(a):
@@ -683,10 +691,13 @@ def cmd_hooks(a):
         if who == "codex" and a.action == "install":
             print("  Codex runs a new hook only after you have looked it over: type /hooks in Codex once and trust NocStudio's.")
     if a.action == "install":
-        print("Every Claude Code session in a project that has a Studio now shows on its Overview while it works,\n"
-              "and is handed the notes the user leaves for it in the notes box. The page's Send verdicts button\n"
-              "can wake one that sits idle, once it has started or finished a turn since this install.\n"
-              "Sessions already open pick it up within a few seconds, or when they next start.")
+        for who in a.agents or ["claude"]:
+            name = setup.agent(who)["name"]
+            print(f"Every {name} session in a project that has a Studio now shows on its Overview while it works,\n"
+                  "and is handed the notes the user leaves for it in the notes box."
+                  + (" The page's Send verdicts button\ncan wake one that sits idle, once it has started or finished a turn since this install.\n"
+                     "Sessions already open pick it up within a few seconds, or when they next start." if who == "claude"
+                     else "\nA Codex session that sits idle is not woken by Send verdicts; it is handed them at its next turn."))
 
 
 def cmd_now(a):
@@ -987,6 +998,7 @@ def main(argv=None) -> int:
     c.set_defaults(fn=cmd_install_skill)
 
     c = sub.add_parser("skill", help="print the studio skill this project's repo should carry")
+    c.add_argument("--out", help="write it to this file (as UTF-8) instead of printing it, e.g. <repo>\\.claude\\skills\\studio\\SKILL.md")
     c.set_defaults(fn=cmd_skill)
 
     c = sub.add_parser("app", help="NocStudio, the app: one window with a menu of every project's Studio")

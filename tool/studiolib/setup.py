@@ -37,6 +37,21 @@ def skill_copies(repo: Path) -> list[Path]:
     """Every copy of the `studio` skill the repo carries, one per agent that has one."""
     return [p for p in (skill_path(repo, who) for who in AGENTS) if p.is_file()]
 
+
+INSTRUCTION_FILES = ("CLAUDE.md", "CLAUDE.local.md", "AGENTS.md")
+
+
+def taught(repo: Path, home: Path) -> bool:
+    """Whether the repo's instructions file (CLAUDE.md, CLAUDE.local.md or AGENTS.md) names this Studio's home, as the merged section does."""
+    want = str(Path(home)).replace("/", "\\").lower()
+    for name in INSTRUCTION_FILES:
+        try:
+            if want in (Path(repo) / name).read_text(encoding="utf-8", errors="replace").replace("/", "\\").lower():
+                return True
+        except OSError:
+            continue
+    return False
+
 GENERIC_TOML = '''# Studio settings for {project}. Edit freely; the tool reads this file on every start.
 
 project = "{project}"

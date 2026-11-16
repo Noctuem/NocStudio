@@ -5,8 +5,9 @@ Ten minutes from a clone to a planned project and your first judged batch.
 ## What you need
 
 - Windows 10 or 11
-- [Python 3.11 or newer](https://www.python.org/downloads/), installed with the `py` launcher
-  (the default installer includes it). Check with `py -3.11 --version`.
+- [Python 3.11](https://www.python.org/downloads/), installed with the `py` launcher (the default
+  installer includes it). The commands run `py -3.11`, so 3.11 itself must be installed, even
+  beside a newer one. Check with `py -3.11 --version`.
 - git
 - Edge or Chrome, for the app window
 - A project in a folder of its own. It does not have to be a git repository, and it does not

@@ -283,8 +283,8 @@ flow before your project has filed anything. Nothing in a sample is counted or a
 
 ## Quick start
 
-You need Windows 10 or 11, [Python 3.11 or newer](https://www.python.org/downloads/) (with the
-`py` launcher), git, and Edge or Chrome. Nothing else is installed.
+You need Windows 10 or 11, [Python 3.11](https://www.python.org/downloads/) (with the
+`py` launcher; the commands run `py -3.11`, so 3.11 itself must be installed), git, and Edge or Chrome. Nothing else is installed.
 
 ```
 git clone https://github.com/Noctuem/NocStudio.git
