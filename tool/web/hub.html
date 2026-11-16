@@ -54,7 +54,7 @@
 </style>
 </head>
 <body>
-<header class="top"><span class="brand"><b>Noc</b>Studio<small>Your projects</small></span><span class="spacer"></span><button class="btn small usage-btn" id="usage-btn" type="button" title="Your plan's usage (/usage)" hidden>Usage</button></header>
+<header class="top"><span class="brand"><b>Noc</b>Studio<small>Your projects</small></span><span class="spacer"></span><button class="btn small" id="notify-btn" type="button" hidden>Notify</button><button class="btn small usage-btn" id="usage-btn" type="button" title="Your plan's usage (/usage)" hidden>Usage</button></header>
 <div class="notepop usagepop" id="usage-pop" role="dialog" aria-label="Usage" hidden></div>
 <main>
   <section>
@@ -209,6 +209,51 @@
   });
   fetch('api/hub').then((r) => r.json()).then((d) => { if (d.served) return; btn.hidden = false; load(false);
     setInterval(() => { if (document.visibilityState === 'visible') load(false); }, 5 * 60000); }).catch(() => {});
+})();
+</script>
+<script>
+(() => { // desktop notifications: what lands in Needs you in any project opened in the app, once each; the same switch each project's Needs you has
+  const btn = document.getElementById('notify-btn'), N = { on: false, busy: false };
+  if (!('Notification' in window)) return;
+  const said = (text) => { btn.title = text; };
+  function draw() {
+    const p = Notification.permission;
+    btn.textContent = !N.on || p === 'granted' ? 'Notify' : p === 'denied' ? 'Notify: blocked here' : 'Notify: allow here';
+    btn.classList.toggle('on', N.on && p === 'granted'); btn.setAttribute('aria-pressed', String(N.on));
+    said(!N.on ? 'Off. Turn it on and Windows tells you when something new lands in Needs you, in any project open in NocStudio'
+      : p === 'granted' ? 'On: Windows tells you when something new lands in Needs you, in any project open in NocStudio. Press to turn it off'
+      : p === 'denied' ? 'On, but this page is blocked from showing notifications: allow them in the site settings for this address, then press again'
+      : 'On, but this page has not been allowed to show notifications yet: press, and say Allow');
+  }
+  function show(x) {
+    try {
+      const n = new Notification(x.title, { body: x.project + ' · ' + x.what, tag: x.project + '|' + x.key, icon: new URL('web/icon-256.png', location.href).href });
+      n.onclick = () => { try { window.focus(); } catch (e) { /* it comes forward by itself */ } n.close(); location.href = x.url; };
+    } catch (e) { /* this browser shows none */ }
+  }
+  async function look(first) {
+    if (N.busy || (!first && !N.on)) return;
+    N.busy = true;
+    try {
+      const res = await fetch('api/notices' + (Notification.permission === 'granted' ? '?can=1' : ''));
+      if (res.ok) { const d = await res.json(); N.on = !!d.on; btn.hidden = false; draw(); for (const x of d.notices || []) show(x); }
+    } catch (e) { /* the app is closing */ }
+    N.busy = false;
+  }
+  async function set(on) {
+    const res = await fetch('api/ui', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ notify: on }) });
+    if (res.ok) N.on = !!((await res.json()).ui || {}).notify;
+    draw();
+  }
+  btn.addEventListener('click', async () => {
+    if (N.on && Notification.permission === 'granted') { await set(false); return; }
+    let p = Notification.permission;
+    if (p === 'default') { try { p = await Notification.requestPermission(); } catch (e) { p = Notification.permission; } }
+    if (p !== 'granted') { draw(); said(p === 'denied' ? 'Notifications are blocked for this page: allow them in the site settings for this address, then press again' : 'Notifications were not allowed: press again and say Allow'); return; }
+    if (!N.on) await set(true); else draw();
+    look();
+  });
+  look(true); setInterval(look, 5000);
 })();
 </script>
 <script>

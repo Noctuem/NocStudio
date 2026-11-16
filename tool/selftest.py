@@ -1423,6 +1423,63 @@ def main() -> int:
             page = app._get(url + "api/state")
             check(page["hub"] == hub.url and Path(page["home"]) == home.resolve() and hub.open(str(home)) == url
                   and app._get(hub.url + "api/hub")["studios"][0]["running"], "a Studio starts when it is picked, and knows the way back to the menu")
+
+            # desktop notifications: what lands in Needs you in a Studio opened in the app is handed out once, only when on
+            def ui_post(base, body):
+                req = urllib.request.Request(base + "api/ui", data=json.dumps(body).encode(), headers={"Content-Type": "application/json"}, method="POST")
+                try:
+                    return json.loads(urllib.request.urlopen(req, timeout=5).read())
+                except urllib.error.HTTPError as err:
+                    return json.loads(err.read())
+            studio.set_hand("before", title="There before notifications were on", kind="info")
+            check(page["notify"] is True and app._get(url + "api/notices?can=1") == {"on": False, "notices": []}
+                  and app._get(hub.url + "api/notices?can=1") == {"on": False, "notices": []},
+                  "a Studio opened in the app may notify, and nothing is handed out while notifications are off")
+            turned = ui_post(url, {"notify": True})
+            check(turned["ui"]["notify"] is True and turned["ui"]["notify_since"] and Studio.ui()["notify"] is True
+                  and "error" in ui_post(url, {"notify": "yes"}),
+                  "the Notify switch is kept in the PC-wide prefs, and anything but true or false is refused")
+            check(app._get(url + "api/notices?can=1")["notices"] == [], "what already waits when notifications go on is not new")
+            studio.set_hand("try-it", title="Try the new build", kind="play")
+            held = app._get(url + "api/notices")["notices"]
+            got = app._get(hub.url + "api/notices?can=1")["notices"]
+            again = app._get(url + "api/notices?can=1")["notices"] + app._get(hub.url + "api/notices?can=1")["notices"]
+            check(held == [] and len(got) == 1 and got[0]["key"] == "ask:try-it" and got[0]["title"] == "Try the new build"
+                  and got[0]["what"] == "To try" and got[0]["project"] == "Self-test" and got[0]["url"] == url + "#ask.try-it" and again == [],
+                  "a new ask waits for a page that can show it, goes to whichever page of the window asks first, once, and opens that ask")
+            make_png(src / "sky_a.png", 256, 120); make_png(src / "sky_b.png", 256, 60)
+            nb = studio.new_batch("notify", title="Pick a sky", kind="image", ask="Which sky?", look_at=["The sky"])
+            studio.add_candidate(nb["id"], [src / "sky_a.png"], title="A")
+            studio.add_candidate(nb["id"], [src / "sky_b.png"], title="B")
+            studio.publish(nb["id"])
+            nid = studio.add_note("make the sky darker")["id"]
+            studio.sort_note(nid, "directive", reading="Make the sky a darker blue.")
+            got = {n["key"]: n for n in app._get(url + "api/notices?can=1")["notices"]}
+            check(set(got) == {"batch:" + nb["id"], "note:" + nid} and got["batch:" + nb["id"]]["url"] == url + "#b." + nb["id"]
+                  and got["batch:" + nb["id"]]["what"] == "To judge" and got["note:" + nid]["title"] == "Make the sky a darker blue."
+                  and got["note:" + nid]["what"] == "A note to confirm" and got["note:" + nid]["url"] == url + "#note." + nid,
+                  "a batch to judge and a note waiting on the user are handed out too, each with its title and the page it opens")
+            ui_post(hub.url, {"notify": False})
+            studio.set_hand("while-off", title="Filed while notifications were off")
+            off = app._get(url + "api/notices?can=1")
+            ui_post(hub.url, {"notify": True})
+            check(off == {"on": False, "notices": []} and app._get(url + "api/notices?can=1")["notices"] == [] and Studio.ui()["notify"] is True,
+                  "the menu's switch is the same one, and what landed while it was off is not handed out when it goes back on")
+            studio.answer_hand("try-it", "done")
+            gone = app._get(url + "api/notices?can=1")["notices"]
+            studio.answer_hand("try-it", "reopen")
+            back = app._get(hub.url + "api/notices?can=1")["notices"]
+            check(gone == [] and [n["key"] for n in back] == ["ask:try-it"], "an ask that leaves Needs you and comes back is new again")
+            phone_watch = server.Watch()
+            phone_watch.add(tmp / "site-copy")
+            phone_srv = ThreadingHTTPServer(("127.0.0.1", 0), None)
+            phone_srv.RequestHandlerClass = server.make_handler(tmp / "site-copy", {f"127.0.0.1:{phone_srv.server_address[1]}"}, quiet=True, watch=phone_watch)
+            threading.Thread(target=phone_srv.serve_forever, daemon=True).start()
+            pbase = f"http://127.0.0.1:{phone_srv.server_address[1]}/"
+            check(app._get(pbase + "api/state")["notify"] is False and app._get(pbase + "api/notices?can=1") == {"on": False, "notices": []},
+                  "the phone copy shows no switch and sends nothing, even with notifications on")
+            phone_srv.shutdown(); phone_srv.server_close()
+            ui_post(url, {"notify": False})
             try:
                 hub.open(str(tmp / "gone")); check(False, "a Studio whose folder is gone is not started")
             except StudioError:

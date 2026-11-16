@@ -21,7 +21,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 from . import setup, sync, vault
-from .server import MAX_BODY, TYPES, WEB, glance, make_handler
+from .server import MAX_BODY, TYPES, WEB, Watch, glance, make_handler
 from .store import Studio, StudioError
 
 HUB_PORT = 8760
@@ -88,6 +88,7 @@ class Hub:
         self.lock = threading.Lock()
         self.running: dict[int, Server] = {}
         self.seen = time.monotonic()
+        self.watch = Watch()  # what lands in Needs you in the Studios opened here, for one notification each
         self.httpd = Server(("127.0.0.1", port), self._handler())
         self.port = self.httpd.server_address[1]
         self.url = f"http://127.0.0.1:{self.port}/"
@@ -125,15 +126,17 @@ class Hub:
             allowed = {f"127.0.0.1:{port}", f"localhost:{port}"}
             try:
                 httpd = Server(("127.0.0.1", port), make_handler(Path(row["home"]), allowed, quiet=True,
-                                                                  hub=self.url, seen=self.touch))
+                                                                  hub=self.url, seen=self.touch, watch=self.watch))
             except OSError:
                 state = _get(url + "api/state") or {}
                 if state.get("home") and Path(state["home"]) == Path(row["home"]).resolve():
+                    self.watch.add(row["home"], url)
                     return url  # started some other way (studio.cmd): use it, and leave it running
                 raise StudioError(f"port {port} is taken by something that is not this Studio") from None
             threading.Thread(target=httpd.serve_forever, daemon=True).start()
             self.running[port] = httpd
             sync.start(row["home"])  # when its studio.local.toml asks to be kept in step with another copy
+        self.watch.add(row["home"], url)  # from now on, what lands in its Needs you is new
         return url
 
     def close(self) -> None:
@@ -187,6 +190,8 @@ class Hub:
                     return self.send((WEB / "hub.html").read_bytes(), TYPES[".html"])
                 if parts == ["api", "hub"]:
                     return self.send_json({"studio_hub": True, "studios": hub.rows(), "ui": Studio.ui()})
+                if parts == ["api", "notices"]:  # what is new in Needs you in the Studios opened here; handed out once
+                    return self.send_json(hub.watch.look("can=1" in urlsplit(self.path).query.split("&")))
                 if parts == ["api", "usage"]:  # the plan's usage, from Claude Code's own /usage
                     from . import talk
                     try:
@@ -217,8 +222,10 @@ class Hub:
                         raise StudioError("request too large")
                     data = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
                     route = urlsplit(self.path).path
-                    if not isinstance(data, dict) or route not in ("/api/open", "/api/dump", "/api/idea"):
+                    if not isinstance(data, dict) or route not in ("/api/open", "/api/dump", "/api/idea", "/api/ui"):
                         return self.send_json({"error": "no such route"}, 404)
+                    if route == "/api/ui":  # the Notify switch on the menu: the same one each Studio's Needs you has
+                        return self.send_json({"ok": True, "ui": Studio.set_ui(notify=data.get("notify"))})
                     if route == "/api/idea":  # a loose idea: its own project folder and Studio, opened on its Talk page
                         from . import idea
                         folder = idea.hub_settings().get("folder")

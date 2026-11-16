@@ -2940,6 +2940,7 @@
     try {
       if (!S.state) S.state = await API.state();
       if (!UI.synced) { UI.synced = true; const ui = S.state.ui || {}; if (ui.scale) setScale(ui.scale); if (ui.theme && !SHELL) setTheme(ui.theme); }
+      if (/^(ask|note)\./.test(r)) r = focusOn(r);
       let page;
       if (r.startsWith('b.')) page = await batchPage(r.slice(2));
       else if (r.startsWith('s.')) page = slotPage(r.slice(2));
@@ -2955,6 +2956,7 @@
       app.replaceChildren(top(r), page);
       if (!keep) window.scrollTo(0, 0);
       else if (railAt && $('.rail')) $('.rail').scrollTop = railAt;
+      if (S.focus) reveal();
     } catch (err) {
       app.replaceChildren(S.state ? top(r) : '', h('main', {}, h('div', { class: 'empty' }, String(err.message || err), ' ', link('inbox', {}, 'Back to the inbox'))));
     }
@@ -3245,7 +3247,7 @@
     const setAll = (open) => { asks.querySelectorAll('details').forEach((d) => { d.open = open; OPEN.set(d.dataset.fold, open); }); };
     const next = (now.next || []).map(split);
     const rail = h('aside', { class: 'rail', 'aria-label': 'Needs you' },
-      h('div', { class: 'railhead' }, h('h2', {}, 'Needs you'), owed ? h('span', { class: 'count hot' }, String(owed)) : null, h('span', { class: 'grow' }),
+      h('div', { class: 'railhead' }, h('h2', {}, 'Needs you'), owed ? h('span', { class: 'count hot' }, String(owed)) : null, h('span', { class: 'grow' }), notifySwitch(),
         openHands.length > 1 ? [h('button', { class: 'btn small', type: 'button', onclick: () => setAll(true) }, 'Open all'), h('button', { class: 'btn small', type: 'button', onclick: () => setAll(false) }, 'Close all')] : null),
       owed ? asks : h('div', { class: 'empty' }, 'Nothing waits on you.'),
       sent.length ? h('div', { class: 'say' }, h('span', {}, sent.length + (sent.length === 1 ? ' verdict waits' : ' verdicts wait') + ' on Claude. Say to Claude Code:'), h('code', {}, SAY), copyButton(SAY)) : null,
@@ -4602,6 +4604,81 @@
     S.over = { el, ids: [], destroy: () => { document.removeEventListener('keydown', esc2); if (pane.destroy) pane.destroy(); } };
     document.body.append(el); document.body.style.overflow = 'hidden';
   }
+
+  // ------------------------------------------------------------------ notify
+  // desktop notifications: the server keeps what was already seen and hands each new thing in Needs you out once,
+  // to the first page that asks and can show it; in the app that covers every project opened in the window
+  const NT = { busy: false };
+  const canNotify = () => 'Notification' in window && !STATIC && !!(S.state && S.state.notify);
+  const notifyOn = () => !!((S.state || {}).ui || {}).notify;
+  // the switch at the top of Needs you: off until the user turns it on, and Windows asks once for this page
+  function notifySwitch() {
+    if (!canNotify()) return null;
+    const on = notifyOn(), allowed = Notification.permission, where = S.state.hub ? 'any project open in NocStudio' : 'this project';
+    const label = !on ? 'Notify' : allowed === 'granted' ? 'Notify' : allowed === 'denied' ? 'Notify: blocked here' : 'Notify: allow here';
+    const title = !on ? 'Off. Turn it on and Windows tells you when something new lands in Needs you, in ' + where
+      : allowed === 'granted' ? 'On: Windows tells you when something new lands in Needs you, in ' + where + '. Press to turn it off'
+      : allowed === 'denied' ? 'On, but this page is blocked from showing notifications: allow them in the site settings for this address, then press again'
+      : 'On, but this page has not been allowed to show notifications yet: press, and say Allow';
+    return h('button', { class: 'btn small notify-btn' + (on && allowed === 'granted' ? ' on' : ''), type: 'button', title, 'aria-pressed': String(on), onclick: notifyPress }, label);
+  }
+  function notifyDraw() { for (const b of document.querySelectorAll('.notify-btn')) { const n = notifySwitch(); if (n) b.replaceWith(n); else b.remove(); } }
+  async function notifyPress() {
+    const on = notifyOn();
+    if (on && Notification.permission === 'granted') return notifySet(false);
+    let allowed = Notification.permission;
+    if (allowed === 'default') { try { allowed = await Notification.requestPermission(); } catch (e) { allowed = Notification.permission; } }
+    if (allowed !== 'granted') {
+      notifyDraw();
+      toast(allowed === 'denied' ? 'Notifications are blocked for this page: allow them in the site settings for this address, then press Notify again' : 'Notifications were not allowed: press Notify again and say Allow');
+      return;
+    }
+    if (!on) await notifySet(true); else { notifyDraw(); toast('Notifications are on for this page too'); }
+    notifyLook();
+  }
+  async function notifySet(on) {
+    try {
+      const d = await API.ui({ notify: on }); S.state.ui = d.ui || Object.assign({}, S.state.ui, { notify: on }); notifyDraw();
+      toast(on ? 'Notifications on: what lands in Needs you shows in Windows while NocStudio is open' : 'Notifications off');
+    } catch (e) { toast(e.message); }
+  }
+  // asks the server what is new; with no leave to show it here, the server keeps it for a page that has
+  async function notifyLook() {
+    if (!canNotify() || !notifyOn() || NT.busy) return;
+    NT.busy = true;
+    try {
+      const d = await call('GET', '/api/notices' + (Notification.permission === 'granted' ? '?can=1' : ''));
+      if (!d.on) { S.state.ui = Object.assign({}, S.state.ui, { notify: false }); notifyDraw(); }
+      for (const x of d.notices || []) notifyShow(x);
+    } catch (e) { /* the server is restarting; the next beat asks again */ }
+    NT.busy = false;
+  }
+  function notifyShow(x) {
+    try {
+      const n = new Notification(x.title, { body: x.project + ' · ' + x.what, tag: x.project + '|' + x.key, icon: new URL(rel('/web/icon-256.png'), location.href).href });
+      n.onclick = () => { try { window.focus(); } catch (e) { /* the window comes forward by itself */ } n.close(); notifyGo(x.url); };
+    } catch (e) { toast('New in Needs you: ' + x.title); }
+  }
+  // a click on one: that project's page, at the thing itself
+  function notifyGo(url) {
+    const to = new URL(url, location.href);
+    if (to.origin + to.pathname !== location.origin + location.pathname) { location.href = to.href; return; }
+    if (location.hash === to.hash) render(route()); else location.hash = to.hash;
+  }
+  // #ask.<id> and #note.<id>: that ask opened in Needs you, or that note on the Notes page, scrolled into view
+  function focusOn(r) {
+    const at = r.indexOf('.'), kind = r.slice(0, at), id = r.slice(at + 1), to = kind === 'ask' ? 'overview' : 'notes';
+    if (kind === 'ask') { OPEN.set('ask:' + id, true); S.focus = '[data-fold="' + CSS.escape('ask:' + id) + '"]'; }
+    else { S.noteView = 'you'; S.focus = '#' + CSS.escape('note-' + id); }
+    try { history.replaceState(null, '', '#' + to); } catch (e) { /* sandboxed */ }
+    return to;
+  }
+  function reveal() {
+    const el = $(S.focus); S.focus = '';
+    if (!el) { toast('That is no longer waiting on you'); return; }
+    el.scrollIntoView({ block: 'center' }); el.classList.add('found'); setTimeout(() => el.classList.remove('found'), 2500);
+  }
+  if (!STATIC) setInterval(notifyLook, 5000);
 
   // -------------------------------------------------------------------- live
   async function pulse() {
