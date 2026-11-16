@@ -3766,11 +3766,9 @@
     const main = h('main', {});
     main.append(h('section', {}, inboxSwitch('samples'),
       h('h1', {}, 'Samples'),
-      h('p', { class: 'lede' }, 'Made-up batches, one for each thing you can be asked to judge. Mark them, score them and submit as you would a real one: nothing here is counted, recorded or acted on, and Start over on a sample clears your marks.'),
-      all.length ? h('div', { class: 'batches' }, all.map(bcard))
-        : h('div', { class: 'empty' }, 'No samples here yet. Say to Claude Code: ', h('code', { class: 'i' }, 'make the studio samples'))));
+      all.length ? h('div', { class: 'batches' }, all.map(bcard)) : h('div', { class: 'empty' }, 'No samples.')));
     if (held.length) main.append(h('section', {},
-      h('div', { class: 'sec-head' }, h('h2', {}, 'Held back by the checks'), h('p', {}, 'What a batch looks like when it breaks a rule a script can test: you are told it exists and why you were not shown it.')),
+      h('div', { class: 'sec-head' }, h('h2', {}, 'Held back by the checks')),
       h('div', { class: 'rows' }, held.map((b) => h('div', { class: 'row' },
         h('div', { class: 'grow' }, h('div', { class: 'title' }, b.title), h('div', { class: 'sub' }, b.errors.join(' \u00b7 '))),
         h('span', { class: 'chip bad' }, 'Held'))))));
@@ -3784,21 +3782,20 @@
     const main = h('main', {});
     main.append(h('section', {}, inboxSwitch('inbox'),
       h('h1', {}, mine.length ? (mine.length === 1 ? 'One batch waits for you' : mine.length + ' batches wait for you') : 'Nothing waits for you'),
-      mine.length ? h('div', { class: 'batches' }, mine.map(bcard))
-        : h('div', { class: 'empty' }, 'When Claude Code files candidates or a question, they show up here.')));
+      mine.length ? h('div', { class: 'batches' }, mine.map(bcard)) : null));
     if (sent.length) main.append(h('section', {},
-      h('div', { class: 'sec-head' }, h('h2', {}, 'Waiting on Claude'), h('p', {}, 'You have judged these. Nothing happens until you tell Claude Code.')),
+      h('div', { class: 'sec-head' }, h('h2', {}, 'Waiting on Claude')),
       h('div', { class: 'say' }, h('span', {}, 'Say to Claude Code:'), h('code', {}, SAY), copyButton(SAY)),
       h('div', { class: 'rows' }, sent.map((b) => link('b.' + b.id, { class: 'row' },
-        h('div', { class: 'grow' }, h('div', { class: 'title' }, b.title), h('div', { class: 'sub' }, 'You said: ' + (ACTION_SAID[b.action] || b.action) + (b.winners.length ? ' (' + b.winners.join(', ').toUpperCase() + ')' : ''))),
+        h('div', { class: 'grow' }, h('div', { class: 'title' }, b.title), h('div', { class: 'sub' }, (ACTION_SAID[b.action] || b.action) + (b.winners.length ? ': ' + b.winners.join(', ').toUpperCase() : ''))),
         h('span', { class: 'sub' }, when(b.submitted)))))));
     if ((st.held || []).length) main.append(h('section', {},
-      h('div', { class: 'sec-head' }, h('h2', {}, 'Held back by the checks'), h('p', {}, 'Made, but not shown to you: each broke a rule a script can test. Claude fixes these first.')),
+      h('div', { class: 'sec-head' }, h('h2', {}, 'Held back by the checks')),
       h('div', { class: 'rows' }, st.held.map((b) => h('div', { class: 'row' },
         h('div', { class: 'grow' }, h('div', { class: 'title' }, b.title), h('div', { class: 'sub' }, b.errors.join(' · '))),
         h('span', { class: 'chip bad' }, 'Held'))))));
     if (closed.length) main.append(h('section', {},
-      h('div', { class: 'sec-head' }, h('h2', {}, 'Closed'), h('p', {}, 'Judged and acted on.')),
+      h('div', { class: 'sec-head' }, h('h2', {}, 'Closed')),
       h('div', { class: 'rows' }, closed.map((b) => link('b.' + b.id, { class: 'row' },
         h('div', { class: 'grow' }, h('div', { class: 'title' }, b.title), h('div', { class: 'sub' }, (ACTION_SAID[b.action] || '') + (b.winners.length ? ': ' + b.winners.join(', ').toUpperCase() : '') + (b.next_batch ? ' · next round filed' : ''))),
         h('span', { class: 'sub' }, when(b.processed)))))));
@@ -3844,17 +3841,17 @@
     const chosen = calls.filter((c) => c.call === 'winner' || c.call === 'approve').length;
     if (!v.action) return b.mode === 'question' ? 'Choose an option or write your own answer.' : 'Mark the candidates, then choose what happens next.';
     if (b.mode === 'question') return (v.action === 'answer' && !chosen && !v.answer) ? 'Pick an option or write your own answer.' : '';
-    if ((v.action === 'ship' || v.action === 'ship_and_iterate') && !chosen) return 'Nothing is marked to ship. Mark a winner, or choose another round.';
+    if ((v.action === 'ship' || v.action === 'ship_and_iterate') && !chosen) return 'Mark a winner, or choose another round.';
     const marked = (c) => c.marks && (Object.values(c.marks.notes || {}).some((x) => x && x.trim()) || spansSay(c.marks));
     if ((v.action === 'another_round' || v.action === 'ship_and_iterate') && !v.note && !calls.some((c) => c.note || marked(c) || c.call === 'keep' || c.call === 'redo'))
-      return 'Another round needs a direction: write a note, or mark a Keep or a Redo.';
+      return 'Write a note, or mark a Keep or Redo.';
     return '';
   }
   function controls(cand, compact) {
     const b = S.batch, cid = cand.id;
     const callBtns = CALLS[b.mode].map(([name, label, key]) => h('button', { class: 'call', type: 'button', 'data-call': name, onclick: () => setCall(cid, name) }, label, h('kbd', {}, key)));
     const scoreBtns = b.mode === 'question' ? [] : Array.from({ length: 10 }, (_, i) => h('button', { type: 'button', 'aria-label': 'Score ' + (i + 1), onclick: () => setScore(cid, i + 1) }, String(i + 1)));
-    const note = h('textarea', { class: 'field', rows: compact ? 2 : 1, placeholder: b.mode === 'question' ? 'Why, or a change you want' : 'Note for the maker, in your own words', 'aria-label': 'Note on ' + cand.title,
+    const note = h('textarea', { class: 'field', rows: compact ? 2 : 1, placeholder: 'Note', 'aria-label': 'Note on ' + cand.title,
       oninput: () => { entry(cid).note = note.value; changed(null); (S.ui[cid] || []).forEach((fn) => fn(note)); } });
     const wrap = h('div', { class: 'tverdict' }, h('div', { class: 'calls' }, callBtns), scoreBtns.length ? h('div', { class: 'scores' }, scoreBtns) : null, note);
     const update = (skip) => {
@@ -3888,11 +3885,11 @@
       const mk = entry(cid).marks, used = mk ? Object.keys(mk.notes || {}) : [];
       if (mk && mk.spans) {  // a sound or a clip: its marks are moments and stretches
         el.hidden = !mk.spans.length;
-        el.replaceChildren(...mk.spans.map((s) => h('span', { class: 'sw', style: '--sw:' + (MARK_HEX[s.c] || MARK_HEX.red), title: s.tag })), ' ' + mk.spans.length + ' mark' + (mk.spans.length === 1 ? '' : 's') + ' on it; open it to see');
+        el.replaceChildren(...mk.spans.map((s) => h('span', { class: 'sw', style: '--sw:' + (MARK_HEX[s.c] || MARK_HEX.red), title: s.tag })), ' ' + mk.spans.length + ' mark' + (mk.spans.length === 1 ? '' : 's'));
         return;
       }
       el.hidden = !used.length;
-      el.replaceChildren(...used.map((c) => h('span', { class: 'sw', style: '--sw:' + MARK_HEX[c], title: c })), used.length ? ' Marked in ' + used.join(', ') + '; open it to see' : '');
+      el.replaceChildren(...used.map((c) => h('span', { class: 'sw', style: '--sw:' + MARK_HEX[c], title: c })), used.length ? ' Marked' : '');
     };
     (S.ui[cid] = S.ui[cid] || []).push(upd); upd();
     return el;
@@ -3910,9 +3907,9 @@
       const v = modelView(mo.url, { zoom: big, group: group && group.cam, clip: mo.clip });
       if (group && group.cam && v.copyCam) group.cam.views.push(v);
       views.push(v); api.view = v; stage.append(v.el);
-      if (!big) stage.append(h('div', { class: 'word under' }, h('b', {}, cand.label || cand.title), h('span', {}, b.sample ? 'Made-up motion, to show the viewer' : 'Baked from the project. Confirm it in the running project, under these words')));
+      if (!big) stage.append(h('div', { class: 'word under' }, h('b', {}, cand.label || cand.title)));
     } else if (b.kind === 'in_app') {
-      stage.append(h('div', { class: 'word' }, h('b', {}, cand.label || cand.title), h('span', {}, 'Look for these words over it in the running project')));
+      stage.append(h('div', { class: 'word' }, h('b', {}, cand.label || cand.title)));
     } else if (b.kind === 'question' || (!file && cand.body)) {
       stage.classList.remove('stage'); stage.className = 'option'; stage.append(md(cand.body || cand.summary || ''));
     } else if (!file) {
@@ -4054,18 +4051,15 @@
 
     // closed states
     const startOver = async () => { try { clearTimeout(saveTimer); await API.reset(b.id); S.state = await API.state(); toast('Cleared'); render(); } catch (e) { toast(e.message); } };
-    if (b.sample) main.append(h('section', {}, h('div', { class: 'samplebar' },
-      h('span', {}, h('b', {}, 'A sample.'), ' Made up, to try the page on. Nothing you do here is counted, recorded or acted on.'),
-      b.status === 'draft' || b.status === 'submitted' ? h('button', { class: 'btn small', type: 'button', onclick: startOver }, 'Start over') : null)));
+    if (b.sample && b.status === 'draft') main.append(h('section', {}, h('div', {}, h('button', { class: 'btn small', type: 'button', onclick: startOver }, 'Start over'))));
     if (b.sample && b.status === 'submitted') main.append(h('section', {}, h('div', { class: 'closed' },
       h('h3', {}, 'Your verdict is in: ' + (ACTION_SAID[b.verdict.action] || b.verdict.action)),
-      h('p', { class: 'muted' }, 'On a real batch this is where the page tells you to say "' + SAY + '" to Claude Code. A sample ends here.'),
       h('div', { style: 'display:flex;gap:10px;flex-wrap:wrap' },
         h('button', { class: 'btn', type: 'button', onclick: async () => { try { await API.reopen(b.id); S.state = await API.state(); render(); } catch (e) { toast(e.message); } } }, 'Change my verdict'),
         h('button', { class: 'btn', type: 'button', onclick: startOver }, 'Start over')))));
     else if (b.status === 'submitted') main.append(h('section', {}, h('div', { class: 'closed' },
       h('h3', {}, 'Your verdict is in: ' + (ACTION_SAID[b.verdict.action] || b.verdict.action)),
-      h('div', { class: 'say' }, h('span', {}, 'Nothing happens until you say to Claude Code:'), h('code', {}, SAY), copyButton(SAY)),
+      h('div', { class: 'say' }, h('span', {}, 'Say to Claude Code:'), h('code', {}, SAY), copyButton(SAY)),
       h('div', {}, h('button', { class: 'btn', type: 'button', onclick: async () => { try { await API.reopen(b.id); S.state = await API.state(); render(); } catch (e) { toast(e.message); } } }, 'Change my verdict')))));
     if (b.status === 'processed') {
       const res = b.result || {};
@@ -4143,8 +4137,8 @@
       const tile = tiles[cand.id] = h('article', { class: 'tile', 'data-cid': cand.id, 'aria-label': 'Candidate ' + cand.id.toUpperCase() + ': ' + cand.title },
         h('div', { class: 'thead' }, h('span', { class: 'letter' }, cand.id.length <= 2 ? cand.id : cand.id[0]), h('h3', {}, cand.title),
           cand.recommended ? h('span', { class: 'chip accent' }, 'Suggested') : null,
-          cand.carried_from ? h('span', { class: 'chip keep', title: 'You kept this in an earlier round' }, 'From last round') : null,
-          timed ? h('button', { class: 'btn small', type: 'button', title: editable() ? 'Open it large and mark moments and stretches of it, with a note for each (Enter)' : 'Open it large, with the marks on it (Enter)',
+          cand.carried_from ? h('span', { class: 'chip keep' }, 'From last round') : null,
+          timed ? h('button', { class: 'btn small', type: 'button', title: 'Enter',
             onclick: () => { seq.token++; if (m.play) m.play.stop(); const v = $('video', m.el); if (v) v.pause(); openOver([cand.id]); } }, editable() ? 'Mark' : 'Look closer') : null,
           cshare ? cshare.button : null,
           box ? h('label', { class: 'cmp' }, box, 'Compare') : null),
@@ -4165,10 +4159,7 @@
       (S.ui[cand.id] = S.ui[cand.id] || []).push(() => { const call = entry(cand.id).call; tile.className = 'tile' + (S.current === cand.id ? ' current' : '') + (call ? ' call-' + call : ''); });
       grid.append(tile);
     }
-    main.append(h('section', {}, tools.childNodes.length ? tools : null, grid,
-      b.mode !== 'question' && window.matchMedia && matchMedia('(pointer: fine)').matches ? h('p', { class: 'hint' }, 'Keys: ', h('kbd', {}, '←'), ' ', h('kbd', {}, '→'), ' move · ', h('kbd', {}, '1'), '–', h('kbd', {}, '0'), ' score · ',
-        CALLS[b.mode].map(([, label, key]) => [h('kbd', {}, key), ' ' + label.toLowerCase() + ' · ']), h('kbd', {}, 'N'), ' note · ', h('kbd', {}, 'Enter'), ' look closer',
-        b.kind === 'audio' ? [' · ', h('kbd', {}, 'Space'), ' play'] : null, canCompare ? [' · ', h('kbd', {}, 'C'), ' tick to compare'] : null) : null));
+    main.append(h('section', {}, tools.childNodes.length ? tools : null, grid));
 
     function setCurrent(cid, scroll) {
       if (S.current === cid && !scroll) return;
@@ -4182,7 +4173,7 @@
     if (editable()) {
       const tally = h('div', { class: 'line' });
       const note = h('textarea', { class: 'field', id: 'batch-note', rows: 1, 'aria-label': 'Note on the whole batch',
-        placeholder: b.mode === 'question' ? 'Or answer in your own words' : 'Anything about the batch as a whole, or what the next round should change',
+        placeholder: b.mode === 'question' ? 'Your answer' : 'Note on the batch',
         oninput: () => { if (b.mode === 'question') S.verdict.answer = note.value; else S.verdict.note = note.value; changed(null); } });
       note.value = b.mode === 'question' ? S.verdict.answer : S.verdict.note;
       const acts = ACTIONS[b.mode].map(([name, label]) => h('button', { class: 'btn small', type: 'button', 'data-act': name, onclick: () => { S.verdict.action = name; S.touched = true; changed(null); } }, label));
@@ -4199,7 +4190,8 @@
         tally.replaceChildren(...[chip('winner', b.mode === 'question' ? 'Chosen' : 'Winner', 'win'), chip('approve', 'Approved', 'win'), chip('keep', 'Keep', 'keep'), chip('redo', 'Redo', 'redo'), chip('reject', 'Reject', 'reject'),
           groups.none && b.mode !== 'question' ? h('span', { class: 'chip' }, groups.none.length + ' not marked') : null].filter(Boolean));
         acts.forEach((btn) => { const on = btn.dataset.act === S.verdict.action; btn.classList.toggle('on', on); btn.setAttribute('aria-pressed', on); });
-        const p = problem(); why.textContent = p; send.disabled = !!p;
+        const p = problem(), begun = S.touched || S.verdict.note || S.verdict.answer || Object.values(S.verdict.candidates).some((c) => c.call || c.score || c.note || c.marks);
+        why.textContent = begun ? p : ''; send.disabled = !!p;
       };
       main.append(h('div', { class: 'vbar' }, h('div', { class: 'tally' }, tally, note), h('div', { class: 'acts', role: 'group', 'aria-label': 'What happens next' }, acts), h('div', { class: 'send' }, send, why)));
       S.ui._bar();
@@ -4271,8 +4263,6 @@
     const oshare = one ? inboxShare(b, cands[0]) : null;
     const bar = h('div', { class: 'bar' },
       h('h3', {}, one ? cands[0].title : 'Comparing ' + cands.map((c) => c.id.toUpperCase()).join(', ')),
-      h('span', { class: 'hint' }, one ? [h('kbd', {}, '←'), ' ', h('kbd', {}, '→'), ' next · scroll or pinch to zoom · double-click for full size']
-        : ['Zoom and turn one, the others follow · point at one, then score or mark it with the keys']),
       oshare ? oshare.button : null,
       h('button', { class: 'btn small', type: 'button', onclick: closeOver }, 'Close (Esc)'));
     const opts = S.viewTools ? S.viewTools() : [];  // play, speed and the rest, kept in sight while looking closer at a model or a motion
@@ -4291,10 +4281,9 @@
     if (oshare) bar.after(oshare.el);  // under the bar, above the mark tools
     S.current = cands.some((c) => c.id === S.current) ? S.current : cands[0].id;
     S.over = { el, ids: cands.map((c) => c.id), note: noteField, mark, apply: () => medias.forEach((m) => m.set()), destroy: () => medias.forEach((m) => m.destroy()) };
-    if (one && medias[0].el.classList.contains('timed')) {  // a sound or a clip: its own hint, and its own keys once it takes marks
+    if (one && medias[0].el.classList.contains('timed')) {  // a sound or a clip: its own keys once it takes marks
       const view = medias[0].timed;
       if (view) Object.assign(S.over, { keys: (e) => !!view.keys && view.keys(e), keep: view.slow ? () => view.tp.hold() : null });
-      bar.querySelector('.hint').replaceChildren(h('kbd', {}, '←'), ' ', h('kbd', {}, '→'), ' next' + (view ? ' · each mark has its own note, in the list beside it' : ''));
     }
     document.body.append(el); document.body.style.overflow = 'hidden';
     mark();
@@ -4326,8 +4315,7 @@
       pending = true; clearTimeout(timer); timer = setTimeout(send, 1500);
     });
     S.markFlush = send;
-    if (editable()) bar.after(h('div', { class: 'tools overtools' }, markTools(ink, live),
-      h('span', { class: 'hint' }, isModel ? modelHint() + ' · a motion holds on its frame while you paint' : 'Paint areas · right-drag moves it · scroll zooms')));
+    if (editable()) bar.after(h('div', { class: 'tools overtools' }, markTools(ink, live)));
     return markNotes(ink, editable, (mo) => live().goto && live().goto(mo));
   }
 
@@ -4341,7 +4329,7 @@
     const stage = h('div', { class: 'pane' });
     if (isModel) { view = modelView(f.url, { zoom: true, clip: f.clip }); stage.append(view.el); marker = markModel(view, ink); }
     else { pane = zoomPane(f.url, { t: { z: 1, cx: 0.5, cy: 0.5 }, panes: [] }); stage.append(pane.el); marker = markImage(pane, ink); }
-    const words = h('textarea', { class: 'field', rows: 2, placeholder: 'Anything else about it (optional)', 'aria-label': 'A note on the whole thing' });
+    const words = h('textarea', { class: 'field', rows: 2, placeholder: 'Note', 'aria-label': 'A note on the whole thing' });
     const close = () => { document.removeEventListener('keydown', key); if (view) view.destroy(); if (pane && pane.destroy) pane.destroy(); el.remove(); document.body.style.overflow = ''; };
     const key = (e) => { if (e.key === 'Escape' && !/^(TEXTAREA|INPUT)$/.test((e.target || {}).tagName || '')) { close(); e.stopPropagation(); } };
     const send = h('button', { class: 'btn primary', type: 'button', onclick: async () => {
@@ -4362,7 +4350,7 @@
     const bar = h('div', { class: 'bar' }, h('h3', {}, 'Mark ' + s.title), h('span', { class: 'hint' }, f.label),
       h('button', { class: 'btn small', type: 'button', onclick: close }, 'Close (Esc)'));
     const el = h('div', { class: 'over marking', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Mark ' + s.title }, bar,
-      h('div', { class: 'tools overtools' }, markTools(ink, () => marker), h('span', { class: 'hint' }, isModel ? modelHint() : 'Paint areas · right-drag moves it · scroll zooms')),
+      h('div', { class: 'tools overtools' }, markTools(ink, () => marker)),
       h('div', { class: 'panes' }, stage),
       h('div', { class: 'side marking' }, h('div', {}, markNotes(ink, () => true, (mo) => marker.goto && marker.goto(mo))), h('div', {}, words, h('div', { class: 'jf' }, send))));
     document.body.append(el); document.body.style.overflow = 'hidden';
