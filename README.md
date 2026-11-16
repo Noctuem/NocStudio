@@ -149,6 +149,13 @@ what the project already has, drafts the goal, the milestones and the steps of t
 asks you only what you alone can answer, and writes the plan in. A Studio that has not been
 planned yet says so on its Overview, with a checklist of what is missing.
 
+A project already under way needs one line. Paste
+`Read <where you cloned NocStudio>\docs\MOVE-IN.md and move this project into NocStudio.` to
+Claude Code or Codex in the project, and it works through the whole checklist:
+[docs/MOVE-IN.md](docs/MOVE-IN.md) has a half for you and a half for the agent. The Overview
+shows the same line with the path filled in, and Hide puts the checklist away if you would
+rather not see it.
+
 ![A new project's Overview, with the checklist of what is still missing](docs/screenshots/new.png)
 
 ### An inbox built for judging

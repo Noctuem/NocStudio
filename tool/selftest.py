@@ -466,6 +466,11 @@ def main() -> int:
         check(left and not ov.get("setup_hidden") and hid == 200 and hidden["overview"]["setup_hidden"] is True
               and back == 200 and shown["overview"]["setup_hidden"] is False and (home / "overview" / "page.json").is_file(),
               "the Getting organised box is hidden from the page and brought back, kept in the Studio so the phone copy has it too")
+        said = subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "studio.py"), "--home", str(home), "status"],
+                              capture_output=True, text=True, encoding="utf-8").stdout
+        check(Path(ov["move_in"]).is_file() and ov["move_in"].endswith("MOVE-IN.md") and "Getting organised:" in said
+              and all(f"] {x}" in said for x in left),
+              "the box's one line names the move-in guide, which is there, and status lists the same unticked lines")
 
         # buttons: a session files a line to run or a file to open; the user's click does it on the PC
         from studiolib import buttons

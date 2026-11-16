@@ -260,6 +260,13 @@ def cmd_status(a):
           + (f"; now {cur['id']} {cur.get('name', '')} at {cur['pct']:g}%" if cur else ""))
     for lane in view["lanes"]:
         print(f"  running  {lane['id']}  {lane['name']}  [{lane['state']}]" + (f"  eta {lane['eta']}" if lane.get("eta") else ""))
+    lines = state["overview"].get("setup") or []
+    must = [x for x in lines if not x.get("optional")]
+    if any(not x["done"] for x in lines):  # the Getting organised list, as the Overview shows it (docs/MOVE-IN.md works through it)
+        print(f"\nGetting organised: {sum(x['done'] for x in must)} of {len(must)}"
+              + ("" if any(not x["done"] for x in must) else " (the box is gone; what is left is only if the project has any)"))
+        for x in lines:
+            print(f"  [{'x' if x['done'] else ' '}] {x['id']:6} {x['title']}" + ("  (if it has any)" if x.get("optional") and not x["done"] else ""))
     print(f"\nWaiting on the user: {len(groups['open']) + len(groups['draft'])}")
     for b in groups["open"] + groups["draft"]:
         print(f"  {b['id']}  {b['title']}  [{b['kind']}, {b['count']}]" + ("  (they have started)" if b["status"] == "draft" else ""))

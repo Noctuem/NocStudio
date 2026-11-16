@@ -103,7 +103,20 @@ or parks it, and records the decision.
 ## 6. Plan the project with your agent
 
 An empty Studio is not much use: the Overview counts progress from a plan, so the project needs
-one. Install the setup skill once:
+one.
+
+**The one-line way**, for a project already under way, with Claude Code or Codex. In the
+project, say:
+
+```
+Read C:\path\to\NocStudio\docs\MOVE-IN.md and move this project into NocStudio.
+```
+
+[MOVE-IN.md](MOVE-IN.md) walks the agent through every line of the Overview's "Getting
+organised" list: the Studio, the skill, the plan, the asset list and live reporting. It covers
+steps 2, 5, 6 and 7 here, and the Overview shows the same line with the path filled in.
+
+**The skill way**, with Claude Code. Install the setup skill once:
 
 ```
 py -3.11 tool\studio.py install-skill

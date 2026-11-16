@@ -73,6 +73,7 @@ HAND_STATUS = ("open", "later", "done", "parked")  # later: the user's, but noth
 HAND_KINDS = ("action", "decision", "play", "info")  # something to do, a question to answer, a build to try, a thing to know
 # how the user likes the page: one answer for every Studio here (STUDIO_PREFS names another file, for a test)
 PREFS = Path(os.environ.get("STUDIO_PREFS") or Path(__file__).resolve().parents[2] / "ui.json")
+MOVE_IN = Path(__file__).resolve().parents[2] / "docs" / "MOVE-IN.md"  # the guide an agent follows to move a project in
 NOTE_KINDS, NOTE_CONFIRMED = notebox.KINDS, notebox.CONFIRMED
 SAMPLE = "sample-"  # a batch id that starts so is made-up: kept under samples/, never counted or acted on
 
@@ -2098,7 +2099,8 @@ class Studio:
         hooks = bool(setup.hooks_on())
         return {"now": self.now(), "repo": self.repo_git(), "milestones": self.roadmap(), "hands": self._hands_shown(),
                 "board": board.view(self), "live": board.live(self), "hooks": hooks, "hooks_notes": setup.hooks_hand_over_all(),
-                "setup": board.checklist(self, hooks), "setup_hidden": bool(self.page_prefs().get("setup_hidden"))}
+                "setup": board.checklist(self, hooks), "setup_hidden": bool(self.page_prefs().get("setup_hidden")),
+                "move_in": str(MOVE_IN) if MOVE_IN.is_file() and not self.config.get("site") else ""}
 
     # ------------------------------------------------- the files behind a slot
     def repo_file(self, rel: str) -> Path:

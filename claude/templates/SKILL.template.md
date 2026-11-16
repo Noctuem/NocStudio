@@ -358,7 +358,9 @@ If the Overview says "Getting organised", or the user says "plan this project
 in its Studio", the plan has holes. Read what the project has, draft the goal,
 the road and the steps of the milestone in hand, show the user the outline to
 correct, ask only what they alone can answer, and write it in with
-`S plan <file>`. The goal goes in `S now --goal`, in their words.
+`S plan <file>`. The goal goes in `S now --goal`, in their words. If the user
+hands you NocStudio's `docs/MOVE-IN.md`, follow it: it works through every line
+of that list, and `S status` shows which are left.
 
 ### Running now: lanes
 

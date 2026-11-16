@@ -3162,8 +3162,10 @@
     if (left.length && !ov.setup_hidden) col.append(fold('setup', true, 'setup',
       [h('span', { class: 'grow' }, 'Getting organised'), h('span', { class: 'chip accent' }, (todo.length - left.length) + ' of ' + todo.length), hideSetup],
       h('ul', { class: 'ticks' }, (ov.setup || []).map((x) => h('li', { class: x.done ? 'done' : '' }, h('span', { class: 'tick' }, x.done ? '✓' : ''), x.title, x.optional && !x.done ? h('span', { class: 'muted' }, ' (if it has any)') : null))),
-      h('div', { class: 'say' }, h('span', {}, 'In the project, say to Claude Code:'), h('code', {}, PLAN_SAY), copyButton(PLAN_SAY)),
-      h('p', { class: 'muted' }, 'It reads what the project already has, asks you what only you can answer, and fills in the rest.')));
+      // one line covers the whole list: the guide in the tool's docs folder walks the agent through every line of it
+      ((say) => h('div', { class: 'say' }, h('span', {}, 'In the project, say to your agent (Claude Code or Codex):'), h('code', {}, say), copyButton(say)))(
+        ov.move_in ? 'Read ' + ov.move_in + ' and move this project into NocStudio.' : PLAN_SAY),
+      h('p', { class: 'muted' }, 'It reads what the project already has, asks you once what only you can answer, asks before it installs anything in your agent’s settings, and works down this list until every line is ticked.')));
 
     // how far along, in one number
     const done = board.milestones_done || 0;
