@@ -3591,7 +3591,7 @@
     };
     function markButton(f) { return h('button', { class: 'btn small', type: 'button', onclick: () => markOver(f, s) }, 'Mark'); }
     const mo = motionOf(s.motion);
-    if (mo) main.append(h('section', {}, h('h2', {}, 'The motion' + (mo.seconds ? ' · ' + mo.seconds.toFixed(2) + ' s' : '')),
+    if (mo) main.append(h('section', {}, h('h2', {}, 'The motion', mo.seconds ? h('span', { style: 'text-transform:none' }, ' · ' + mo.seconds.toFixed(2) + ' s') : null),
       h('div', { class: 'grid', style: '--tile:760px' }, show({ kind: 'model', url: mo.url, label: mo.clip.replace(/_/g, ' '), clip: mo.clip }))));
     for (const [from, title] of [['repo', 'In the project today'], ['library', cur && (cur.working || cur.edited_by_user) ? 'In the Studio' : 'The approved master']]) {
       const rows = files.filter((f) => f.from === from).sort((a, b) => (b.kind === s.kind) - (a.kind === s.kind));
