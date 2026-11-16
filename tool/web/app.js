@@ -2995,11 +2995,11 @@
       h('span', { class: 'spacer' }),
       syncChip(st.sync),
       usageChip(),
-      st.launch ? h('button', { class: 'btn small primary launch-btn', type: 'button', title: 'Start a remote Claude session on the PC in ' + st.launch.folder + ', for the Claude app', onclick: toggleLaunch }, 'Start Claude') : null,
+      st.launch ? h('button', { class: 'btn small primary launch-btn', type: 'button', onclick: toggleLaunch }, 'Start Claude') : null,
       wakeChip(),
-      st.static ? null : h('button', { class: 'btn small', type: 'button', title: 'Leave a note for the project (N)', onclick: openNotePop }, 'Note'),
-      st.hub ? h('a', { class: 'btn small allp', href: st.hub, title: 'Back to the list of your projects' }, 'All projects') : null, scaleControl(), themeControl(),
-      st.static ? h('span', { class: 'sample' }, 'Sample data. Candidates are placeholders drawn by script.') : null);
+      st.static ? null : h('button', { class: 'btn small', type: 'button', title: 'N', onclick: openNotePop }, 'Note'),
+      st.hub ? h('a', { class: 'btn small allp', href: st.hub }, 'All projects') : null, scaleControl(), themeControl(),
+      st.static ? h('span', { class: 'sample' }, 'Sample data') : null);
   }
   // Send verdicts: tells a session sitting idle at its prompt that there are verdicts for it to check (studiolib/wake.py)
   const WK = { data: null, busy: false, timer: 0 };
@@ -3010,18 +3010,15 @@
     if ($('.wakepop')) drawWakePop();
   }
   function wakeWhy(d) {
-    if (WK.old) return 'The Studio running now started before this button: close the NocStudio app and open it again';
-    if (!d) return 'Checking for verdicts…';
-    if (!d.waiting) return 'No verdicts are waiting for a session';
-    if (!d.sessions.length) return d.hooks ? 'No session can be told now: it has to sit idle at its prompt, and have started or finished a turn since the Studio’s hooks were installed'
-      : 'Sessions cannot be woken yet: run  studio.py hooks install  once, on the PC';
-    const n = d.unseen;
-    return n ? n + ' verdict' + (n !== 1 ? 's' : '') + ' no session has seen. Tells ' + (d.sessions.length === 1 ? d.sessions[0].title : 'a session you pick') + ' to check them'
-      : 'Every verdict waiting was already handed to a session. Press to tell one again';
+    if (WK.old) return 'Restart the NocStudio app';
+    if (!d) return 'Checking…';
+    if (!d.waiting) return 'No verdicts waiting';
+    if (!d.sessions.length) return d.hooks ? 'No idle session' : 'Run studio.py hooks install';
+    return d.unseen ? '' : 'Already sent';
   }
   function wakeButton() {
     const d = WK.old ? null : WK.data, can = !!(d && d.waiting && d.sessions.length), armed = can && d.unseen > 0;
-    return h('button', { class: 'btn small wake-btn' + (armed ? ' primary' : ''), type: 'button', disabled: !can || WK.busy, title: wakeWhy(d), onclick: toggleWake },
+    return h('button', { class: 'btn small wake-btn' + (armed ? ' primary' : ''), type: 'button', disabled: !can || WK.busy, title: wakeWhy(d) || null, onclick: toggleWake },
       WK.busy ? 'Sending…' : 'Send verdicts', armed ? h('span', { class: 'count' }, String(d.unseen)) : null);
   }
   function wakeChip() {
@@ -3032,7 +3029,7 @@
   async function wakeSend(s) {
     closeWake(); WK.busy = true;
     for (const b of document.querySelectorAll('.wake-btn')) b.replaceWith(wakeButton());
-    try { await call('POST', '/api/wake', { session: s.id }); toast('Sent to ' + s.title + ': it checks your verdicts now'); }
+    try { await call('POST', '/api/wake', { session: s.id }); toast('Sent to ' + s.title); }
     catch (e) { toast(e.message); }
     WK.busy = false; wakeLoad();
   }
@@ -3053,9 +3050,8 @@
     const ago = (s) => s < 90 ? 'just now' : s < 5400 ? Math.round(s / 60) + ' min' : Math.round(s / 3600) + ' h';
     el.replaceChildren(...[
       h('div', { class: 'jh' }, h('h2', { class: 'grow' }, 'Send verdicts to'), h('button', { class: 'btn small', type: 'button', onclick: closeWake }, 'Close (Esc)')),
-      h('p', {}, 'The session you pick is told there are verdicts for it to check, and starts on them.'),
       ...d.sessions.map((s) => h('button', { class: 'trow', type: 'button', onclick: () => wakeSend(s) },
-        h('span', { class: 'tt' }, s.title), h('span', { class: 'd' }, [s.where, s.talk ? 'on the Talk page' : '', 'idle ' + ago(s.quiet || 0)].filter(Boolean).join(' · ')))),
+        h('span', { class: 'tt' }, s.title), h('span', { class: 'd' }, [s.where, s.talk ? 'Talk' : '', 'idle ' + ago(s.quiet || 0)].filter(Boolean).join(' · ')))),
       d.sessions.length ? null : h('div', { class: 'muted' }, wakeWhy(d))].filter(Boolean));
   }
 
@@ -3072,8 +3068,7 @@
   function usageTop() { const l = (U.data || {}).limits || []; return l.length ? l.reduce((a, b) => (b.pct > a.pct ? b : a)) : null; }
   function usageButton() {
     const t = usageTop();
-    return h('button', { class: 'btn small usage-btn' + (t && t.pct >= 80 ? ' hot' : ''), type: 'button', onclick: toggleUsage,
-      title: t ? t.name + ': ' + Math.round(t.pct) + '% used' + (t.resets ? ', resets ' + t.resets : '') : 'Your plan\'s usage (/usage)' }, t ? 'Usage ' + Math.round(t.pct) + '%' : 'Usage');
+    return h('button', { class: 'btn small usage-btn' + (t && t.pct >= 80 ? ' hot' : ''), type: 'button', onclick: toggleUsage }, t ? 'Usage ' + Math.round(t.pct) + '%' : 'Usage');
   }
   function usageChip() {
     if (S.state.static || S.state.site) return null;
@@ -3100,8 +3095,8 @@
         h('div', { class: 'um' }, h('span', { style: 'width:' + Math.max(0, Math.min(100, l.pct)) + '%' })),
         l.resets ? h('div', { class: 'muted' }, 'Resets ' + l.resets) : null)),
       U.err ? h('div', { class: 'tline bad' }, U.err) : null,
-      d.text ? h('details', {}, h('summary', {}, 'Everything /usage says'), h('pre', { class: 'utext' }, d.text)) : U.busy ? h('div', { class: 'muted' }, 'Reading /usage…') : null,
-      d.at ? h('div', { class: 'muted' }, 'Read ' + when(d.at) + '. Reading it calls no model, so it costs nothing.') : null].filter(Boolean));
+      d.text ? h('details', {}, h('summary', {}, 'Full text'), h('pre', { class: 'utext' }, d.text)) : U.busy ? h('div', { class: 'muted' }, 'Reading…') : null,
+      d.at ? h('div', { class: 'muted' }, 'Read ' + when(d.at)) : null].filter(Boolean));
   }
 
   // a server copy's Start Claude: asks the launcher beside it (Ignition) to wake the PC and start `claude remote-control`
@@ -3135,7 +3130,7 @@
         try { LA.job = await launchCall('GET', 'launch/' + encodeURIComponent(made.id)); } catch (e) { LA.err = e.message; LA.busy = false; drawLaunch(); return; }
         if (LA.job.status === 'running') { drawLaunch(); LA.poll = setTimeout(step, 2000); return; }
         LA.busy = false; drawLaunch();
-        if (!$('.launchpop')) toast(LA.job.status === 'failed' ? 'Claude did not start: ' + (LA.job.result || 'see Start Claude') : 'Claude is ready: open the Claude app, Code tab');
+        if (!$('.launchpop')) toast(LA.job.status === 'failed' ? 'Claude did not start: ' + (LA.job.result || 'see Start Claude') : 'Claude is ready');
       };
       await step();
     } catch (e) { LA.err = e.message; LA.busy = false; LA.job = null; drawLaunch(); }
@@ -3147,14 +3142,13 @@
     const ready = j && (j.status === 'launched' || j.status === 'already-running');
     el.replaceChildren(...[
       h('div', { class: 'jh' }, h('h2', { class: 'grow' }, 'Start Claude'), h('button', { class: 'btn small', type: 'button', onclick: closeLaunch }, 'Close (Esc)')),
-      h('p', {}, 'Starts a remote-controlled Claude session on the PC in ', h('b', {}, lc.folder), ', then you talk to it in the Claude app\'s Code tab. It carries on the last conversation there unless you start a new one.'),
-      d ? h('div', { class: 'muted' }, d.desktop === 'down' ? 'The PC is asleep: starting wakes it first, about a minute.' : d.desktop === 'up' ? 'The PC is awake.' : 'Could not tell whether the PC is awake.') : null,
+      d ? h('div', { class: 'muted' }, d.desktop === 'down' ? 'PC asleep' : d.desktop === 'up' ? 'PC awake' : 'PC not known') : null,
       lc.repo ? h('div', { class: 'btns' },
-        h('button', { class: 'btn small primary', type: 'button', disabled: LA.busy, onclick: () => launchStart(false) }, LA.busy ? 'Starting…' : 'Carry on the last conversation'),
+        h('button', { class: 'btn small primary', type: 'button', disabled: LA.busy, onclick: () => launchStart(false) }, LA.busy ? 'Starting…' : 'Carry on'),
         h('button', { class: 'btn small', type: 'button', disabled: LA.busy, onclick: () => launchStart(true) }, 'New conversation'))
         : h('div', { class: 'tline bad' }, lc.why),
       lines.length ? h('pre', { class: 'utext' }, lines.join('\n')) : null,
-      ready ? h('div', { class: 'tline ok' }, j.status === 'already-running' ? 'A session is already running there. ' : 'Started. ', 'Open the Claude app, Code tab: it is named “' + lc.folder + ' (claude)”.') : null,
+      ready ? h('div', { class: 'tline ok' }, (j.status === 'already-running' ? 'Already running: ' : 'Started: ') + lc.folder + ' (claude)') : null,
       j && j.status === 'failed' ? h('div', { class: 'tline bad' }, j.result || 'It did not start.') : null,
       LA.err ? h('div', { class: 'tline bad' }, LA.err) : null].filter(Boolean));
   }
@@ -3163,7 +3157,7 @@
   function syncChip(sy) {
     if (!sy) return null;
     const stale = !sy.ok || Date.now() - new Date(sy.ok) > 10 * 60000;
-    const tip = [sy.error || sy.waiting, sy.ok ? 'Last in step with the other copy ' + when(sy.ok) : ''].filter(Boolean).join('. ');
+    const tip = [sy.error || sy.waiting, sy.ok ? 'last ' + when(sy.ok) : ''].filter(Boolean).join('. ');
     const bad = sy.error || stale, said = bad ? 'Not synced' : sy.waiting ? 'Sync waiting' : 'Synced';
     return h('button', { class: 'chip sync ' + (bad ? 'bad' : 'ok'), type: 'button', title: tip, 'aria-label': said,
       onclick: () => toast(said + (tip ? '. ' + tip : '')) }, h('span', {}, said));
@@ -3232,12 +3226,12 @@
     const can = !!x.can_run && (x.status === 'open' || x.status === 'later') && !S.state.static && !S.state.site;
     let ran = x.ran || null, timer = 0;
     const press = h('button', { class: 'btn small primary bpress', type: 'button', disabled: !can,
-      title: can ? (x.open ? 'Open it on this PC' : 'Run it on this PC') : 'Buttons work on the PC, not on this copy',
+      title: can ? null : 'Only on the PC',
       onclick: (e) => { e.preventDefault(); e.stopPropagation(); go('press'); } }, (x.open ? '\u2197 ' : '\u25B6 ') + x.button);
     const stopBtn = h('button', { class: 'btn small', type: 'button', hidden: true, onclick: () => go('stop') }, 'Stop');
     const status = h('span', { class: 'bstatus' });
-    const out = h('pre', { class: 'bout', hidden: true, 'aria-label': 'What it printed, the last lines' });
-    const what = h('div', { class: 'bwhat' }, h('span', { class: 'grow' }, x.open ? [h('span', { class: 'muted' }, 'Opens '), h('code', { class: 'i' }, x.open)]
+    const out = h('pre', { class: 'bout', hidden: true, 'aria-label': 'Output' });
+    const what = h('div', { class: 'bwhat' }, h('span', { class: 'grow' }, x.open ? h('code', { class: 'i' }, x.open)
       : [h('code', { class: 'i' }, x.run), x.cwd ? h('span', { class: 'muted' }, ' in ' + x.cwd) : null]), press, copyButton(x.open || x.run));
     const how = h('div', { class: 'brow', hidden: true }, stopBtn, status);
     const box = h('div', { class: 'bbox' }, how, what, out);
@@ -3250,7 +3244,7 @@
       const ok = ran.state === 'done' && ran.code === 0, bad = ran.state === 'done' && ran.code !== 0;
       const chip = { running: 'Running', opened: 'Opened', stopped: 'Stopped', lost: 'Not known', done: ok ? 'Done' : 'Failed' }[ran.state] || ran.state;
       const said = ran.state === 'running' ? 'since ' + when(ran.started)
-        : ran.state === 'lost' ? 'started ' + when(ran.started) + '; the Studio restarted while it ran'
+        : ran.state === 'lost' ? 'started ' + when(ran.started)
         : ran.state === 'opened' ? when(ran.started)
         : (ran.code != null && ran.state === 'done' ? 'exit ' + ran.code + ' \u00b7 ' : '') + when(ran.ended);
       status.replaceChildren(h('span', { class: 'chip ' + (ran.state === 'running' ? 'accent' : ok || ran.state === 'opened' ? 'ok' : bad ? 'bad' : '') }, chip), ' ', h('span', { class: 'sub' }, said));
@@ -3278,7 +3272,7 @@
   function askRow(x) {
     S.notes = S.notes || {};
     const open = x.status === 'open' || x.status === 'later', decide = x.kind === 'decision';
-    const note = h('textarea', { class: 'field', rows: 1, placeholder: decide ? 'Your answer, in your words' : 'Anything to add (optional)', 'aria-label': 'Note on ' + x.title,
+    const note = h('textarea', { class: 'field', rows: 1, placeholder: decide ? 'Your answer' : 'Note', 'aria-label': 'Note on ' + x.title,
       value: S.notes[x.id] || '', oninput: (e) => { S.notes[x.id] = e.target.value; } });
     const send = async (action, text) => {
       const typed = note.value;
@@ -3342,8 +3336,7 @@
           s.agent === 'codex' ? h('span', { class: 'chip' }, 'Codex') : null, s.where ? h('span', { class: 'chip' }, s.where) : null),
         h('div', { class: 'sub' }, sessionLine(s)), sessionBits(s)));
     }
-    if (!out.length) return [h('div', { class: 'empty' }, 'Nothing is running. ', hooks ? 'A Claude Code or Codex session in the project shows here as soon as it starts.'
-      : 'Sessions will show here on their own once live reporting is on: say to Claude Code, “turn on the Studio\'s live reporting”.')];
+    if (!out.length) return [h('div', { class: 'empty' }, 'Nothing running.')];
     return [h('div', { class: 'pills' }, out)];
   }
 
@@ -3394,15 +3387,14 @@
     const setupShown = async (hidden) => {
       try { await API.setup(hidden); S.state = await API.state(); render(null, true); } catch (e) { toast(e.message); }
     };
-    const hideSetup = h('button', { class: 'btn small', type: 'button', title: 'Hide this box for this project. Set up, under the milestones, brings it back.',
+    const hideSetup = h('button', { class: 'btn small', type: 'button',
       onclick: (e) => { e.preventDefault(); e.stopPropagation(); setupShown(true); } }, 'Hide');
     if (left.length && !ov.setup_hidden) col.append(fold('setup', true, 'setup',
       [h('span', { class: 'grow' }, 'Getting organised'), h('span', { class: 'chip accent' }, (todo.length - left.length) + ' of ' + todo.length), hideSetup],
-      h('ul', { class: 'ticks' }, (ov.setup || []).map((x) => h('li', { class: x.done ? 'done' : '' }, h('span', { class: 'tick' }, x.done ? '✓' : ''), x.title, x.optional && !x.done ? h('span', { class: 'muted' }, ' (if it has any)') : null))),
+      h('ul', { class: 'ticks' }, (ov.setup || []).map((x) => h('li', { class: x.done ? 'done' : '' }, h('span', { class: 'tick' }, x.done ? '✓' : ''), x.title, x.optional && !x.done ? h('span', { class: 'muted' }, ' (optional)') : null))),
       // one line covers the whole list: the guide in the tool's docs folder walks the agent through every line of it
-      ((say) => h('div', { class: 'say' }, h('span', {}, 'In the project, say to your agent (Claude Code or Codex):'), h('code', {}, say), copyButton(say)))(
-        ov.move_in ? 'Read ' + ov.move_in + ' and move this project into NocStudio.' : PLAN_SAY),
-      h('p', { class: 'muted' }, 'It reads what the project already has, asks you once what only you can answer, asks before it installs anything in your agent’s settings, and works down this list until every line is ticked.')));
+      ((say) => h('div', { class: 'say' }, h('code', { style: 'flex:1 1 0;min-width:0;overflow-wrap:anywhere' }, say), copyButton(say)))(
+        ov.move_in ? 'Read ' + ov.move_in + ' and move this project into NocStudio.' : PLAN_SAY)));
 
     // how far along, in one number
     const done = board.milestones_done || 0;
@@ -3413,11 +3405,11 @@
       h('div', { class: 'bar-status tall', role: 'img', 'aria-label': BAR.map((k) => STEP[k] + ' ' + Math.round((board.share || {})[k] || 0) + '%').join(', ') },
         BAR.filter((k) => (board.share || {})[k]).map((k) => h('i', { class: 'sp-' + k, style: 'width:' + board.share[k] + '%', title: STEP[k] + ': ' + ((board.counts || {})[k] || 0) }))),
       h('div', { class: 'legend' }, BAR.concat(['planned']).map((k) => h('span', {}, h('span', { class: 'dot sp-' + k }), STEP[k] + ' ', h('b', {}, String((board.counts || {})[k] || 0)))),
-        h('span', { class: 'muted' }, board.steps ? board.steps + ' steps in all' : 'No steps yet')),
+        h('span', { class: 'muted' }, board.steps ? board.steps + ' steps' : 'No steps yet')),
       ms.length ? h('div', { class: 'track', role: 'img', 'aria-label': ms.map((m) => m.id + ' ' + MSTONE[m.status]).join(', ') },
         ms.map((m) => h('div', { class: 'seg ' + m.status, title: m.name + ': ' + MSTONE[m.status] + (m.steps ? ', ' + pctText(m.pct) : '') }, h('b', {}, m.id), h('span', {}, m.name)))) : null,
       ms.length || (left.length && ov.setup_hidden) ? h('p', { class: 'muted' }, ms.length ? done + ' of ' + ms.length + ' milestones complete' : null,
-        left.length && ov.setup_hidden ? [ms.length ? ' · ' : null, h('a', { href: '#', class: 'setuplink', title: 'Show the Getting organised box again: ' + left.length + ' left to do',
+        left.length && ov.setup_hidden ? [ms.length ? ' · ' : null, h('a', { href: '#', class: 'setuplink', title: left.length + ' left',
           onclick: (e) => { e.preventDefault(); setupShown(false); } }, 'Set up')] : null) : null));
 
     // the few facts worth a glance
@@ -3426,15 +3418,15 @@
     const tiles = [
       cur ? tile('In hand', cur.id + ' · ' + cur.name, [cur.unplanned ? 'no steps yet' : pctText(cur.pct), cur.eta ? 'ETA ' + cur.eta : ''].filter(Boolean).join(' · ')) : null,
       pace.finish ? tile('Done at this pace', dayName(pace.finish), '+' + pace.per_day + ' points a day over ' + pace.over_days + (pace.over_days === 1 ? ' day' : ' days'))
-        : (board.days || []).length > 1 ? tile('Done at this pace', 'No telling', 'nothing moved in the last ' + (pace.over_days || 7) + ' days') : null,
-      now.finish ? tile('Claude\'s estimate', now.finish, 'for the whole project') : null,
+        : (board.days || []).length > 1 ? tile('Done at this pace', 'No telling', 'still for ' + (pace.over_days || 7) + ' days') : null,
+      now.finish ? tile('Claude\'s estimate', now.finish) : null,
       (now.counters || []).map((c) => tile(c.name, c.have + ' / ' + c.of)),
-      now.build || game.version ? tile('Build', now.build || game.version, game.since_now ? game.since_now + (game.since_now === 1 ? ' commit' : ' commits') + ' since it was written up' : (now.gate || ''), '#build') : null];
+      now.build || game.version ? tile('Build', now.build || game.version, game.since_now ? game.since_now + (game.since_now === 1 ? ' commit' : ' commits') + ' since' : (now.gate || ''), '#build') : null];
     if (tiles.flat().filter(Boolean).length) col.append(h('div', { class: 'tiles' }, tiles));
 
     // running now: redrawn by itself every few seconds
     const running = h('div', { class: 'runbody' }, runningBody(ov.live || {}, ov.hooks));
-    col.append(h('section', {}, h('div', { class: 'sec-head' }, h('h2', {}, 'Running now'), h('p', {}, ov.hooks ? 'Live from the project\'s sessions.' : '')), running));
+    col.append(h('section', {}, h('div', { class: 'sec-head' }, h('h2', {}, 'Running now')), running));
     if (!STATIC && API.live) {
       const timer = setInterval(async () => { try { const live = await API.live(); (S.state.overview || {}).live = live; running.replaceChildren(...runningBody(live, ov.hooks)); } catch (e) { /* next beat */ } }, 3000);
       S.cleanup.push(() => clearInterval(timer));
@@ -3443,7 +3435,7 @@
     // day by day
     const days = board.days || [];
     if (days.length > 1) col.append(h('section', {},
-      h('div', { class: 'sec-head' }, h('h2', {}, 'Day by day'), h('p', {}, 'The line is how far along; bars are steps landed; a red mark is a setback.')), dayChart(days)));
+      h('div', { class: 'sec-head' }, h('h2', {}, 'Day by day')), dayChart(days)));
 
     // the road, and the steps of each stretch
     if (ms.length) col.append(h('section', {},
@@ -3454,17 +3446,17 @@
           h('span', { class: 'mbar' }, h('span', { class: 'bar-status' }, h('i', { class: 'sp-done', style: 'width:' + m.pct + '%' })), h('span', { class: 'num' }, m.unplanned ? '–' : pctText(m.pct))),
           h('span', { class: 'status' }, h('span', { class: 'dot ms-' + m.status }), MSTONE[m.status] || m.status)],
         h('div', { class: 'msbody' }, m.goal ? h('p', { html: inline(m.goal) }) : null,
-          m.question ? h('p', { class: 'muted' }, 'Your verdict answers: ', h('i', {}, m.question)) : null,
+          m.question ? h('p', { class: 'muted' }, h('i', {}, m.question)) : null,
           (m.steps || []).length ? h('ul', { class: 'steps' }, m.steps.map((s) => h('li', { class: 'st ' + s.status }, h('span', { class: 'dot sp-' + s.status }), h('span', { class: 'grow' }, s.name, s.note ? h('span', { class: 'muted' }, ' · ' + s.note) : null),
             h('span', { class: 'sub' }, STEP[s.status] + (s.date ? ' · ' + dayName(s.date) : '')))))
-            : (m.status === 'done' ? null : h('p', { class: 'muted' }, 'No steps yet, so its progress cannot be counted.'))))))));
+            : (m.status === 'done' ? null : h('p', { class: 'muted' }, 'No steps yet.'))))))));
 
     // the log
     const log = board.events || [];
     if (log.length) {
       const row = (e) => h('div', { class: 'row ev ' + e.kind }, h('span', { class: 'chip ' + ({ setback: 'bad', merge: 'ok', publish: 'ok', done: 'keep' }[e.kind] || '') }, EVENT[e.kind] || e.kind),
         h('div', { class: 'grow' }, h('span', { html: inline(e.text) }), e.milestone ? h('span', { class: 'muted' }, ' · ' + e.milestone) : null), h('span', { class: 'sub' }, when(e.ts)));
-      col.append(h('section', {}, h('div', { class: 'sec-head' }, h('h2', {}, 'Log'), h('p', {}, 'Newest first.')),
+      col.append(h('section', {}, h('div', { class: 'sec-head' }, h('h2', {}, 'Log')),
         h('div', { class: 'rows' }, log.slice(0, 10).map(row)),
         log.length > 10 ? fold('log', false, 'brief', 'Earlier (' + (log.length - 10) + ')', h('div', { class: 'rows', style: 'margin-top:8px' }, log.slice(10).map(row))) : null));
     }
@@ -3475,7 +3467,7 @@
     const asks = h('div', { class: 'asks' });
     for (const b of mine) asks.append(link('b.' + b.id, { class: 'need go' },
       h('span', { class: 'chip accent' }, b.status === 'draft' ? 'Started' : (b.mode === 'question' ? 'Answer' : 'Judge ' + b.count)), h('span', { class: 'grow' }, b.title), h('span', { class: 'chip' }, KIND[b.kind] || b.kind)));
-    if (confirms) asks.append(link('test_runs', { class: 'need go' }, h('span', { class: 'chip accent' }, 'Confirm'), h('span', { class: 'grow' }, confirms === 1 ? 'One fix to confirm in the build' : confirms + ' fixes to confirm in the build')));
+    if (confirms) asks.append(link('test_runs', { class: 'need go' }, h('span', { class: 'chip accent' }, 'Confirm'), h('span', { class: 'grow' }, confirms === 1 ? 'One fix to confirm' : confirms + ' fixes to confirm')));
     for (const n of myNotes) asks.append(link('notes', { class: 'need go' },
       h('span', { class: 'chip accent' }, n.choice_at !== null && n.choice_at !== undefined ? 'Pick' : n.status === 'confirm' ? 'Confirm' : 'Reply'), h('span', { class: 'grow', html: inline(clip(n.status === 'confirm' ? n.reading || n.text : n.text, 110)) }), h('span', { class: 'chip' }, 'Note')));
     for (const x of openHands) asks.append(askRow(x));
@@ -3484,9 +3476,9 @@
     const rail = h('aside', { class: 'rail', 'aria-label': 'Needs you' },
       h('div', { class: 'railhead' }, h('h2', {}, 'Needs you'), owed ? h('span', { class: 'count hot' }, String(owed)) : null, h('span', { class: 'grow' }), notifySwitch(),
         openHands.length > 1 ? [h('button', { class: 'btn small', type: 'button', onclick: () => setAll(true) }, 'Open all'), h('button', { class: 'btn small', type: 'button', onclick: () => setAll(false) }, 'Close all')] : null),
-      owed ? asks : h('div', { class: 'empty' }, 'Nothing waits on you.'),
-      sent.length ? h('div', { class: 'say' }, h('span', {}, sent.length + (sent.length === 1 ? ' verdict waits' : ' verdicts wait') + ' on Claude. Say to Claude Code:'), h('code', {}, SAY), copyButton(SAY)) : null,
-      laterHands.length ? fold('later', false, 'brief', 'Yours later, nothing waits on these yet (' + laterHands.length + ')', h('div', { class: 'asks' }, laterHands.map(askRow))) : null,
+      owed ? asks : h('div', { class: 'empty' }, 'Nothing waiting.'),
+      sent.length ? h('div', { class: 'say' }, h('span', {}, sent.length + ' waiting on Claude'), h('code', {}, SAY), copyButton(SAY)) : null,
+      laterHands.length ? fold('later', false, 'brief', 'Later (' + laterHands.length + ')', h('div', { class: 'asks' }, laterHands.map(askRow))) : null,
       oldHands.length ? fold('answered', false, 'brief', 'Answered (' + oldHands.length + ')', h('div', { class: 'asks' }, oldHands.map(askRow))) : null,
       next.length ? [h('h2', { class: 'railsub' }, 'Next up'), h('ul', { class: 'nextup' }, next.map(([text, eta]) => h('li', {}, h('span', { html: inline(text) }), eta ? h('span', { class: 'sub' }, eta) : null)))] : null);
     return h('main', { class: 'hud' }, col, rail);
@@ -3504,12 +3496,12 @@
         game.branch ? h('span', { class: 'chip' }, game.branch + ' @ ' + game.head) : null,
         now.spec ? h('span', { class: 'chip' }, now.spec) : null,
         now.updated ? h('span', { class: 'sub muted' }, 'written ' + when(now.updated)) : null,
-        game.since_now ? h('span', { class: 'chip redo', title: 'The project repo has moved since this was written' }, game.since_now + ' commit' + (game.since_now === 1 ? '' : 's') + ' since') : null)));
-    if (!(now.built || []).length && !(now.start || []).length && !commits.length) main.append(h('div', { class: 'empty' }, 'No build has been written up yet.'));
+        game.since_now ? h('span', { class: 'chip redo' }, game.since_now + ' commit' + (game.since_now === 1 ? '' : 's') + ' since') : null)));
+    if (!(now.built || []).length && !(now.start || []).length && !commits.length) main.append(h('div', { class: 'empty' }, 'No build yet.'));
     main.append(h('section', {}, h('div', { class: 'ovgrid' }, list('In the build', now.built), list('Next', now.next)),
       (now.start || []).length ? h('div', { class: 'ovcol' }, h('h3', {}, 'Start it'), now.start.map((line) => h('div', { class: 'runline' }, h('code', { class: 'i' }, line), copyButton(line)))) : null,
-      (now.known || []).length ? fold('known', false, 'brief', 'Known and left as it is (' + now.known.length + ')', h('ul', { class: 'plain' }, now.known.map((x) => h('li', { html: inline(x) })))) : null,
-      commits.length ? fold('commits', false, 'brief', 'Latest work in the project repo',
+      (now.known || []).length ? fold('known', false, 'brief', 'Known (' + now.known.length + ')', h('ul', { class: 'plain' }, now.known.map((x) => h('li', { html: inline(x) })))) : null,
+      commits.length ? fold('commits', false, 'brief', 'Latest commits',
         h('div', { class: 'rows', style: 'margin-top:8px' }, commits.map((c) => h('div', { class: 'row' }, h('span', { class: 'mono muted' }, c.sha), h('div', { class: 'grow' }, c.subject), h('span', { class: 'sub' }, when(c.date)))))) : null));
 
     // what the project still lacks
@@ -3520,7 +3512,7 @@
       const names = Object.keys(groups).sort((a, b) => lack(groups[b]) - lack(groups[a]) || a.localeCompare(b));
       const missing = slots.filter((s) => s.status === 'needed' || s.status === 'placeholder').length;
       main.append(h('section', {},
-        h('div', { class: 'sec-head' }, h('h2', {}, 'What the project still lacks'), h('p', {}, missing + ' missing or stand-ins · ' + slots.filter((x) => x.status === 'in_review').length + ' waiting on your verdict · ' + slots.length + ' in all'), link('library', {}, 'Open the Library')),
+        h('div', { class: 'sec-head' }, h('h2', {}, 'What the project still lacks'), h('p', {}, missing + ' missing · ' + slots.filter((x) => x.status === 'in_review').length + ' in review · ' + slots.length + ' in all'), link('library', {}, 'Library')),
         h('div', { class: 'legend' }, ORDER.map((s) => h('span', {}, h('span', { class: 'dot st-' + s }), SLOT[s]))),
         h('div', { class: 'rows' }, names.map((name) => { const g = groups[name]; return link('library', { class: 'row lack', onclick: (e) => { e.preventDefault(); S.libGroup = name; go('library'); } },
           h('div', { class: 'gname' }, name),
@@ -4960,13 +4952,9 @@
   // the switch at the top of Needs you: off until the user turns it on, and Windows asks once for this page
   function notifySwitch() {
     if (!canNotify()) return null;
-    const on = notifyOn(), allowed = Notification.permission, where = S.state.hub ? 'any project open in NocStudio' : 'this project';
+    const on = notifyOn(), allowed = Notification.permission;
     const label = !on ? 'Notify' : allowed === 'granted' ? 'Notify' : allowed === 'denied' ? 'Notify: blocked here' : 'Notify: allow here';
-    const title = !on ? 'Off. Turn it on and Windows tells you when something new lands in Needs you, in ' + where
-      : allowed === 'granted' ? 'On: Windows tells you when something new lands in Needs you, in ' + where + '. Press to turn it off'
-      : allowed === 'denied' ? 'On, but this page is blocked from showing notifications: allow them in the site settings for this address, then press again'
-      : 'On, but this page has not been allowed to show notifications yet: press, and say Allow';
-    return h('button', { class: 'btn small notify-btn' + (on && allowed === 'granted' ? ' on' : ''), type: 'button', title, 'aria-pressed': String(on), onclick: notifyPress }, label);
+    return h('button', { class: 'btn small notify-btn' + (on && allowed === 'granted' ? ' on' : ''), type: 'button', 'aria-pressed': String(on), onclick: notifyPress }, label);
   }
   function notifyDraw() { for (const b of document.querySelectorAll('.notify-btn')) { const n = notifySwitch(); if (n) b.replaceWith(n); else b.remove(); } }
   async function notifyPress() {
@@ -4976,16 +4964,16 @@
     if (allowed === 'default') { try { allowed = await Notification.requestPermission(); } catch (e) { allowed = Notification.permission; } }
     if (allowed !== 'granted') {
       notifyDraw();
-      toast(allowed === 'denied' ? 'Notifications are blocked for this page: allow them in the site settings for this address, then press Notify again' : 'Notifications were not allowed: press Notify again and say Allow');
+      toast(allowed === 'denied' ? 'Blocked: allow notifications in site settings' : 'Not allowed: press Notify, then Allow');
       return;
     }
-    if (!on) await notifySet(true); else { notifyDraw(); toast('Notifications are on for this page too'); }
+    if (!on) await notifySet(true); else { notifyDraw(); toast('Notifications on'); }
     notifyLook();
   }
   async function notifySet(on) {
     try {
       const d = await API.ui({ notify: on }); S.state.ui = d.ui || Object.assign({}, S.state.ui, { notify: on }); notifyDraw();
-      toast(on ? 'Notifications on: what lands in Needs you shows in Windows while NocStudio is open' : 'Notifications off');
+      toast(on ? 'Notifications on' : 'Notifications off');
     } catch (e) { toast(e.message); }
   }
   // asks the server what is new; with no leave to show it here, the server keeps it for a page that has
@@ -5021,7 +5009,7 @@
   }
   function reveal() {
     const el = $(S.focus); S.focus = '';
-    if (!el) { toast('That is no longer waiting on you'); return; }
+    if (!el) { toast('No longer waiting'); return; }
     el.scrollIntoView({ block: 'center' }); el.classList.add('found'); setTimeout(() => el.classList.remove('found'), 2500);
   }
   if (!STATIC) setInterval(notifyLook, 5000);

@@ -32,9 +32,8 @@
   .ideabox .row { display: flex; gap: 8px; align-items: center; justify-content: flex-end; }
   .ideabox .said { flex: 1 1 auto; font-size: 13px; }
   .dump { display: flex; flex-direction: column; gap: 8px; max-width: 980px; margin-bottom: 14px; }
-  .dump .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-  .dump .row .muted { flex: 1 1 auto; font-size: 13px; }
-  .dump .said { font-size: 13px; color: var(--fg); }
+  .dump .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; background: none; padding: 0; }
+  .dump .said { flex: 1 1 auto; font-size: 13px; color: var(--fg); }
   .vpages { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 520px), 1fr)); gap: 14px; align-items: start; }
   .vpage { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 18px; max-height: 70vh; overflow: auto; min-width: 0; }
   .vpage .vh { display: flex; gap: 10px; align-items: baseline; }
@@ -54,28 +53,27 @@
 </style>
 </head>
 <body>
-<header class="top"><span class="brand"><b>Noc</b>Studio<small>Your projects</small></span><span class="spacer"></span><button class="btn small" id="notify-btn" type="button" hidden>Notify</button><button class="btn small usage-btn" id="usage-btn" type="button" title="Your plan's usage (/usage)" hidden>Usage</button></header>
+<header class="top"><span class="brand"><b>Noc</b>Studio</span><span class="spacer"></span><button class="btn small" id="notify-btn" type="button" hidden>Notify</button><button class="btn small usage-btn" id="usage-btn" type="button" hidden>Usage</button></header>
 <div class="notepop usagepop" id="usage-pop" role="dialog" aria-label="Usage" hidden></div>
 <main>
   <section>
     <h1 id="head">Your projects</h1>
-    <p class="lede" id="lede">Pick one to open its Studio. It runs while this window is open. Close the window and it stops, once every Talk session has finished what it is doing.</p>
     <div class="projects" id="list"></div>
     <div class="ideabox" id="idea" hidden>
       <button class="btn small" type="button" id="idea-open">Start from an idea</button>
       <form id="idea-form" hidden>
-        <input class="field" id="idea-name" type="text" maxlength="60" placeholder="A name for it (the project folder gets this name)" aria-label="The idea's name">
-        <textarea class="field" id="idea-text" rows="4" placeholder="The idea, however loose. Claude asks you 3 to 5 questions at a time until it is clear, then writes the spec." aria-label="The idea"></textarea>
+        <input class="field" id="idea-name" type="text" maxlength="60" placeholder="Name" aria-label="The idea's name">
+        <textarea class="field" id="idea-text" rows="4" placeholder="The idea" aria-label="The idea"></textarea>
         <div class="row"><span class="said" id="idea-said" role="status"></span><button class="btn small" type="button" id="idea-cancel">Not now</button><button class="btn small primary" type="submit">Start</button></div>
       </form>
     </div>
-    <div class="empty" id="none" hidden>No project has a Studio yet. In a project, say to Claude Code: <code class="i">create a studio page for this</code></div>
+    <div class="empty" id="none" hidden>No projects yet.</div>
   </section>
   <section id="vault" hidden>
     <h1>Your notes</h1>
     <div class="dump" id="vault-dump" hidden>
-      <textarea class="field" id="vault-text" rows="2" aria-label="A thought for later" placeholder="A thought for later. Enter adds it; Shift+Enter starts a new line."></textarea>
-      <div class="row"><span class="muted" id="vault-dump-to"></span><span class="said" id="vault-said" role="status"></span><button class="btn small primary" type="button" id="vault-add">Add</button></div>
+      <textarea class="field" id="vault-text" rows="2" aria-label="A thought for later" placeholder="Note"></textarea>
+      <div class="row"><span class="said" id="vault-said" role="status"></span><button class="btn small primary" type="button" id="vault-add">Add</button></div>
     </div>
     <div class="vpages" id="vault-pages"></div>
   </section>
@@ -132,7 +130,6 @@
         row.waitsTalk = !!(talk.asks || talk.replies);
         if (row.waitsTalk) {
           card.classList.add('waits');
-          card.title = 'A Talk session waits on you; this opens its Talk page';
           if (talk.asks) chips.append(el('span', 'chip accent', talk.asks === 1 ? 'Talk asks you' : talk.asks + ' talks ask you'));
           if (talk.replies) chips.append(el('span', 'chip accent', talk.replies === 1 ? 'Claude replied' : talk.replies + ' replies to read'));
         }
@@ -152,7 +149,6 @@
     if (busy) return;
     try {
       const data = await (await fetch('api/hub')).json(); look(data.ui || {}); draw(data.studios || []);
-      if (data.served) document.getElementById('lede').textContent = 'Pick one to open its Studio.';
     } catch (e) { /* the app is closing */ }
   }
   load(); setInterval(load, 5000);
@@ -170,7 +166,6 @@
     const t = top();
     btn.textContent = t ? 'Usage ' + Math.round(t.pct) + '%' : 'Usage';
     btn.classList.toggle('hot', !!t && t.pct >= 80);
-    if (t) btn.title = t.name + ': ' + Math.round(t.pct) + '% used' + (t.resets ? ', resets ' + t.resets : '');
     if (pop.hidden) return;
     const head = el('div', 'jh'), again = el('button', 'btn small', U.busy ? 'Reading…' : 'Check again'), close = el('button', 'btn small', 'Close (Esc)');
     again.type = close.type = 'button'; again.disabled = U.busy;
@@ -185,9 +180,9 @@
       kids.push(bar);
     }
     if (U.err) kids.push(el('div', 'tline bad', U.err));
-    if ((U.data || {}).text) { const d = el('details'); d.append(el('summary', '', 'Everything /usage says'), el('pre', 'utext', U.data.text)); kids.push(d); }
-    else if (U.busy) kids.push(el('div', 'muted', 'Reading /usage…'));
-    if ((U.data || {}).at) kids.push(el('div', 'muted', 'Read at ' + new Date(U.data.at).toLocaleTimeString() + '. Reading it calls no model, so it costs nothing.'));
+    if ((U.data || {}).text) { const d = el('details'); d.append(el('summary', '', 'Full text'), el('pre', 'utext', U.data.text)); kids.push(d); }
+    else if (U.busy) kids.push(el('div', 'muted', 'Reading…'));
+    if ((U.data || {}).at) kids.push(el('div', 'muted', 'Read at ' + new Date(U.data.at).toLocaleTimeString()));
     pop.replaceChildren(...kids);
   }
   async function load(fresh) {
@@ -220,10 +215,7 @@
     const p = Notification.permission;
     btn.textContent = !N.on || p === 'granted' ? 'Notify' : p === 'denied' ? 'Notify: blocked here' : 'Notify: allow here';
     btn.classList.toggle('on', N.on && p === 'granted'); btn.setAttribute('aria-pressed', String(N.on));
-    said(!N.on ? 'Off. Turn it on and Windows tells you when something new lands in Needs you, in any project open in NocStudio'
-      : p === 'granted' ? 'On: Windows tells you when something new lands in Needs you, in any project open in NocStudio. Press to turn it off'
-      : p === 'denied' ? 'On, but this page is blocked from showing notifications: allow them in the site settings for this address, then press again'
-      : 'On, but this page has not been allowed to show notifications yet: press, and say Allow');
+    said('');
   }
   function show(x) {
     try {
@@ -249,7 +241,7 @@
     if (N.on && Notification.permission === 'granted') { await set(false); return; }
     let p = Notification.permission;
     if (p === 'default') { try { p = await Notification.requestPermission(); } catch (e) { p = Notification.permission; } }
-    if (p !== 'granted') { draw(); said(p === 'denied' ? 'Notifications are blocked for this page: allow them in the site settings for this address, then press again' : 'Notifications were not allowed: press again and say Allow'); return; }
+    if (p !== 'granted') { draw(); said(p === 'denied' ? 'Allow in site settings' : 'Press again, then Allow'); return; }
     if (!N.on) await set(true); else draw();
     look();
   });
@@ -263,7 +255,7 @@
   document.getElementById('idea-open').addEventListener('click', () => { form.hidden = false; document.getElementById('idea-name').focus(); });
   document.getElementById('idea-cancel').addEventListener('click', () => { form.hidden = true; said.textContent = ''; });
   form.addEventListener('submit', async (e) => {
-    e.preventDefault(); said.textContent = 'Making its folder and Studio…';
+    e.preventDefault(); said.textContent = 'Making it…';
     try {
       const res = await fetch('api/idea', { method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: document.getElementById('idea-name').value, text: document.getElementById('idea-text').value }) });
