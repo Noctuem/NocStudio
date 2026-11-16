@@ -169,6 +169,14 @@ where on the frame the paint sits, in the clip's own pixels from its top left
 corner. Frames count from 0: frame n starts n / fps seconds in, so the time
 given for a frame is the middle of it. Only the first twelve marks get frames
 on the sheet and a picture of their own; the rest are in the legend.
+A mark on a clip may also carry a **box**: a part of the screen the user
+points at, on screen for the whole of that mark (on its one frame for a
+moment). `todo` gives its place as shares of the frame from its top left
+corner (left, top, width, height, and the pixels when the size is known)
+and the times it covers. The box is drawn in the mark's colour on its frames
+on the sheet and on its own picture, and a stretch with a box also has
+pictures of its middle and last frames (`marks/<candidate>/<mark>-middle.png`,
+`-end.png`). The mark's note is about what is in the box over that time.
 Each mark says what it asks for: a plain change is the part to fix; **KEEP**
 is a fence around that part, which must come through the redo as it is;
 **CUT** means that stretch goes. A note is about its own moment or stretch

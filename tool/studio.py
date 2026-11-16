@@ -29,7 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from studiolib import bake, board, checks, notes as notebox, server, setup, sync  # noqa: E402
 from studiolib.store import (HAND_KINDS, HAND_STATUS, KINDS, MILESTONE_STATUS, MODES, NOTE_KINDS, OLD_KIND,  # noqa: E402
                              OLD_SOURCE, OLD_STATUS, SLOT_STATUS, TRIAGE_STATUS, Studio, StudioError)
-from studiolib.store import span_head  # noqa: E402
+from studiolib.store import box_text, span_head  # noqa: E402
 
 
 def today_names(argv: list[str]) -> list[str]:
@@ -415,6 +415,10 @@ def cmd_todo(a):
                             print(f"                     where: {m['where']}")
                         if m["picture"]:
                             print(f"                     its own picture: {m['picture']}")
+                        if m.get("box"):
+                            print(f"                     box: {box_text(m, marks)}")
+                            for more in m["box_pictures"]:
+                                print(f"                     the box on its {more['frame']} frame: {more['picture']}")
                     marks = None
                 if marks:
                     print(f"           marked in colours; the picture of it: {marks['picture'] or '(not saved; ask them to open it again)'}")

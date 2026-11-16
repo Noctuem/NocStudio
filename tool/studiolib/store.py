@@ -69,6 +69,12 @@ TIMELINE_KINDS = ("sound", "video")  # marks on these are moments and stretches 
 MARK_TAGS = ("change", "cut", "keep")  # what a mark on a sound or a clip asks for; keep is a fence around that part
 MARK_SPANS = 40  # marks kept on one sound or clip
 MARK_ID = re.compile(r"m[0-9]{1,6}")  # a mark's own name: given once by the page, and the name of its picture
+MARK_SHOT = re.compile(r"m[0-9]{1,6}(-middle|-end)?")  # a mark's own picture: its first frame, and with a box its middle and last ones
+BOX_PARTS = (("-middle", "middle"), ("-end", "last"))  # the pictures of a box on a stretch besides its first frame, and what they show
+BOX_LEAST = 0.005  # a box narrower or lower than this share of the frame cannot be seen, and is dropped
+BOX_SAY = ("A mark on a clip may carry a box: the part of the screen the user points at, on screen for the whole of that "
+           "mark. Its place is given as shares of the frame from its top left corner (left, top, width, height), and its "
+           "pictures show it drawn on the mark's first, middle and last frames. The note is about what is in the box.")
 HAND_STATUS = ("open", "later", "done", "parked")  # later: the user's, but nothing waits on it yet
 HAND_KINDS = ("action", "decision", "play", "info")  # something to do, a question to answer, a build to try, a thing to know
 # how the user likes the page: one answer for every Studio here (STUDIO_PREFS names another file, for a test)
@@ -232,6 +238,8 @@ def clean_timeline(raw: dict) -> dict | None:
                     facts[key] = [round(float(x), 3) for x in val]
             if facts:
                 span["facts"] = facts
+        if video and clean_box(s.get("box")):  # a part of the picture, on screen for the whole of the mark
+            span["box"] = clean_box(s["box"])
         if video:  # paint on the frame at the mark's start, in the clip's own pixels
             strokes = []
             for k in s.get("strokes") or []:
@@ -250,6 +258,33 @@ def clean_timeline(raw: dict) -> dict | None:
     spans.sort(key=lambda x: (x["t0"], x["t1"], int(x["id"][1:])))  # in time order: the page numbers them 1, 2, 3 this way
     out["spans"] = spans
     return out if spans else None
+
+
+def clean_box(raw) -> dict | None:
+    """A box on a clip's picture as shares of the frame from its top left corner, cut to the frame; one that is no box,
+    or too small to see, is dropped."""
+    num = lambda x: isinstance(x, (int, float)) and not isinstance(x, bool) and x == x and abs(x) != float("inf")  # noqa: E731
+    if not isinstance(raw, dict) or not all(num(raw.get(k)) for k in ("left", "top", "width", "height")):
+        return None
+    fit = lambda x: min(1.0, max(0.0, float(x)))  # noqa: E731
+    x0, x1 = fit(raw["left"]), fit(raw["left"] + raw["width"])
+    y0, y1 = fit(raw["top"]), fit(raw["top"] + raw["height"])
+    if x1 - x0 < BOX_LEAST or y1 - y0 < BOX_LEAST:
+        return None
+    return {"left": round(x0, 4), "top": round(y0, 4), "width": round(x1 - x0, 4), "height": round(y1 - y0, 4)}
+
+
+def box_text(row: dict, marks: dict) -> str:
+    """Where a mark's box sits on the clip, and when it is on screen, in a line."""
+    b, say = row["box"], lambda t: f"{t:.2f} s"  # noqa: E731
+    line = f"left {b['left']:.3f}, top {b['top']:.3f}, width {b['width']:.3f}, height {b['height']:.3f} of the frame"
+    if marks.get("size"):
+        w, h = marks["size"]
+        line += (f" (x {round(b['left'] * w)} to {round((b['left'] + b['width']) * w)},"
+                 f" y {round(b['top'] * h)} to {round((b['top'] + b['height']) * h)} of {w} x {h})")
+    if row["t1"] > row["t0"]:
+        return line + f"; on screen from {say(row['t0'])} to {say(row['t1'])}, the whole of the mark"
+    return line + f"; on screen at {say(row['t0'])} only"
 
 
 def marks_say(marks) -> bool:
@@ -763,8 +798,9 @@ class Studio:
         os.replace(tmp, path)
 
     def mark_picture(self, batch_id: str, cid: str, span: str) -> Path:
-        """The picture of one mark on a clip or a sound: what is at its start, large enough to see."""
-        if not MARK_ID.fullmatch(str(span)):
+        """The picture of one mark on a clip or a sound: what is at its start, large enough to see. With a box on a
+        stretch, m3-middle and m3-end are its middle and last frames."""
+        if not MARK_SHOT.fullmatch(str(span)):
             raise StudioError(f"{span!r} is not a mark; a mark is named m1, m2 and so on")
         return self.batch_dir(batch_id) / "marks" / safe_id(cid, "candidate") / f"{span}.png"
 
@@ -793,7 +829,7 @@ class Studio:
             if not folder.is_dir():
                 continue
             marks = (verdict["candidates"].get(cand["id"]) or {}).get("marks") or {}
-            live = {s["id"] for s in marks.get("spans") or []}
+            live = {s["id"] + part for s in marks.get("spans") or [] for part in ("",) + (tuple(p for p, _ in BOX_PARTS) if s.get("box") else ())}
             for path in folder.glob("*.png"):
                 if path.stem not in live:
                     path.unlink(missing_ok=True)
@@ -813,6 +849,9 @@ class Studio:
                 rows.append({"number": n, "id": s["id"], "colour": s["c"], "tag": s["tag"], "moment": s["t1"] <= s["t0"],
                              "t0": s["t0"], "t1": s["t1"], "note": s.get("note", ""), "where": s.get("where", ""),
                              "picture": str(own) if own.exists() else ""})
+                if s.get("box"):  # a part of the picture, and the pictures of it on the mark's middle and last frames
+                    more = [(at, self.mark_picture(batch_id, cid, s["id"] + part)) for part, at in BOX_PARTS]
+                    rows[-1].update(box=s["box"], box_pictures=[{"frame": at, "picture": str(p)} for at, p in more if p.exists()])
             return dict({k: marks[k] for k in ("file", "length", "fps", "size", "tempo") if k in marks},
                         on=marks["kind"], picture=str(sheet) if sheet.exists() else "", colours=[], spans=rows)
         picture = self.marks_picture(batch_id, cid)
@@ -1226,7 +1265,8 @@ class Studio:
                          "redo as it is. CUT means that stretch goes. A plain change with no note still says that part is wrong."
                          + (" On a clip the frames count from 0 (frame n starts n / fps seconds in), and paint is on the mark's first "
                             "frame: its own picture is that frame at the clip's size with the paint over it."
-                            if any(((verdict["candidates"].get(c) or {}).get("marks") or {}).get("kind") == "video" for c in timed) else ""))
+                            if any(((verdict["candidates"].get(c) or {}).get("marks") or {}).get("kind") == "video" for c in timed) else "")
+                         + (" " + BOX_SAY if any(s.get("box") for c in timed for s in ((verdict["candidates"].get(c) or {}).get("marks") or {}).get("spans") or []) else ""))
         marked = [c["id"] for c in batch["candidates"] if (verdict["candidates"].get(c["id"]) or {}).get("marks")]
         marked = [c for c in marked if c not in timed]
         if marked:
@@ -1287,12 +1327,16 @@ class Studio:
                    "through the redo as it is. CUT means that stretch goes."
                  + (" Paint is on a mark's first frame: its own picture is that frame at the clip's size with the paint over it."
                     if marks["on"] == "video" else "")
+                 + (" " + BOX_SAY if any(m.get("box") for m in marks["spans"]) else "")
                  + (f" Open the sheet first, {here(marks['picture'])}: every mark is numbered on it, with a legend." if marks["picture"] else ""), ""]
         for m in marks["spans"]:
             said = "> " + m["note"].replace("\n", "\n> ") if m["note"] else "(no note for this mark)"
             lines += [f"- **{span_head(m, marks['on'])}**" + (f" ({m['where']})" if m["where"] else "") + ":", "", "  " + said.replace("\n", "\n  ")]
             if m["picture"]:
                 lines += ["", f"  Its own picture: {here(m['picture'])}"]
+            if m.get("box"):
+                lines += ["", f"  Box: {box_text(m, marks)}"
+                          + "".join(f"; the box on its {more['frame']} frame: {here(more['picture'])}" for more in m["box_pictures"])]
         return lines
 
     def brief(self, batch_id: str) -> str:
