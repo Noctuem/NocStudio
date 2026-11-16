@@ -745,7 +745,6 @@
     '}'].join('\n');
   // the layer needs WebGL2; without it the brush paints whole faces, as it did before there were strokes
   const paintsFine = () => { const r = renderer3(); return !!(r && r.capabilities.isWebGL2); };
-  const modelHint = () => (paintsFine() ? 'Paint over it' : 'Paint faces') + ' · right-drag turns it · scroll zooms';
   function markModel(v, ink) {
     const meshes = [], byKey = {}, overlays = new Map(), drags = [], V = new THREE.Vector3(), M = new THREE.Matrix4(), ray = new THREE.Raycaster(), tri = new THREE.Triangle();
     const fine = paintsFine();
@@ -2216,7 +2215,8 @@
           return add(t0, t1, more);
         };
         tl.describe = (s) => { if (!snd) thin = true; return soundWhere(s, tl, snd); };
-        list = spanList(tl, { editable, when: spanWhen, goto: (s) => tp.seek(s.t0), loop: spanLoop(tl, tp), looping: () => tp.looping() });
+        list = spanList(tl, { editable, when: spanWhen, goto: (s) => tp.seek(s.t0), loop: spanLoop(tl, tp), looping: () => tp.looping(),
+          none: () => (o.editable() ? 'No marks yet.' : 'No marks.') });
         side.replaceChildren(list.el);
         lane = spanLane(strip, tl, map, { editable, seek: (t) => tp.seek(t) });
         tl.subs.push((what) => {
@@ -2849,7 +2849,7 @@
         hadBox.clear(); boxSeen.clear(); boxKey = '';
         for (const s of tl.spans) { boxSeen.set(s.id, boxSig(s)); if (s.box) hadBox.add(s.id); }
         list = spanList(tl, { editable, when: listWhen, goto: (s) => tp.seek(s.t0), loop: spanLoop(tl, tp), looping: () => tp.looping(),
-          none: () => bad || 'No marks yet.' });
+          none: () => bad || (o.editable() ? 'No marks yet.' : 'No marks.') });
         side.replaceChildren(list.el);
         lane = spanLane(strip, tl, map, { editable, seek: (t) => tp.seek(t), fixed: pinned });
         tl.subs.push((what) => {
@@ -4288,7 +4288,7 @@
     if (one && medias[0].el.classList.contains('timed')) {  // a sound or a clip: its own hint, and its own keys once it takes marks
       const view = medias[0].timed;
       if (view) Object.assign(S.over, { keys: (e) => !!view.keys && view.keys(e), keep: view.slow ? () => view.tp.hold() : null });
-      bar.querySelector('.hint').replaceChildren(h('kbd', {}, '←'), ' ', h('kbd', {}, '→'), ' next' + (view ? ' · each mark has its own note, in the list beside it' : ''));
+      bar.querySelector('.hint').replaceChildren(h('kbd', {}, '←'), ' ', h('kbd', {}, '→'), ' next');
     }
     document.body.append(el); document.body.style.overflow = 'hidden';
     mark();
@@ -4320,8 +4320,7 @@
       pending = true; clearTimeout(timer); timer = setTimeout(send, 1500);
     });
     S.markFlush = send;
-    if (editable()) bar.after(h('div', { class: 'tools overtools' }, markTools(ink, live),
-      h('span', { class: 'hint' }, isModel ? modelHint() + ' · a motion holds on its frame while you paint' : 'Paint areas · right-drag moves it · scroll zooms')));
+    if (editable()) bar.after(h('div', { class: 'tools overtools' }, markTools(ink, live)));
     return markNotes(ink, editable, (mo) => live().goto && live().goto(mo));
   }
 
@@ -4335,7 +4334,7 @@
     const stage = h('div', { class: 'pane' });
     if (isModel) { view = modelView(f.url, { zoom: true, clip: f.clip }); stage.append(view.el); marker = markModel(view, ink); }
     else { pane = zoomPane(f.url, { t: { z: 1, cx: 0.5, cy: 0.5 }, panes: [] }); stage.append(pane.el); marker = markImage(pane, ink); }
-    const words = h('textarea', { class: 'field', rows: 2, placeholder: 'Anything else about it (optional)', 'aria-label': 'A note on the whole thing' });
+    const words = h('textarea', { class: 'field', rows: 2, placeholder: 'Anything else', 'aria-label': 'A note on the whole thing' });
     const close = () => { document.removeEventListener('keydown', key); if (view) view.destroy(); if (pane && pane.destroy) pane.destroy(); el.remove(); document.body.style.overflow = ''; };
     const key = (e) => { if (e.key === 'Escape' && !/^(TEXTAREA|INPUT)$/.test((e.target || {}).tagName || '')) { close(); e.stopPropagation(); } };
     const send = h('button', { class: 'btn primary', type: 'button', onclick: async () => {
@@ -4356,7 +4355,7 @@
     const bar = h('div', { class: 'bar' }, h('h3', {}, 'Mark ' + s.title), h('span', { class: 'hint' }, f.label),
       h('button', { class: 'btn small', type: 'button', onclick: close }, 'Close (Esc)'));
     const el = h('div', { class: 'over marking', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Mark ' + s.title }, bar,
-      h('div', { class: 'tools overtools' }, markTools(ink, () => marker), h('span', { class: 'hint' }, isModel ? modelHint() : 'Paint areas · right-drag moves it · scroll zooms')),
+      h('div', { class: 'tools overtools' }, markTools(ink, () => marker)),
       h('div', { class: 'panes' }, stage),
       h('div', { class: 'side marking' }, h('div', {}, markNotes(ink, () => true, (mo) => marker.goto && marker.goto(mo))), h('div', {}, words, h('div', { class: 'jf' }, send))));
     document.body.append(el); document.body.style.overflow = 'hidden';
