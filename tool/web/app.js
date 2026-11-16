@@ -4257,7 +4257,8 @@
   function noteCard(n) {
     S.notes = S.notes || {};
     const key = 'n:' + n.id, open = ['new', 'confirm', 'go', 'talk'].includes(n.status);
-    const act = async (action, extra, said) => { try { await API.note(n.id, action, extra); delete S.notes[key]; await afterNote(said); } catch (e) { toast(e.message); } };
+    const act = async (action, extra, said) => { // the box is emptied only by what sends its words; a change of category or of session leaves them there
+      try { await API.note(n.id, action, extra); if (extra && 'text' in extra) delete S.notes[key]; await afterNote(said); } catch (e) { toast(e.message); } };
     const takes = open || n.status === 'later';
     const addFiles = async (fs) => { for (const f of fs) f.studioName = stampName(f); try { await sendFiles(n.id, fs); await afterNote(fs.length === 1 ? 'File added' : fs.length + ' files added'); } catch (e) { toast(e.message); } };
     const words = (hint) => h('textarea', { class: 'field', rows: 1, placeholder: hint, 'aria-label': hint + ' (' + n.id + ')', value: S.notes[key] || '', oninput: (e) => { S.notes[key] = e.target.value; },
