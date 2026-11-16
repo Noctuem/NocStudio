@@ -7,9 +7,10 @@ import re
 import sys
 import threading
 import time
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path, PureWindowsPath
-from urllib.parse import parse_qs, unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urljoin, urlsplit
 
 from .store import Studio, StudioError, slugify, tomllib
 
@@ -415,6 +416,8 @@ def make_handler(home: Path, allowed_hosts: set[str], quiet: bool = False, hub: 
                                                    "pending": len(studio.todo())})
                         if verb == "reopen":
                             studio.reopen(batch_id)
+                            if watch:  # the user put it back themselves: not new
+                                watch.keep(studio.home, "batch:" + batch_id)
                             return self.send_json({"ok": True})
                         if verb == "reset":
                             studio.reset_sample(batch_id)
@@ -469,6 +472,8 @@ def make_handler(home: Path, allowed_hosts: set[str], quiet: bool = False, hub: 
                     if parts == ["api", "hand"]:
                         row = studio.answer_hand(str(data.get("id") or ""), str(data.get("action") or ""),
                                                  str(data.get("note") or ""))
+                        if watch and data.get("action") in ("undo", "reopen"):
+                            watch.keep(studio.home, "ask:" + str(data.get("id") or ""))
                         return self.send_json({"ok": True, "hand": row})
                 return self.fail(404, "no such route")
             except StudioError as err:
@@ -559,6 +564,7 @@ class Watch:
         self.known: dict[str, set] = {}  # the keys in each home's Needs you at the last look
         self.held: dict[tuple, dict] = {}  # new, and not yet handed to a page that can show it
         self.since = None  # when the user last turned notifications on, as this watch last saw it
+        self.remote: set = set()  # homes whose own server watches them already (started by studio.cmd): asked, not read
 
     @staticmethod
     def _read(home: str) -> list | None:
@@ -567,24 +573,51 @@ class Watch:
         except (StudioError, OSError, ValueError):
             return None  # a file being written, or the folder gone: next time
 
-    def add(self, home, url: str = "") -> None:
-        """Watch one more Studio; `url` is where its page is."""
+    def add(self, home, url: str = "", remote: bool = False) -> None:
+        """Watch one more Studio; `url` is where its page is. A `remote` one has its own server and its own watch,
+        which is asked what is new, so each thing still has one watch that hands it out."""
         home = str(Path(home).resolve())
         with self.lock:
             self.homes[home] = url
+            if remote:
+                self.remote.add(home)
+                return
+            self.remote.discard(home)
             if home not in self.known:
                 items = self._read(home)
                 if items is not None:
                     self.known[home] = {i["key"] for i in items}
+
+    def keep(self, home, key: str) -> None:
+        """The user put this back in Needs you themselves (Change my verdict, Undo, Open again): it is not new."""
+        home = str(Path(home).resolve())
+        with self.lock:
+            if home in self.known:
+                self.known[home].add(key)
+
+    @staticmethod
+    def _ask(url: str, can: bool) -> list:
+        """What another Studio's own watch hands out, at the address of its page."""
+        try:
+            with urllib.request.urlopen(url + "api/notices" + ("?can=1" if can else ""), timeout=2) as res:
+                got = json.loads(res.read().decode("utf-8"))
+            return [dict(n, url=urljoin(url, str(n.get("url") or ""))) for n in got.get("notices") or [] if isinstance(n, dict)]
+        except (OSError, ValueError, AttributeError):
+            return []  # closed, or busy: next time
 
     def look(self, can: bool) -> dict:
         """Whether notifications are on, and what is new since the last look; `can` says the asking page can show them."""
         ui = Studio.ui()
         on = bool(ui.get("notify"))
         with self.lock:
+            remote = [url for home, url in self.homes.items() if home in self.remote]
+        asked = [n for url in remote for n in self._ask(url, can)] if on else []
+        with self.lock:
             fresh = on and self.since == ui.get("notify_since")
             self.since = ui.get("notify_since") if on else None
             for home, url in self.homes.items():
+                if home in self.remote:
+                    continue
                 items = self._read(home)
                 if items is None:
                     continue
@@ -596,12 +629,12 @@ class Watch:
                     for item in items:
                         if item["key"] not in before:
                             self.held[(home, item["key"])] = dict(item, url=url + item.pop("to"))
-            if not on:
+            if not fresh:  # off, or just turned on: what is held is not new either
                 self.held.clear()
             out = list(self.held.values()) if on and can else []
             if out:
                 self.held.clear()
-        return {"on": on, "notices": out}
+        return {"on": on, "notices": out + asked}
 
 
 def studios_by_name(homes) -> dict:

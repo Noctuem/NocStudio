@@ -130,7 +130,7 @@ class Hub:
             except OSError:
                 state = _get(url + "api/state") or {}
                 if state.get("home") and Path(state["home"]) == Path(row["home"]).resolve():
-                    self.watch.add(row["home"], url)
+                    self.watch.add(row["home"], url, remote=True)  # its own server hands out what lands there
                     return url  # started some other way (studio.cmd): use it, and leave it running
                 raise StudioError(f"port {port} is taken by something that is not this Studio") from None
             threading.Thread(target=httpd.serve_forever, daemon=True).start()
