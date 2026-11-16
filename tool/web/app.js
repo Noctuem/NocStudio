@@ -1378,7 +1378,7 @@
     const swatches = MARK.map(([c, hex]) => h('button', { class: 'swatch', type: 'button', title: c, 'aria-label': 'Mark in ' + c, style: '--sw:' + hex,
       onclick: () => { ink.colour = c; ink.erase = false; if (!ink.on) toggle(true); draw(); } }));
     const sizes = ['S', 'M', 'L'].map((label, i) => h('button', { class: 'btn small', type: 'button', title: ['Small', 'Medium', 'Large'][i] + ' brush', onclick: () => { ink.size = i; draw(); } }, label));
-    const pen = h('button', { class: 'btn small', type: 'button', title: 'Paint on it. Right-drag turns or moves it; the wheel zooms.', onclick: () => toggle(!ink.on) }, 'Mark');
+    const pen = h('button', { class: 'btn small', type: 'button', onclick: () => toggle(!ink.on) }, 'Mark');
     const rub = h('button', { class: 'btn small', type: 'button', onclick: () => { ink.erase = !ink.erase; if (!ink.on) toggle(true); draw(); } }, 'Rub out');
     const undo = ink.kind === 'image' || ink.kind === 'model' ? h('button', { class: 'btn small', type: 'button', onclick: () => marker.undo() }, 'Undo') : null;
     const clear = h('button', { class: 'btn small', type: 'button', onclick: () => { if (inkUsed(ink).length) marker.clear(); } }, 'Clear all');
@@ -1398,10 +1398,10 @@
       for (const c of Object.keys(fields)) if (!used.includes(c)) { fields[c].row.remove(); delete fields[c]; }
       used.forEach((c, i) => {
         if (!fields[c]) {
-          const t = h('textarea', { class: 'field', rows: 1, placeholder: 'What the ' + c + ' marks are about', 'aria-label': 'Note for the ' + c + ' marks', value: ink.notes[c] || '',
+          const t = h('textarea', { class: 'field', rows: 1, placeholder: 'Note', 'aria-label': 'Note for the ' + c + ' marks', value: ink.notes[c] || '',
             oninput: () => { ink.notes[c] = t.value; ink.changed('notes'); } });
           t.disabled = !editableNow();
-          const when = h('button', { class: 'btn small moment', type: 'button', title: 'Show the model at this moment', onclick: (e) => { e.preventDefault(); if (goto) goto(ink.moments[c]); } });
+          const when = h('button', { class: 'btn small moment', type: 'button', title: 'Go to it', onclick: (e) => { e.preventDefault(); if (goto) goto(ink.moments[c]); } });
           fields[c] = { row: h('div', { class: 'marknote', style: '--sw:' + MARK_HEX[c] }, h('span', { class: 'sw' }), t, when), t, when };
         }
         const mo = ink.moments && ink.moments[c];
@@ -1674,9 +1674,9 @@
           bar.value = String(v.muted ? 0 : pct);
           btn.classList.toggle('off', off); btn.classList.toggle('low', !off && v.level < 0.5);
           btn.setAttribute('aria-pressed', String(v.muted));
-          const say = off ? 'Bring the sound back' + (v.muted ? ' at ' + pct + '%' : '') : 'Mute; the level is kept';
+          const say = off ? 'Unmute' : 'Mute';
           btn.title = say; btn.setAttribute('aria-label', say);
-          bar.title = 'Volume ' + (v.muted ? 'muted, kept at ' + pct + '%' : pct + '%');
+          bar.title = (v.muted ? 'Muted, ' : 'Volume ') + pct + '%';
         };
         bars.push(show); show();
         return h('span', { class: 'grp volbar' }, btn, bar);
@@ -1708,15 +1708,14 @@
       } });
       const when = h('button', { class: 'when', type: 'button', title: 'Go to it', onclick: () => { const s = get(); if (s) { tl.choose(s); opts.goto(s); } } });
       const tags = TAGS.map(([tag, label]) => h('button', { class: 'btn small', type: 'button', 'data-tag': tag,
-        title: { change: 'This part must change', cut: 'This stretch goes', keep: 'This part must stay as it is' }[tag],
         onclick: () => { const s = get(); if (s && opts.editable() && s.tag !== tag) tl.set(s, { tag }); } }, label));
-      const play = h('button', { class: 'play', type: 'button', 'aria-label': 'Play it round and round', title: 'Play it round and round', html: ICON_PLAY, onclick: () => { const s = get(); if (s) { tl.choose(s); opts.loop(s); } } });
-      const del = h('button', { class: 'btn small', type: 'button', title: 'Take this mark away (Delete)', 'aria-label': 'Take this mark away', onclick: () => { const s = get(); if (s && opts.editable()) tl.remove(s); } }, '×');
-      const note = h('textarea', { class: 'field', rows: 1, placeholder: 'What about this part', 'aria-label': 'Note for this mark',
+      const play = h('button', { class: 'play', type: 'button', 'aria-label': 'Loop it', title: 'Loop it', html: ICON_PLAY, onclick: () => { const s = get(); if (s) { tl.choose(s); opts.loop(s); } } });
+      const del = h('button', { class: 'btn small', type: 'button', title: 'Delete', 'aria-label': 'Delete', onclick: () => { const s = get(); if (s && opts.editable()) tl.remove(s); } }, '×');
+      const note = h('textarea', { class: 'field', rows: 1, placeholder: 'Note', 'aria-label': 'Note for this mark',
         oninput: () => { const s = get(); if (s) { s.note = note.value; tl.changed('notes'); } },
         onfocus: () => tl.choose(get()),
         onkeydown: (e) => { if (e.key === 'Escape') { note.blur(); e.preventDefault(); e.stopPropagation(); } } });  // Esc leaves the box; the next one closes the closer look
-      const told = h('div', { class: 'told', title: 'What Claude is told about where this mark is' });
+      const told = h('div', { class: 'told' });
       const el = h('div', { class: 'timemark', 'data-id': id }, h('div', { class: 'head' }, play, num, sw, when, del), h('div', { class: 'tags' }, tags), note, told);
       return { el, num, sw, when, tags, play, del, note, told };
     }
@@ -1732,7 +1731,7 @@
         r.tags.forEach((b) => { const on = b.dataset.tag === s.tag; b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); b.disabled = !can; });
         r.sw.disabled = r.del.disabled = r.note.disabled = !can; r.del.hidden = !can;
         if (document.activeElement !== r.note && r.note.value !== (s.note || '')) r.note.value = s.note || '';
-        if (what !== 'moved') r.told.textContent = tl.where(s);  // measured once the mark is let go, not at every step of a drag
+        if (what !== 'moved') { const w = tl.where(s) || '', cut = w.indexOf('; '); r.told.textContent = cut < 0 ? '' : w.slice(cut + 2); }  // its time is on the row already; measured once the mark is let go, not at every step of a drag
         r.el.classList.toggle('on', s.id === tl.chosen);
         r.play.classList.toggle('on', s.id === looping); r.play.innerHTML = s.id === looping ? ICON_STOP : ICON_PLAY;
         if (box.children[i] !== r.el) box.insertBefore(r.el, box.children[i] || null);
@@ -1751,9 +1750,9 @@
   function spanTools(tl, tp, can, canClear) {
     const act = (label, title, ok, fn) => h('button', { class: 'btn small', type: 'button', title, onclick: (e) => { e.currentTarget.blur(); if (ok()) fn(); } }, label);
     return h('div', { class: 'grp marktools' },
-      act('Moment', 'Mark the moment the playhead is at (M)', can, () => tl.add(tp.time())),
-      act('Undo', 'Undo the last change to the marks (Ctrl+Z)', can, () => { if (!tl.undo()) toast('Nothing to undo'); }),
-      act('Clear all', 'Take every mark away', canClear || can, () => tl.clear()));
+      act('Moment', 'M', can, () => tl.add(tp.time())),
+      act('Undo', 'Ctrl+Z', can, () => { if (!tl.undo()) toast('Nothing to undo'); }),
+      act('Clear all', null, canClear || can, () => tl.clear()));
   }
 
   // the keys both views share: Space plays and holds, Home and End, M drops a moment, [ and ] step through the marks,
@@ -2072,19 +2071,19 @@
     const ruler = h('canvas', { class: 'timeruler' + (opts.tempo ? ' bars' : '') }), wave = h('canvas'), over = h('canvas');
     const strip = h('div', { class: 'timelane' }, wave, over), head = h('div', { class: 'timehead', hidden: true });
     const box = h('div', { class: 'timewave' }, ruler, strip, head);
-    const thumb = h('div', { class: 'thumb' }), ticks = h('div', {}), scroll = h('div', { class: 'timescroll', title: 'Drag to move along the sound' }, ticks, thumb);
-    const playBtn = h('button', { class: 'btn small', type: 'button', title: 'Play or hold (Space)', onclick: (e) => { e.currentTarget.blur(); tp.toggle(); } }, 'Play');
+    const thumb = h('div', { class: 'thumb' }), ticks = h('div', {}), scroll = h('div', { class: 'timescroll' }, ticks, thumb);
+    const playBtn = h('button', { class: 'btn small', type: 'button', title: 'Space', onclick: (e) => { e.currentTarget.blur(); tp.toggle(); } }, 'Play');
     const time = h('span', { class: 't' }), status = h('span', { class: 'hint' });
     const rates = [[1, 'Full speed'], [0.5, 'Half']].map(([r, label]) => h('button', { class: 'btn small' + (S.opts.rate === r ? ' on' : ''), type: 'button', 'data-rate': r,
-      title: r === 1 ? 'Play at its own speed' : 'Play at half speed; the pitch stays', onclick: (e) => { e.currentTarget.blur(); S.opts.rate = r; showOpts(); tp.rate(r); } }, label));
-    const loopBtn = h('button', { class: 'btn small' + (S.opts.loop ? ' on' : ''), type: 'button', 'data-opt': 'loop', 'aria-pressed': String(!!S.opts.loop), title: 'Play the whole sound round and round, to hear its seam',
+      onclick: (e) => { e.currentTarget.blur(); S.opts.rate = r; showOpts(); tp.rate(r); } }, label));
+    const loopBtn = h('button', { class: 'btn small' + (S.opts.loop ? ' on' : ''), type: 'button', 'data-opt': 'loop', 'aria-pressed': String(!!S.opts.loop),
       onclick: (e) => { e.currentTarget.blur(); S.opts.loop = !S.opts.loop; showOpts(); tp.loopAll(S.opts.loop); } }, 'Loop');
     const zoomBtn = (label, title, fn) => h('button', { class: 'btn small', type: 'button', title, 'aria-label': title, onclick: (e) => { e.currentTarget.blur(); fn(); } }, label);
     const pick = files.length > 1 ? h('div', { class: 'timefiles' }, files.map((f) => h('button', { class: 'btn small', type: 'button', onclick: (e) => { e.currentTarget.blur(); if (f !== cur) load(f); } }, f.label || f.name))) : null;
     const side = h('div', { class: 'timeside' });
     const el = h('div', { class: 'timeview' }, h('div', { class: 'timemain' }, pick, box, scroll,
       h('div', { class: 'timebar' }, playBtn, time, h('span', { class: 'grp' }, rates), loopBtn, tp.volumeBar(),
-        h('span', { class: 'grp' }, zoomBtn('−', 'Show more time (-)', () => zoomAt(centre(), 1 / 1.6)), zoomBtn('+', 'Show less time, closer (+)', () => zoomAt(centre(), 1.6)), zoomBtn('Whole', 'Show the whole sound', () => setView(0, len()))),
+        h('span', { class: 'grp' }, zoomBtn('−', 'Zoom out (-)', () => zoomAt(centre(), 1 / 1.6)), zoomBtn('+', 'Zoom in (+)', () => zoomAt(centre(), 1.6)), zoomBtn('Whole', null, () => setView(0, len()))),
         status)), side);
     const map = { time: (cx) => { const r = strip.getBoundingClientRect(); return v.t0 + (cx - r.left) / (r.width || 1) * v.span; },
       x: (t) => { const r = strip.getBoundingClientRect(); return r.left + (t - v.t0) / v.span * r.width; } };
@@ -2121,10 +2120,10 @@
     // what a zoom by key or button holds still: the pointer when it is over the wave, else the playhead, else the middle
     const centre = () => (hover !== null ? hover : (tp.time() >= v.t0 && tp.time() <= v.t0 + v.span) ? tp.time() : v.t0 + v.span / 2);
     function say() {
-      const w = snd && snd.whole, n = tl && !mine() ? 'The marks are on ' + tl.file + '. Take them away to mark this file instead.' : '';
+      const w = snd && snd.whole, n = tl && !mine() ? 'The marks are on ' + tl.file + '. Clear all to mark this one.' : '';
       // the rate is said only when it is the file's own: any sound but a WAV is read at 44.1 kHz whatever its rate
-      status.textContent = n || (snd ? 'peak ' + w.peak.toFixed(1) + ' dBFS · RMS ' + w.rms.toFixed(1) + ' dBFS' + (snd.own ? ' · ' + (snd.rate / 1000) + ' kHz' : '') + (snd.channels > 1 ? ' · ' + snd.channels + ' channels, mixed' : '') + ' · the wave is drawn to its full height, however quiet the sound is'
-        : busy ? 'Reading the sound' : cur ? 'The browser could not read this file to draw it. It may still play, and marks keep their times.' : '');
+      status.textContent = n || (snd ? 'peak ' + w.peak.toFixed(1) + ' dBFS · RMS ' + w.rms.toFixed(1) + ' dBFS' + (snd.own ? ' · ' + (snd.rate / 1000) + ' kHz' : '') + (snd.channels > 1 ? ' · ' + snd.channels + ' channels' : '')
+        : busy ? 'Reading the sound' : cur ? 'The browser could not read this file.' : '');
     }
     // the length is known: from the samples, or from the player when the file could not be read into samples
     function ready() {
@@ -2203,8 +2202,6 @@
       el, kind: 'sound', tp, keys: null, picture,
       can: () => editable(),  // whether the marks can be changed now: the batch takes them, they are on the file on screen, and its length is known
       shown: () => alive && mine() && !!len(),  // whether a picture of the marks can be made now
-      hint: ['Drag across the wave: a stretch · ', h('kbd', {}, 'M'), ' or a double click: a moment · ', h('kbd', {}, 'Space'), ' plays · ', h('kbd', {}, '['), ' ', h('kbd', {}, ']'),
-        ' step · ', h('kbd', {}, 'Enter'), ' its note · ', h('kbd', {}, 'Del'), ' takes it away · scroll or ', h('kbd', {}, '+'), ' ', h('kbd', {}, '−'), ' zooms'],
       // put a set of marks on the sound: they are drawn on the wave, listed beside it, and the keys work them
       attach(marks, o) {
         if (lane) lane.destroy();
@@ -2219,7 +2216,7 @@
         };
         tl.describe = (s) => { if (!snd) thin = true; return soundWhere(s, tl, snd); };
         list = spanList(tl, { editable, when: spanWhen, goto: (s) => tp.seek(s.t0), loop: spanLoop(tl, tp), looping: () => tp.looping(),
-          none: () => (o.editable() ? 'No marks yet. Drag across the wave to mark a stretch, or press M to mark the moment the playhead is at.' : 'No marks on this sound.') });
+          none: () => (o.editable() ? 'No marks yet.' : 'No marks.') });
         side.replaceChildren(list.el);
         lane = spanLane(strip, tl, map, { editable, seek: (t) => tp.seek(t) });
         tl.subs.push((what) => {
@@ -2343,7 +2340,7 @@
     const frames = () => copy || (copy = clipFrames(src));
     let tl = null, list = null, lane = null, alive = true, editable = () => false, takes = () => false, broke = null;  // takes: the marks can be changed, once the clip is read
     let bad = '', lost = false;  // bad: why the clip cannot be marked, once that is known; lost: its file does not say how long it is
-    let fps = facts.fps > 0 ? facts.fps : 0, measured = false, asked = false, vw = 0, vh = 0, shown = 1, seen = null, pin = null;
+    let fps = facts.fps > 0 ? facts.fps : 0, asked = false, vw = 0, vh = 0, shown = 1, seen = null, pin = null;
     let stroke = null, drawing = null, scrub = false, press = null, inkKey = '';
     let boxing = false, boxDrag = null, boxKey = '';  // the Box tool is on; a box being drawn, moved or sized; what the boxes on screen show
     const boxSeen = new Map(), hadBox = new Set();  // the box each mark's "where" was last written for; marks that had a box when they were put on the clip
@@ -2369,21 +2366,21 @@
     const strip = h('div', { class: 'timelane' }, over), head = h('div', { class: 'timehead', hidden: true });
     const track = h('div', { class: 'timewave track' }, ruler, strip, head);
     const btn = (label, title, fn, name) => h('button', { class: 'btn small', type: 'button', title, 'aria-label': name || null, onclick: (e) => { e.currentTarget.blur(); fn(); } }, label);
-    const playBtn = btn('Play', 'Play or hold (Space)', () => tp.toggle());
+    const playBtn = btn('Play', 'Space', () => tp.toggle());
     const time = h('span', { class: 't' }), status = h('span', { class: 'hint' });
-    const loopBtn = h('button', { class: 'btn small' + (S.opts.loop ? ' on' : ''), type: 'button', 'data-opt': 'loop', 'aria-pressed': String(!!S.opts.loop), title: 'Play the clip round and round',
+    const loopBtn = h('button', { class: 'btn small' + (S.opts.loop ? ' on' : ''), type: 'button', 'data-opt': 'loop', 'aria-pressed': String(!!S.opts.loop),
       onclick: (e) => { e.currentTarget.blur(); S.opts.loop = !S.opts.loop; showOpts(); tp.loopAll(S.opts.loop); } }, 'Loop');
     const side = h('div', { class: 'timeside' });
     const el = h('div', { class: 'timeview clip' }, h('div', { class: 'timemain' }, stage, track,
-      h('div', { class: 'timebar' }, playBtn, h('span', { class: 'grp' }, btn('◀', 'A frame back (,); with Shift, ten', () => step(-1), 'A frame back'), btn('▶', 'A frame on (.); with Shift, ten', () => step(1), 'A frame on')),
+      h('div', { class: 'timebar' }, playBtn, h('span', { class: 'grp' }, btn('◀', 'A frame back (,)', () => step(-1), 'A frame back'), btn('▶', 'A frame on (.)', () => step(1), 'A frame on')),
         time, h('span', { class: 'grp' }, rateButtons(() => tp.rate(S.opts.rate))), loopBtn, tp.volumeBar(), status)), side);
     // the brush: Paint on or off, its size, Rub out. Undo and Clear all are the marks' own
-    const penBtn = btn('Paint', 'Paint on the frame, in the colour of its mark (B). Painting holds the clip', () => setPen(!pen.on));
+    const penBtn = btn('Paint', 'B', () => setPen(!pen.on));
     const sizes = ['S', 'M', 'L'].map((label, i) => btn(label, ['Small', 'Medium', 'Large'][i] + ' brush', () => { pen.size = i; showPen(); }));
-    const rub = btn('Rub out', 'Rub paint out of the mark on this frame', () => { pen.erase = !(pen.on && pen.erase); setPen(true); });
+    const rub = btn('Rub out', null, () => { pen.erase = !(pen.on && pen.erase); setPen(true); });
     // the Box tool: a box on the picture that stays on screen for the whole of its mark, and the button that takes it away
-    const boxBtn = btn('Box', 'Draw a box round a part of the picture: it stays on screen for the whole of its mark (R)', () => setBox(!boxing));
-    const unbox = btn('No box', 'Take the box away from this mark (Delete while Box is on)', () => dropBox());
+    const boxBtn = btn('Box', 'R', () => setBox(!boxing));
+    const unbox = btn('No box', null, () => dropBox());
     unbox.hidden = true;
     const tools = h('div', { class: 'grp marktools' }, penBtn, h('span', { class: 'sizes' }, sizes), rub, boxBtn, unbox);
     function showPen() {
@@ -2457,13 +2454,13 @@
       Object.assign(ink.style, at); Object.assign(boxes.style, at);
     }
     function say() {
-      status.textContent = bad || (!vw ? (lost ? 'This clip does not say how long it is. Play it through once and marks can be made on it.' : 'Reading the clip') : vw + ' x ' + vh + (fps ? ' · ' + fps + ' frames a second' + (measured ? ', measured here' : '') : asked === 'busy' ? ' · measuring its frames a second' : ' · its frames a second are not known: a step is 1/30 s'));
+      status.textContent = bad || (!vw ? (lost ? 'Its length is not known. Play it through once.' : 'Reading the clip') : vw + ' x ' + vh + (fps ? ' · ' + fps + ' frames a second' : ''));
     }
     // the clip cannot be read (the browser gave up on it, or it has no picture): the status line and the list say so
-    // plainly, and the tools and the hint that tell the user to mark it are taken away
+    // plainly, and the tools are taken away
     function unread() {
       if (!alive || bad || vw) return;
-      bad = 'The browser could not read this clip, so marks cannot be made on it.';
+      bad = 'The browser could not read this clip.';
       say(); if (list) list.draw(); if (broke) broke();
     }
     video.addEventListener('error', unread);
@@ -2485,12 +2482,12 @@
         vw = video.videoWidth; vh = video.videoHeight; layers.clear(); inkKey = '';
         ink.width = Math.round(vw * quality()); ink.height = Math.round(vh * quality());
       }
-      if (tl) { if (!fps && tl.fps) { fps = tl.fps; measured = true; } Object.assign(tl, { file: file.name, length: sec3(len()), fps, size: [vw, vh] }); }
+      if (tl) { if (!fps && tl.fps) fps = tl.fps; Object.assign(tl, { file: file.name, length: sec3(len()), fps, size: [vw, vh] }); }
       if (!fps && !asked) {
         asked = 'busy';
         frames().measure().then((r) => {
           asked = true; if (!alive) return;
-          if (r && !fps) { fps = r; measured = true; if (tl) { tl.fps = fps; tl.stale(); if (tl.spans.length && editable()) tl.changed('marks'); } }
+          if (r && !fps) { fps = r; if (tl) { tl.fps = fps; tl.stale(); if (tl.spans.length && editable()) tl.changed('marks'); } }
           ready();
         });
       }
@@ -2522,7 +2519,7 @@
     }
     // paint lies on the frame its mark starts at, and that is the frame Claude is shown it on: the start of a painted
     // mark stays where it is. These are the words said when the user tries to move it; nothing for a mark with no paint
-    const pinned = (s) => (painted(s) ? 'Its paint is on its first frame, so its start stays where it is. Rub the paint out to move it.' : '');
+    const pinned = (s) => (painted(s) ? 'Rub out its paint to move its start.' : '');
     // the mark the brush paints on: the chosen one when the playhead is on its first frame, else one that starts on this frame
     function target(n) {
       const c = tl.get(tl.chosen);
@@ -2649,7 +2646,7 @@
       boxDrag = null;
       if (!d.moved) { const hit = shownBoxes(d.n).reverse().find(([s]) => boxPart(s.box, d.p)); if (hit) tl.choose(hit[0]); return; }
       const s = tl.get(d.span);
-      if (s && s.box && (s.box.width < 0.01 || s.box.height < 0.01)) { tl.undo(); toast('Drag across the part of the picture the box goes round'); return; }
+      if (s && s.box && (s.box.width < 0.01 || s.box.height < 0.01)) { tl.undo(); toast('Drag a bigger box'); return; }
       if (s) { tl.stale(s); tl.changed('marks'); }
     }
     // the box comes off the mark the Box tool works on; the mark stays
@@ -2844,8 +2841,6 @@
       shown: () => alive && !!len() && !!vw,  // whether pictures of the marks can be made now
       unsent(id) { sent.delete(id); bare.delete(id); },  // a mark's own picture did not arrive: it is made again at the next send
       slow: true,  // its pictures are frames read from the clip: it must not be thrown away until they are sent
-      hint: ['Drag along the lane: a stretch · ', h('kbd', {}, 'M'), ' a moment · ', h('kbd', {}, 'I'), ' ', h('kbd', {}, 'O'), ' its start and end · ', h('kbd', {}, ','), ' ', h('kbd', {}, '.'),
-        ' a frame, with Shift ten · ', h('kbd', {}, 'B'), ' paints · ', h('kbd', {}, 'R'), ' a box · ', h('kbd', {}, 'Space'), ' plays · ', h('kbd', {}, '['), ' ', h('kbd', {}, ']'), ' step · ', h('kbd', {}, 'Enter'), ' its note · ', h('kbd', {}, 'Del'), ' takes it away'],
       // put a set of marks on the clip: they are drawn on the lane, listed beside it, painted on, and the keys work them
       attach(marks, o) {
         if (lane) lane.destroy();
@@ -2854,7 +2849,7 @@
         hadBox.clear(); boxSeen.clear(); boxKey = '';
         for (const s of tl.spans) { boxSeen.set(s.id, boxSig(s)); if (s.box) hadBox.add(s.id); }
         list = spanList(tl, { editable, when: listWhen, goto: (s) => tp.seek(s.t0), loop: spanLoop(tl, tp), looping: () => tp.looping(),
-          none: () => bad || (o.editable() ? 'No marks yet. Press M to mark the frame the clip is on, I and O for the start and end of a stretch, or drag along the lane under the bar.' : 'No marks on this clip.') });
+          none: () => bad || (o.editable() ? 'No marks yet.' : 'No marks.') });
         side.replaceChildren(list.el);
         lane = spanLane(strip, tl, map, { editable, seek: (t) => tp.seek(t), fixed: pinned });
         tl.subs.push((what) => {
@@ -2923,7 +2918,7 @@
       pending = true; clearTimeout(timer); timer = setTimeout(send, 1500);
     });
     S.markFlush = send;
-    if (editable()) bar.after(tools = h('div', { class: 'tools overtools' }, spanTools(tl, view.tp, () => view.can(), editable), view.tools || null, h('span', { class: 'hint' }, view.hint)));
+    if (editable()) bar.after(tools = h('div', { class: 'tools overtools' }, spanTools(tl, view.tp, () => view.can(), editable), view.tools || null));
     return null;
   }
 
@@ -2936,7 +2931,7 @@
     const tl = newSpans(null, view.kind);
     let busy = false, tools = null;  // busy: the note is being sent
     view.attach(tl, { editable: () => true, broken: () => { if (tools) tools.hidden = true; } });
-    const words = h('textarea', { class: 'field', rows: 2, placeholder: 'Anything else about it (optional)', 'aria-label': 'A note on the whole thing' });
+    const words = h('textarea', { class: 'field', rows: 2, placeholder: 'Note', 'aria-label': 'A note on the whole thing' });
     // while the note is being sent the view stays: a clip's pictures are frames read from the clip itself
     const close = () => {
       if (busy) { toast('Still sending the note'); return; }
@@ -2971,9 +2966,9 @@
     const bar = h('div', { class: 'bar' }, h('h3', {}, 'Mark ' + s.title), h('span', { class: 'hint' }, f.label),
       h('button', { class: 'btn small', type: 'button', onclick: close }, 'Close (Esc)'));
     const el = h('div', { class: 'over marking', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Mark ' + s.title }, bar,
-      tools = h('div', { class: 'tools overtools' }, spanTools(tl, view.tp, () => view.can(), () => true), view.tools || null, h('span', { class: 'hint' }, view.hint)),
+      tools = h('div', { class: 'tools overtools' }, spanTools(tl, view.tp, () => view.can(), () => true), view.tools || null),
       h('div', { class: 'panes' }, h('div', { class: 'pane' }, view.el)),
-      h('div', { class: 'side marking' }, h('div', {}, h('p', { class: 'hint' }, 'Each mark has its own note, in the list beside the ' + (clip ? 'clip' : 'wave') + '.')), h('div', {}, words, h('div', { class: 'jf' }, send))));
+      h('div', { class: 'side marking timed' }, words, send));
     document.body.append(el); document.body.style.overflow = 'hidden';
     document.addEventListener('keydown', key);
   }
