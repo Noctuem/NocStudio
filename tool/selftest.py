@@ -1434,8 +1434,8 @@ def main() -> int:
         answers.append(share.check_live(studio, clip["id"]))
         os.environ["STUDIO_SHARE_URL"] = "https://example.test/share"
         del os.environ["STUDIO_HUB"]
-        check(answers == [{"public": True, "live": True}, {"public": True, "live": False}, {"public": False, "live": False}] and len(bad_ids) == 3,
-              "the check says a live link answers on the public server and a stopped one does not, says nothing with no public address, and takes only a share's id")
+        check(answers == [{"public": True, "live": True}, {"public": True, "live": False, "ended": True}, {"public": False, "live": False}] and len(bad_ids) == 3,
+              "the check says a live link answers on the public server and a stopped one has ended, says nothing with no public address, and takes only a share's id")
         # a public address that sends the check elsewhere, as a proxy sends a visitor to its sign-in page, is not taken as the link working
         from http.server import BaseHTTPRequestHandler
         seen = []

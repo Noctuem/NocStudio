@@ -3651,14 +3651,31 @@
   const copyByHand = (url) => { window.prompt('Copy the link', url); };
   function copyLink(url) { toClipboard(url).then(() => toast('Link copied'), () => copyByHand(url)); }
   const LINKS = new Map();  // the live link for each set of files, by what was asked: Share again copies it
-  let linksRead = null;
+  const BARS = new Map();  // the Share bars on the page for each set of files, so a change in one shows in all
+  let linksRead = null, linksSet = 0;
   const linkLive = (rec) => !!rec && rec.state === 'live' && new Date(rec.expires) > new Date();
-  // the live links made before this visit, read once, so Share finds the one for the same files
-  function readLinks() {
-    if (!linksRead) linksRead = API.shares().then(({ shares }) => {
-      for (const x of shares) { const k = (x.items || []).join('\n'); if (k && x.state === 'live' && !LINKS.has(k)) LINKS.set(k, x); }
-    }).catch(() => {});
+  // the live links as the server has them, so a link stopped or moved elsewhere is never copied, and every bar shows it
+  function syncLinks(shares) {
+    const was = new Map(LINKS), live = new Map();
+    for (const x of shares) { const k = (x.items || []).join('\n'); if (k && x.state === 'live') live.set(k, (live.get(k) || []).concat([x])); }
+    LINKS.clear();
+    for (const [k, xs] of live) { const old = was.get(k), x = (old && xs.find((r) => r.id === old.id)) || xs[0]; if (old && old.id === x.id) x.live = old.live; LINKS.set(k, x); }
+    for (const k of new Set([...was.keys(), ...LINKS.keys()])) { const a = was.get(k), b = LINKS.get(k); if (!a || !b || a.id !== b.id || a.expires !== b.expires) paintLink(k); }
+  }
+  function refreshLinks() {
+    const at = linksSet;
+    linksRead = API.shares().then(({ shares }) => { if (at === linksSet) syncLinks(shares); }).catch(() => {});
     return linksRead;
+  }
+  const readLinks = () => linksRead || refreshLinks();
+  // a link made, moved or stopped on this page: every bar for the same files shows it
+  function setLink(key, rec) {
+    linksSet++;
+    if (linkLive(rec)) LINKS.set(key, rec); else LINKS.delete(key);
+    paintLink(key);
+  }
+  function paintLink(key) {
+    for (const paint of BARS.get(key) || []) paint(LINKS.get(key) || null);
   }
   // Share: one click makes a link for 7 days and copies it; beside it then, the time it ends, Copy and Stop
   function shareBar(items, title, lead) {
@@ -3666,7 +3683,7 @@
     const more = h('span', {});
     const button = h('button', { class: 'btn small', type: 'button', onclick: () => {
       let fresh = false;
-      const made = readLinks().then(() => {
+      const made = refreshLinks().then(() => {
         const had = LINKS.get(key);
         if (linkLive(had)) return had;
         fresh = true;
@@ -3676,36 +3693,47 @@
       toClipboard(url).then(() => toast('Link copied'), () => url.then(copyByHand, () => {}));
       button.disabled = true;
       made.then((rec) => {
-        if (fresh || !more.childNodes.length) draw(rec);
-        if (!fresh) return;
-        LINKS.set(key, rec);
+        if (fresh) setLink(key, rec); else if (!more.childNodes.length) draw(rec);
         if (!rec.url) toast('No public address; set [share] url');
+        if (!fresh) return;
         if (rec.clip && lead && isClip(lead.url)) grabStill(lead.url).then((still) => still && API.share({ action: 'still', id: rec.id, still })).catch(() => {});
       }, (e) => toast(e.message)).finally(() => { button.disabled = false; });
     } }, 'Share');
     const bar = h('span', { class: 'sharebar' }, button, more);
+    let shown = false;
+    const paint = (rec) => {
+      if (bar.isConnected) shown = true;
+      else if (shown) { BARS.get(key).delete(paint); return; }  // its page or closer look is gone
+      draw(rec);
+    };
+    if (!BARS.has(key)) BARS.set(key, new Set());
+    BARS.get(key).add(paint);
     function draw(rec) {
       if (!linkLive(rec)) { more.replaceChildren(); return; }
       const time = h('select', { 'aria-label': 'Ends in' }, SHARE_TIMES.map(([v, label]) => h('option', { value: v }, label)));
       time.value = SHARE_HOURS[rec.hours] || '';
       if (!time.value) time.selectedIndex = -1;
       time.addEventListener('change', async () => {
-        try { const live = rec.live; rec = (await API.share({ action: 'time', id: rec.id, time: time.value })).share; rec.live = live; LINKS.set(key, rec); toast('Until ' + whenEnds(rec.expires)); }
-        catch (e) { toast(e.message); time.value = SHARE_HOURS[rec.hours] || ''; }
+        try { const next = (await API.share({ action: 'time', id: rec.id, time: time.value })).share; next.live = rec.live; setLink(key, next); toast('Until ' + whenEnds(next.expires)); }
+        catch (e) { toast(e.message); time.value = SHARE_HOURS[rec.hours] || ''; refreshLinks(); }
+        time.blur();  // the batch's keys are the page's again
       });
-      const copy = rec.url ? h('button', { class: 'btn small', type: 'button', onclick: () => copyLink(rec.url) }, 'Copy') : null;
+      const copy = rec.url ? h('button', { class: 'btn small', type: 'button', onclick: () => {
+        const url = refreshLinks().then(() => { const now = LINKS.get(key); if (!now || now.id !== rec.id) throw new Error('Link ended'); return now.url; });
+        toClipboard(url).then(() => toast('Link copied'), () => url.then(copyByHand, (e) => toast(e.message)));
+      } }, 'Copy') : null;
       const stop = h('button', { class: 'btn small', type: 'button', onclick: async () => {
         stop.disabled = true;
-        try { await API.share({ action: 'stop', id: rec.id }); LINKS.delete(key); draw(null); toast('Stopped'); } catch (e) { toast(e.message); stop.disabled = false; }
+        try { await API.share({ action: 'stop', id: rec.id }); setLink(key, null); toast('Stopped'); } catch (e) { toast(e.message); stop.disabled = false; }
       } }, 'Stop');
       more.replaceChildren(...[time, copy, stop].filter(Boolean));
-      if (copy && !rec.live) waitLive(rec, copy);
+      if (copy && !rec.live) waitLive(rec, copy, key);
     }
     readLinks().then(() => { if (!more.childNodes.length) draw(LINKS.get(key)); });
     return bar;
   }
   // Copy is dimmed until the link answers on the server: the PC asks every few seconds, for three minutes at most
-  function waitLive(rec, copy) {
+  function waitLive(rec, copy, key) {
     copy.classList.add('wait'); copy.title = 'Not live yet';
     let tries = 0;
     const ask = async () => {
@@ -3713,6 +3741,7 @@
       tries++;
       let res = null;
       try { res = await API.share({ action: 'check', id: rec.id }); } catch (e) { res = null; }
+      if (res && res.ended) { if ((LINKS.get(key) || {}).id === rec.id) setLink(key, null); return; }
       if (res && (res.live || !res.public)) { rec.live = true; copy.classList.remove('wait'); copy.removeAttribute('title'); return; }
       if (tries < 36) setTimeout(ask, 5000);
     };
@@ -3730,6 +3759,7 @@
     const sec = h('section', { hidden: true });
     if (STATIC) return sec;
     API.shares().then(({ shares }) => {
+      syncLinks(shares);
       const live = shares.filter((x) => x.state === 'live');
       if (!live.length) return;
       const row = (x) => h('div', { class: 'row' },
@@ -3737,7 +3767,7 @@
         x.url ? h('button', { class: 'btn small', type: 'button', onclick: () => copyLink(x.url) }, 'Copy') : null,
         h('button', { class: 'btn small', type: 'button', onclick: async (e) => {
           e.target.disabled = true;
-          try { await API.share({ action: 'stop', id: x.id }); for (const [k, r] of LINKS) if (r.id === x.id) LINKS.delete(k); toast('Stopped'); render(); } catch (err) { toast(err.message); e.target.disabled = false; }
+          try { await API.share({ action: 'stop', id: x.id }); for (const [k, r] of [...LINKS]) if (r.id === x.id) setLink(k, null); toast('Stopped'); render(); } catch (err) { toast(err.message); e.target.disabled = false; }
         } }, 'Stop'));
       sec.replaceChildren(h('h2', {}, 'Shared links'), h('div', { class: 'rows' }, live.map(row)));
       sec.hidden = false;

@@ -435,6 +435,8 @@ def check_live(studio: Studio, share_id: str, timeout: float = 4.0) -> dict:
     if not isinstance(rec, dict) or not rec.get("token"):
         raise StudioError(f"no share {share_id!r}")
     url = link(studio, rec)
+    if state_of(rec) != "live":  # stopped or run out, here or elsewhere: the page lets it go
+        return {"public": bool(url), "live": False, "ended": True}
     if not url:
         return {"public": False, "live": False}
     req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "NocStudio link check"})
