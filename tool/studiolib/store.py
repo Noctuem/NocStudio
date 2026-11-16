@@ -2248,9 +2248,17 @@ class Studio:
     def ui() -> dict:
         return read_json(PREFS, {}) or {}
 
-    def set_ui(self, scale=None, theme=None, volume=None) -> dict:
-        """The page's size, theme and play bar volume, kept beside the tool so every Studio and window opens the way the user left it."""
-        ui = self.ui()
+    @staticmethod
+    def set_ui(scale=None, theme=None, volume=None, notify=None) -> dict:
+        """The page's size, theme and play bar volume, and whether Windows tells the user what lands in Needs you, kept beside the
+        tool so every Studio and window opens the way the user left it."""
+        ui = Studio.ui()
+        if notify is not None:
+            if not isinstance(notify, bool):
+                raise StudioError("notify is true or false")
+            if notify and not ui.get("notify"):
+                ui["notify_since"] = iso_now()  # what already waits then is not new
+            ui["notify"] = notify
         if scale is not None:
             try:
                 ui["scale"] = round(min(2.0, max(0.75, float(scale))), 2)

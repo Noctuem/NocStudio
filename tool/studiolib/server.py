@@ -7,9 +7,10 @@ import re
 import sys
 import threading
 import time
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path, PureWindowsPath
-from urllib.parse import parse_qs, unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urljoin, urlsplit
 
 from .store import Studio, StudioError, slugify, tomllib
 
@@ -51,9 +52,11 @@ def launch_info(studio: Studio, url: str) -> dict | None:
             "why": "" if ok else f"The launcher takes folder names of letters, digits, dots, dashes, underscores and single spaces; “{name}” has something else in it."}
 
 
-def make_handler(home: Path, allowed_hosts: set[str], quiet: bool = False, hub: str = "", seen=None, launch: str = ""):
+def make_handler(home: Path, allowed_hosts: set[str], quiet: bool = False, hub: str = "", seen=None, launch: str = "",
+                 watch: "Watch | None" = None):
     """`hub` is the Studio app's menu, when this Studio was started from it; `seen` is called on every request.
-    `launch` is where a server copy's page asks for a remote Claude session on the PC (see launch_info)."""
+    `launch` is where a server copy's page asks for a remote Claude session on the PC (see launch_info).
+    `watch` hands the page what is new in Needs you, for a desktop notification; with none, the page sends none."""
     class Handler(BaseHTTPRequestHandler):
         server_version = "Studio/0.1"
         protocol_version = "HTTP/1.1"
@@ -267,7 +270,12 @@ def make_handler(home: Path, allowed_hosts: set[str], quiet: bool = False, hub: 
                 if head == "api":
                     studio = self.studio()
                     if parts[1:] == ["state"]:
-                        return self.send_json(dict(studio.state(), hub=hub, launch=launch_info(studio, launch)))
+                        return self.send_json(dict(studio.state(), hub=hub, launch=launch_info(studio, launch),
+                                                   notify=bool(watch) and not studio.config.get("site")))
+                    if parts[1:] == ["notices"]:  # what is new in Needs you; each thing is handed out once
+                        if not watch or studio.config.get("site"):
+                            return self.send_json({"on": False, "notices": []})
+                        return self.send_json(watch.look((split_q(self.path).get("can") or [""])[0] == "1"))
                     if parts[1:] == ["shares"]:
                         from . import share
                         return self.send_json({"shares": share.listing(studio), "public": bool(share.base_url(studio))})
@@ -408,6 +416,8 @@ def make_handler(home: Path, allowed_hosts: set[str], quiet: bool = False, hub: 
                                                    "pending": len(studio.todo())})
                         if verb == "reopen":
                             studio.reopen(batch_id)
+                            if watch:  # the user put it back themselves: not new
+                                watch.keep(studio.home, "batch:" + batch_id)
                             return self.send_json({"ok": True})
                         if verb == "reset":
                             studio.reset_sample(batch_id)
@@ -432,7 +442,8 @@ def make_handler(home: Path, allowed_hosts: set[str], quiet: bool = False, hub: 
                                                   confirm_note=str(data.get("confirm_note") or ""))
                         return self.send_json({"ok": True, "triage": entry})
                     if parts == ["api", "ui"]:
-                        return self.send_json({"ok": True, "ui": studio.set_ui(scale=data.get("scale"), theme=data.get("theme"), volume=data.get("volume"))})
+                        return self.send_json({"ok": True, "ui": studio.set_ui(scale=data.get("scale"), theme=data.get("theme"),
+                                                                                 volume=data.get("volume"), notify=data.get("notify"))})
                     if parts == ["api", "setup"]:  # the Getting organised box hidden, or brought back
                         return self.send_json({"ok": True, "page": studio.hide_setup(bool(data.get("hidden")))})
                     if parts == ["api", "note"]:
@@ -461,6 +472,8 @@ def make_handler(home: Path, allowed_hosts: set[str], quiet: bool = False, hub: 
                     if parts == ["api", "hand"]:
                         row = studio.answer_hand(str(data.get("id") or ""), str(data.get("action") or ""),
                                                  str(data.get("note") or ""))
+                        if watch and data.get("action") in ("undo", "reopen"):
+                            watch.keep(studio.home, "ask:" + str(data.get("id") or ""))
                         return self.send_json({"ok": True, "hand": row})
                 return self.fail(404, "no such route")
             except StudioError as err:
@@ -481,7 +494,11 @@ def serve(home, port: int = 0, host: str = "", open_browser: bool = False, hosts
     if host not in ("127.0.0.1", "localhost", "0.0.0.0"):
         allowed.add(f"{host}:{port}")
     allowed |= {str(x).lower() for x in [*(served.get("hosts") or []), *hosts] if x}
-    httpd = ThreadingHTTPServer((host, port), make_handler(studio.home, allowed, launch=str(served.get("launch") or "")))
+    watch = None
+    if not studio.config.get("site"):  # a page in a browser tab may notify too, for this project alone
+        watch = Watch()
+        watch.add(studio.home)
+    httpd = ThreadingHTTPServer((host, port), make_handler(studio.home, allowed, launch=str(served.get("launch") or ""), watch=watch))
     httpd.daemon_threads = True
     url = f"http://127.0.0.1:{port}/"
     syncing = sync.start(studio.home)
@@ -508,6 +525,116 @@ def glance(home) -> dict:
     return {"judge": sum(s in ("open", "draft") for s in status), "sent": status.count("submitted"),
             "hands": sum(1 for x in studio.hands() if x.get("status") == "open"),
             "notes": sum(1 for n in studio.notes_view() if n.get("waits") == "you")}
+
+
+ASK_SAID = {"action": "To do", "decision": "To decide", "play": "To try", "info": "To know"}
+
+
+def needs(home) -> list[dict]:
+    """What waits on the user in one Studio's Needs you, for a notification: its open asks, its batches to judge
+    and its notes waiting on them. Each has a key that stays the same while it waits, and the page it opens."""
+    studio = Studio(home)
+    out = []
+    for batch_id in studio.batch_ids():
+        batch = studio.load_batch(batch_id)
+        if batch["status"] in ("open", "draft"):
+            out.append({"key": "batch:" + batch_id, "title": str(batch.get("title") or batch_id), "to": "#b." + batch_id,
+                        "what": "A question to answer" if batch.get("mode") == "question" else "To judge"})
+    for x in studio.hands():
+        if x.get("status") == "open":
+            out.append({"key": "ask:" + x["id"], "title": str(x.get("title") or x["id"]), "to": "#ask." + x["id"],
+                        "what": ASK_SAID.get(x.get("kind") or "action", "To do")})
+    for n in studio.notes_view():
+        if n.get("waits") == "you":
+            text = str((n.get("reading") if n.get("status") == "confirm" else "") or n.get("text") or n["id"])
+            out.append({"key": "note:" + n["id"], "title": text if len(text) <= 120 else text[:119].rstrip() + "…",
+                        "to": "#note." + n["id"], "what": "A note to confirm" if n.get("status") == "confirm" else "A note waits on you"})
+    project = str(studio.config.get("project") or studio.home.name)
+    return [dict(item, project=project) for item in out]
+
+
+class Watch:
+    """What lands in Needs you in the Studios a window has open. Each new thing is handed out once, to the first
+    page that asks and can show it, so several tabs or a reload still make one notification. What already waits
+    when a Studio is added, or when the user turns notifications on, is not new."""
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.homes: dict[str, str] = {}  # each home, and the address its page is at ("" for the page that asks)
+        self.known: dict[str, set] = {}  # the keys in each home's Needs you at the last look
+        self.held: dict[tuple, dict] = {}  # new, and not yet handed to a page that can show it
+        self.since = None  # when the user last turned notifications on, as this watch last saw it
+        self.remote: set = set()  # homes whose own server watches them already (started by studio.cmd): asked, not read
+
+    @staticmethod
+    def _read(home: str) -> list | None:
+        try:
+            return needs(home)
+        except (StudioError, OSError, ValueError):
+            return None  # a file being written, or the folder gone: next time
+
+    def add(self, home, url: str = "", remote: bool = False) -> None:
+        """Watch one more Studio; `url` is where its page is. A `remote` one has its own server and its own watch,
+        which is asked what is new, so each thing still has one watch that hands it out."""
+        home = str(Path(home).resolve())
+        with self.lock:
+            self.homes[home] = url
+            if remote:
+                self.remote.add(home)
+                return
+            self.remote.discard(home)
+            if home not in self.known:
+                items = self._read(home)
+                if items is not None:
+                    self.known[home] = {i["key"] for i in items}
+
+    def keep(self, home, key: str) -> None:
+        """The user put this back in Needs you themselves (Change my verdict, Undo, Open again): it is not new."""
+        home = str(Path(home).resolve())
+        with self.lock:
+            if home in self.known:
+                self.known[home].add(key)
+
+    @staticmethod
+    def _ask(url: str, can: bool) -> list:
+        """What another Studio's own watch hands out, at the address of its page."""
+        try:
+            with urllib.request.urlopen(url + "api/notices" + ("?can=1" if can else ""), timeout=2) as res:
+                got = json.loads(res.read().decode("utf-8"))
+            return [dict(n, url=urljoin(url, str(n.get("url") or ""))) for n in got.get("notices") or [] if isinstance(n, dict)]
+        except (OSError, ValueError, AttributeError):
+            return []  # closed, or busy: next time
+
+    def look(self, can: bool) -> dict:
+        """Whether notifications are on, and what is new since the last look; `can` says the asking page can show them."""
+        ui = Studio.ui()
+        on = bool(ui.get("notify"))
+        with self.lock:
+            remote = [url for home, url in self.homes.items() if home in self.remote]
+        asked = [n for url in remote for n in self._ask(url, can)] if on else []
+        with self.lock:
+            fresh = on and self.since == ui.get("notify_since")
+            self.since = ui.get("notify_since") if on else None
+            for home, url in self.homes.items():
+                if home in self.remote:
+                    continue
+                items = self._read(home)
+                if items is None:
+                    continue
+                keys, before = {i["key"] for i in items}, self.known.get(home)
+                self.known[home] = keys
+                for gone in [k for k in self.held if k[0] == home and k[1] not in keys]:
+                    del self.held[gone]
+                if fresh and before is not None:
+                    for item in items:
+                        if item["key"] not in before:
+                            self.held[(home, item["key"])] = dict(item, url=url + item.pop("to"))
+            if not fresh:  # off, or just turned on: what is held is not new either
+                self.held.clear()
+            out = list(self.held.values()) if on and can else []
+            if out:
+                self.held.clear()
+        return {"on": on, "notices": out + asked}
 
 
 def studios_by_name(homes) -> dict:

@@ -490,10 +490,11 @@ main.hud { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 40
 .hudmain { display: flex; flex-direction: column; gap: 30px; min-width: 0; }
 .rail { position: sticky; top: 78px; max-height: calc(100vh / var(--scale, 1) - 96px); overflow-y: auto; display: flex; flex-direction: column; gap: 10px;
   background: var(--surface); border: 1px solid var(--line); border-top: 2px solid var(--accent); border-radius: var(--radius); padding: 14px; scrollbar-width: thin; }
-.railhead { display: flex; align-items: center; gap: 8px; }
+.railhead { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .railhead h2 { color: var(--fg); }
 .railhead .count { font: 700 11px/1 var(--font-mono); padding: 3px 7px; border-radius: 9px; background: var(--accent); color: var(--accent-ink); }
 .railsub { margin-top: 10px; }
+.need.found, .jot.found { outline: 2px solid var(--accent); outline-offset: 2px; }
 .railhead .grow, .pillhead .grow, .steps .grow, .need .grow, details.setup summary .grow { flex: 1 1 auto; min-width: 0; }
 .asks { display: flex; flex-direction: column; gap: 6px; }
 .need { background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); color: inherit; }
