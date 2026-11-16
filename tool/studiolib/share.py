@@ -14,17 +14,31 @@ the share server checks that again for every file it sends. A batch's files carr
 how many are gone; a link whose files are all gone answers as a stopped one. The share server is its own small process (`studio.py serve-shares`): it reads the homes, never
 writes them, answers GET and HEAD alone, and has no route to anything else in a Studio.
 
+When the first file is a clip, the record may carry "still": true, and one frame of the clip is kept beside it as
+<home>/shares/<id>.jpg; the link serves it at <token>/still.jpg, and nothing else from shares/. The page a link opens
+carries Open Graph tags (its title, and the clip with its still, or the picture) so a chat such as Discord shows it;
+their addresses start from STUDIO_SHARE_URL where the share server runs, else the public address the record was made
+with ("base"). A link that does not open says why: it ended, it was stopped, or it is not here (yet: a new one takes
+a minute or two to reach the server's copy). A link is made only in a Studio that has a copy on the server (a [sync]
+in its settings, or the server's copy itself), since only that copy is served.
+
 Where the public address comes from, first found: STUDIO_SHARE_URL, then [share] url in the home's
 studio.toml or studio.local.toml, then [share] url in the app's hub.toml.
 """
 from __future__ import annotations
 
+import base64
+import binascii
 import datetime
 import hmac
 import html
 import os
 import re
 import secrets
+import shutil
+import subprocess
+import urllib.error
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit
@@ -43,6 +57,8 @@ INLINE = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gi
           ".mp3": "audio/mpeg", ".wav": "audio/wav", ".ogg": "audio/ogg", ".flac": "audio/flac", ".m4a": "audio/mp4",
           ".pdf": "application/pdf", ".txt": "text/plain; charset=utf-8", ".md": "text/plain; charset=utf-8"}
 HIDDEN = {"provenance.json"}
+STILL_MAX = 1024 * 1024      # one frame of a clip, as JPEG
+STILL_SIDE = 1280            # its long side at most, in pixels
 
 
 def hours_of(text: str | int) -> int:
@@ -95,8 +111,98 @@ def link(studio: Studio, rec: dict) -> str:
     return base + rec["token"] + "/" if base else ""
 
 
+def clip_link(studio: Studio, rec: dict) -> str:
+    """The clip's own address under the token, for a link that holds one clip and nothing else; a chat plays it in place."""
+    base, files = base_url(studio), rec.get("files") or []
+    if not base or len(files) != 1 or not _is_clip(str(files[0].get("name") or "")):
+        return ""
+    return base + rec["token"] + "/0/" + quote(str(files[0]["name"]))
+
+
 def _folder(studio: Studio) -> Path:
     return studio.home / "shares"
+
+
+def may_share(studio: Studio) -> None:
+    """Links open only on the server's copy: refused in a Studio that has none, as every link made there would be dead."""
+    if "sync" not in studio.config and not studio.config.get("site"):
+        raise StudioError("this Studio has no copy on the server, so a link made here could never open; "
+                          "put it on the server first (the studio-phone skill), then make the link")
+
+
+def _is_clip(name: str) -> bool:
+    return INLINE.get(Path(name).suffix.lower(), "").startswith("video/")
+
+
+def jpeg_size(data: bytes) -> tuple[int, int] | None:
+    """The width and height a JPEG states, or None when it is not one."""
+    if not data.startswith(b"\xff\xd8"):
+        return None
+    i = 2
+    while i + 9 < len(data):
+        if data[i] != 0xFF:
+            return None
+        marker = data[i + 1]
+        if marker == 0xFF:
+            i += 1
+            continue
+        if marker in (0xD8, 0x01) or 0xD0 <= marker <= 0xD7:
+            i += 2
+            continue
+        if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+            height, width = int.from_bytes(data[i + 5:i + 7], "big"), int.from_bytes(data[i + 7:i + 9], "big")
+            return (width, height) if width and height else None
+        i += 2 + int.from_bytes(data[i + 2:i + 4], "big")
+    return None
+
+
+def check_still(data) -> bytes:
+    """One frame of a clip, as the page or ffmpeg made it: a JPEG, 1 MB and 1280 px on its long side at most."""
+    if isinstance(data, str):  # from the page: a data: address, or the bare base64
+        try:
+            data = base64.b64decode(data.split(",", 1)[1] if data.startswith("data:") else data, validate=True)
+        except (binascii.Error, ValueError, IndexError):
+            raise StudioError("the still is not a picture; send one frame of the clip as JPEG") from None
+    if not isinstance(data, (bytes, bytearray)):
+        raise StudioError("the still is not a picture; send one frame of the clip as JPEG")
+    if len(data) > STILL_MAX:
+        raise StudioError("the still is over 1 MB; send a smaller JPEG")
+    size = jpeg_size(bytes(data))
+    if not size:
+        raise StudioError("the still is not a JPEG; send one frame of the clip as JPEG")
+    if max(size) > STILL_SIDE:
+        raise StudioError(f"the still is {size[0]} x {size[1]}; send one at most {STILL_SIDE} px on its long side")
+    return bytes(data)
+
+
+def grab_still(path: Path) -> bytes | None:
+    """One frame of a clip, about a second in (the middle of a shorter one), made with ffmpeg; None without ffmpeg on PATH."""
+    exe = shutil.which("ffmpeg")
+    if not exe:
+        return None
+    at = 1.0
+    if path.suffix.lower() in (".mp4", ".m4v", ".mov"):
+        from .checks import video_facts
+        try:
+            seconds = video_facts(path).get("seconds") or 0
+        except Exception:  # noqa: BLE001 - a clip this cannot read is taken at one second
+            seconds = 0
+        if 0 < seconds < 2:
+            at = seconds / 2
+    for t in (at, 0.0):
+        try:
+            done = subprocess.run([exe, "-v", "error", "-nostdin", "-ss", f"{t:.3f}", "-i", str(path), "-frames:v", "1",
+                                   "-vf", f"scale=w='min({STILL_SIDE},iw)':h='min({STILL_SIDE},ih)':force_original_aspect_ratio=decrease",
+                                   "-q:v", "4", "-f", "mjpeg", "pipe:1"], capture_output=True, timeout=60,
+                                  creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except (OSError, subprocess.SubprocessError):
+            return None
+        try:
+            if done.returncode == 0 and done.stdout:
+                return check_still(done.stdout)
+        except StudioError:
+            pass
+    return None
 
 
 def _library_files(studio: Studio, given: list) -> list[Path]:
@@ -184,8 +290,13 @@ def _batch_files(studio: Studio, item: str) -> tuple[dict, list[tuple[Path, str]
     return batch, out
 
 
-def make(studio: Studio, files: list, *, title: str = "", hours: str | int = "7d", by: str = "") -> dict:
-    """A link to library files, to a batch's candidates (<batch>), or to one of them (<batch>/<candidate>)."""
+def make(studio: Studio, files: list, *, title: str = "", hours: str | int = "7d", by: str = "",
+         still=None, grab: bool = False) -> dict:
+    """A link to library files, to a batch's candidates (<batch>), or to one of them (<batch>/<candidate>).
+
+    When the first file is a clip, `still` (one frame of it, as JPEG) is kept beside the record for a chat's preview,
+    and `grab` makes one with ffmpeg when none is given. A still sent with anything else is left out."""
+    may_share(studio)
     found: list[tuple[Path, str, str]] = []  # the file, the candidate's name, its batch
     batches: list[dict] = []
     for item in files:
@@ -208,6 +319,10 @@ def make(studio: Studio, files: list, *, title: str = "", hours: str | int = "7d
         raise StudioError(f"one link holds {MAX_FILES} files at most")
     titles = {b["id"]: str(b.get("title") or b["id"]) for b in batches}
     hours = hours_of(hours)
+    clip = _is_clip(unique[0][0].name)
+    still = check_still(still) if clip and still else None
+    if clip and still is None and grab:
+        still = grab_still(unique[0][0])
     now = _now().replace(microsecond=0)
     first = unique[0]
     rec = {
@@ -225,8 +340,14 @@ def make(studio: Studio, files: list, *, title: str = "", hours: str | int = "7d
     }
     if batches:
         rec["batches"] = [b["id"] for b in batches]
+    if base_url(studio):
+        rec["base"] = base_url(studio)  # so the page the link opens names its own files in full, for a chat's preview
+    if still:
+        rec["still"] = True
+        _folder(studio).mkdir(parents=True, exist_ok=True)
+        (_folder(studio) / f"{rec['id']}.jpg").write_bytes(still)  # before the record, so a record that says so has it
     write_json(_folder(studio) / f"{rec['id']}.json", rec)
-    return dict(rec, state="live", url=link(studio, rec))
+    return dict(rec, state="live", url=link(studio, rec), clip_url=clip_link(studio, rec), clip=clip, still=bool(still))
 
 
 def listing(studio: Studio) -> list[dict]:
@@ -241,7 +362,7 @@ def listing(studio: Studio) -> list[dict]:
         except StudioError:
             continue
         if isinstance(rec, dict) and rec.get("token"):
-            out.append(dict(rec, state=state_of(rec, now), url=link(studio, rec)))
+            out.append(dict(rec, state=state_of(rec, now), url=link(studio, rec), clip_url=clip_link(studio, rec)))
     out.sort(key=lambda r: r.get("created") or "", reverse=True)
     return out
 
@@ -259,6 +380,25 @@ def stop(studio: Studio, share_id: str) -> dict:
     return dict(rec, state="stopped", url=link(studio, rec))
 
 
+def check_live(studio: Studio, share_id: str, timeout: float = 4.0) -> dict:
+    """Whether the link answers on the public server yet: one HEAD to the public address, asked by the PC, never by the page."""
+    if not SHARE_ID.fullmatch(share_id or ""):
+        raise StudioError(f"no share {share_id!r}")
+    rec = read_json(_folder(studio) / f"{share_id}.json")
+    if not isinstance(rec, dict) or not rec.get("token"):
+        raise StudioError(f"no share {share_id!r}")
+    url = link(studio, rec)
+    if not url:
+        return {"public": False, "live": False}
+    req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "NocStudio link check"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as res:
+            live = res.status == 200
+    except (urllib.error.URLError, OSError, ValueError):
+        live = False
+    return {"public": True, "live": live}
+
+
 # ------------------------------------------------------------------ the public server
 def homes_under(roots: list) -> list[Path]:
     """Each root that is a Studio home, and each folder right under a root that is one."""
@@ -274,9 +414,14 @@ def homes_under(roots: list) -> list[Path]:
 
 def find(roots: list, token: str) -> tuple[Path, dict] | None:
     """The live share with this token, and its home; None for anything else, all alike."""
+    found = lookup(roots, token)
+    return found if found and state_of(found[1]) == "live" else None
+
+
+def lookup(roots: list, token: str) -> tuple[Path, dict] | None:
+    """The share with this token, live or not, and its home; None when no record has it."""
     if not TOKEN.fullmatch(token or ""):
         return None
-    now = _now()
     for home in homes_under(roots):
         folder = home / "shares"
         if not folder.is_dir():
@@ -288,7 +433,7 @@ def find(roots: list, token: str) -> tuple[Path, dict] | None:
                 continue
             if (isinstance(rec, dict) and isinstance(rec.get("token"), str)
                     and hmac.compare_digest(rec["token"].encode(), token.encode())):
-                return (home, rec) if state_of(rec, now) == "live" else None
+                return home, rec
     return None
 
 
@@ -304,9 +449,95 @@ def shared_file(home: Path, rec: dict, index: int) -> Path | None:
     return candidate_file(home, rel)  # one of a candidate's own files, still listed in its batch, or nothing
 
 
+def still_file(home: Path, rec: dict) -> Path | None:
+    """The still kept beside a record that says it has one: shares/<its id>.jpg, and never any other file there."""
+    sid = str(rec.get("id") or "")
+    if rec.get("still") is not True or not SHARE_ID.fullmatch(sid):
+        return None
+    path = Path(home) / "shares" / f"{sid}.jpg"
+    try:
+        own = read_json(path.with_suffix(".json"), {}) or {}  # the record kept under that id is this one: no record reaches another's still
+        if not (isinstance(own, dict) and own.get("token") == rec.get("token")):
+            return None
+        return path if path.is_file() and not path.is_symlink() else None
+    except (OSError, StudioError):
+        return None
+
+
+def public_base(rec: dict) -> str:
+    """Where the share server is reached from outside: STUDIO_SHARE_URL where it runs, else the address the link was made with."""
+    url = os.environ.get("STUDIO_SHARE_URL") or str(rec.get("base") or "")
+    if not re.fullmatch(r"https?://[^\s\"'<>]+", url):
+        return ""
+    return url if url.endswith("/") else url + "/"
+
+
+def og_tags(home: Path, rec: dict, present: list | None = None) -> str:
+    """The tags a chat reads to show a link (Discord runs no script): its title, and the clip with its still, or the picture."""
+    esc = html.escape
+    files = rec.get("files") or []
+    shown = [i for i in range(len(files)) if present is None or (i < len(present) and present[i])]
+    title = str(rec.get("title") or "Shared files")
+    ends = _parse(rec["expires"]).strftime("%d %b %Y")
+    tags = [("og:title", title), ("og:site_name", "NocStudio"),
+            ("og:description", f"{len(shown)} {'file' if len(shown) == 1 else 'files'}, shared until {ends}.")]
+    base = public_base(rec)
+    page_url = base + quote(str(rec.get("token") or "")) + "/" if base else ""
+    name = str(files[shown[0]].get("name") or "") if shown else ""
+    kind = INLINE.get(Path(name).suffix.lower(), "")
+    still = still_file(home, rec) if page_url else None
+    card = "summary"
+    if page_url:
+        tags.append(("og:url", page_url))
+    if page_url and kind.startswith("video/") and still:  # a record from before stills has none: its title alone
+        clip = page_url + f"{shown[0]}/{quote(name)}"
+        size = None
+        path = shared_file(home, rec, shown[0])
+        if path is not None and path.suffix.lower() in (".mp4", ".m4v", ".mov"):
+            from .checks import video_facts
+            try:
+                facts = video_facts(path)
+                size = (facts["width"], facts["height"]) if facts.get("width") else None
+            except Exception:  # noqa: BLE001 - a clip this cannot read takes its shape from the still
+                size = None
+        try:
+            frame = jpeg_size(still.read_bytes())
+        except OSError:
+            frame = None
+        if frame and not size:
+            size = frame
+        elif frame and size and size[0] != size[1] and (size[0] > size[1]) != (frame[0] > frame[1]):
+            size = (size[1], size[0])  # a phone clip stored on its side and turned when played: the still shows how it plays
+        tags += [("og:type", "video.other"), ("og:video", clip), ("og:video:url", clip)]
+        if clip.startswith("https://"):
+            tags.append(("og:video:secure_url", clip))
+        tags.append(("og:video:type", kind))
+        if size:
+            tags += [("og:video:width", str(size[0])), ("og:video:height", str(size[1]))]
+        tags += [("og:image", page_url + "still.jpg"), ("og:image:type", "image/jpeg")]
+        if frame:
+            tags += [("og:image:width", str(frame[0])), ("og:image:height", str(frame[1]))]
+        card = "player"
+        tags += [("twitter:player", clip), ("twitter:player:stream", clip), ("twitter:player:stream:content_type", kind)]
+        if size:
+            tags += [("twitter:player:width", str(size[0])), ("twitter:player:height", str(size[1]))]
+        tags.append(("twitter:image", page_url + "still.jpg"))
+    elif page_url and kind.startswith("image/"):
+        pic = page_url + f"{shown[0]}/{quote(name)}"
+        tags += [("og:type", "website"), ("og:image", pic), ("og:image:type", kind), ("twitter:image", pic)]
+        card = "summary_large_image"
+    else:
+        tags.append(("og:type", "website"))
+    tags += [("twitter:card", card), ("twitter:title", title)]
+    return "\n".join(f'<meta {"name" if k.startswith("twitter:") else "property"}="{k}" content="{esc(v)}">' for k, v in tags)
+
+
 PAGE_CSP = ("default-src 'none'; img-src 'self'; media-src 'self'; style-src 'unsafe-inline'; "
             "base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 FILE_CSP = "sandbox; default-src 'none'; img-src 'self'; media-src 'self'; style-src 'unsafe-inline'"
+# a clip or a sound opened on its own (the link straight to a clip): a sandbox would make the browser's player a page of
+# no origin that may not load the file it shows; it runs no script either way, as its type is fixed and never sniffed
+MEDIA_CSP = "default-src 'none'; img-src 'self'; media-src 'self'; style-src 'unsafe-inline'; frame-ancestors 'none'"
 
 
 def _size(n: int) -> str:
@@ -317,7 +548,7 @@ def _size(n: int) -> str:
     return ""
 
 
-def page(rec: dict, present: list | None = None) -> str:
+def page(rec: dict, present: list | None = None, og: str = "") -> str:
     """The page a link opens: its files, under each candidate's name when they came from a batch; none that are gone."""
     esc = html.escape
     ends = _parse(rec["expires"]).strftime("%d %b %Y, %H:%M UTC")
@@ -352,6 +583,7 @@ def page(rec: dict, present: list | None = None) -> str:
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow"><meta name="referrer" content="no-referrer">
 <title>{esc(rec.get("title") or "Shared files")}</title>
+{og}
 <style>
 :root {{ color-scheme: light dark; --bg: #f6f6f4; --fg: #1b1b1b; --muted: #666; --card: #fff; --line: #ddd; --accent: #c4262f; }}
 @media (prefers-color-scheme: dark) {{ :root {{ --bg: #111214; --fg: #ececec; --muted: #9a9a9a; --card: #1a1b1e; --line: #2c2d31; --accent: #e0484f; }} }}
@@ -378,11 +610,25 @@ p.gone {{ color: var(--muted); margin: 0 0 16px; }}
 
 
 GONE = """<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="robots" content="noindex, nofollow"><title>Link not found</title>
-<style>body{margin:0;font:15px/1.5 system-ui,sans-serif;background:#111214;color:#ececec;display:grid;place-items:center;min-height:100vh}
-p{max-width:34ch;text-align:center;padding:16px}</style></head>
-<body><p>This link has expired, was stopped, or never existed.</p></body></html>
+<meta name="robots" content="noindex, nofollow"><title>{title}</title>
+<style>body{{margin:0;font:15px/1.5 system-ui,sans-serif;background:#111214;color:#ececec;display:grid;place-items:center;min-height:100vh}}
+p{{max-width:36ch;text-align:center;padding:16px}}</style></head>
+<body><p>{said}</p></body></html>
 """
+NOT_HERE = "This link is not here. A new link takes a minute or two to reach the server; try again shortly."
+STOPPED = "This link was stopped."
+NOT_IN_LINK = "This file is not part of the link."
+
+
+def gone_page(rec: dict | None, said: str = "") -> str:
+    """The page for a link that does not open, saying which it is: ended, stopped or not here; never its token or its files."""
+    if not said:
+        if rec and state_of(rec) == "expired":
+            said = "This link ended on " + _parse(rec["expires"]).strftime("%d %b %Y, %H:%M UTC") + "."
+        else:
+            said = STOPPED if rec else NOT_HERE
+    title = "Link ended" if said.startswith("This link ended") else "Link stopped" if said == STOPPED else "Link not found"
+    return GONE.format(title=title, said=html.escape(said))
 
 
 def make_share_handler(roots: list, quiet: bool = True):
@@ -402,8 +648,8 @@ def make_share_handler(roots: list, quiet: bool = True):
             self.send_header("Cache-Control", "no-store")
             self.send_header("Cross-Origin-Resource-Policy", "same-origin")
 
-        def gone(self):
-            body = GONE.encode()
+        def gone(self, rec: dict | None = None, said: str = ""):
+            body = gone_page(rec, said).encode()
             self.send_response(404)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
@@ -425,21 +671,26 @@ def make_share_handler(roots: list, quiet: bool = True):
             parts = [unquote(p) for p in split.path.split("/") if p]
             if parts[:1] == ["share"]:  # reached without the proxy taking its prefix off
                 parts = parts[1:]
-            found = find(roots, parts[0]) if parts else None
+            found = lookup(roots, parts[0]) if parts else None
             if not found:
                 return self.gone()
             home, rec = found
+            if state_of(rec) != "live":  # ended or stopped: it says which, and nothing of what it held
+                return self.gone(rec)
             if len(parts) == 1 and not split.path.endswith("/"):
                 self.send_response(301)
                 self.send_header("Location", quote(parts[0]) + "/")
                 self.send_header("Content-Length", "0")
                 self.common(PAGE_CSP)
                 return self.end_headers()
-            if len(parts) == 1:
+            if len(parts) == 1 or parts[1:] == ["still.jpg"]:
                 present = [shared_file(home, rec, i) is not None for i in range(len(rec.get("files") or []))]
                 if not any(present):  # every file gone: the link is over
-                    return self.gone()
-                body = page(rec, present).encode()
+                    return self.gone(rec, STOPPED)
+                if len(parts) == 2:  # the frame of the clip a chat shows: the one file in shares/ a link reaches
+                    still = still_file(home, rec)
+                    return self.send_shared(still, download=False, name="still.jpg") if still else self.gone(rec, NOT_IN_LINK)
+                body = page(rec, present, og_tags(home, rec, present)).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
@@ -449,13 +700,13 @@ def make_share_handler(roots: list, quiet: bool = True):
                     self.wfile.write(body)
                 return
             if len(parts) != 3 or not parts[1].isdigit():
-                return self.gone()
+                return self.gone(rec, NOT_IN_LINK)
             path = shared_file(home, rec, int(parts[1]))
             if path is None or path.name != parts[2]:
-                return self.gone()
+                return self.gone(rec, NOT_IN_LINK)
             self.send_shared(path, download="dl=1" in split.query)
 
-        def send_shared(self, path: Path, download: bool):
+        def send_shared(self, path: Path, download: bool, name: str = ""):
             size = path.stat().st_size
             known = INLINE.get(path.suffix.lower())  # anything not on the list goes out as bytes to save, never to run
             ctype = known or "application/octet-stream"
@@ -482,8 +733,8 @@ def make_share_handler(roots: list, quiet: bool = True):
             self.send_header("Accept-Ranges", "bytes")
             if status == 206:
                 self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
-            self.send_header("Content-Disposition", f"{disposition}; filename*=UTF-8''{quote(path.name)}")
-            self.common(FILE_CSP)
+            self.send_header("Content-Disposition", f"{disposition}; filename*=UTF-8''{quote(name or path.name)}")
+            self.common(MEDIA_CSP if disposition == "inline" and ctype.startswith(("video/", "audio/")) else FILE_CSP)
             self.end_headers()
             if self.command != "GET":
                 return
@@ -496,7 +747,7 @@ def make_share_handler(roots: list, quiet: bool = True):
                         break
                     try:
                         self.wfile.write(chunk)
-                    except (BrokenPipeError, ConnectionResetError):
+                    except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):  # the player stopped asking: seeking, or closed
                         return
                     left -= len(chunk)
 

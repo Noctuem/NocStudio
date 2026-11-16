@@ -388,6 +388,9 @@ def make_handler(home: Path, allowed_hosts: set[str], quiet: bool = False, hub: 
                 if parts == ["api", "idea"]:
                     return self.idea_post(self.studio(), self.body())
                 data = self.body()
+                if parts == ["api", "share"] and data.get("action") == "check":  # has a new link reached the public server yet: only its id comes from the page
+                    from . import share
+                    return self.send_json(dict(share.check_live(self.studio(), str(data.get("id") or "")), ok=True))
                 if parts == ["api", "wake"]:  # the user pressed Send verdicts: tell that session there are verdicts to check
                     from . import wake
                     studio = self.studio()
@@ -467,7 +470,7 @@ def make_handler(home: Path, allowed_hosts: set[str], quiet: bool = False, hub: 
                         if not isinstance(files, list) or not all(isinstance(f, str) for f in files):
                             raise StudioError("name the files to share")
                         rec = share.make(studio, files, title=str(data.get("title") or ""),
-                                         hours=str(data.get("time") or "7d"), by="the page")
+                                         hours=str(data.get("time") or "7d"), by="the page", still=data.get("still") or None)
                         return self.send_json({"ok": True, "share": rec})
                     if parts == ["api", "hand"]:
                         row = studio.answer_hand(str(data.get("id") or ""), str(data.get("action") or ""),

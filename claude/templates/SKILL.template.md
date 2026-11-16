@@ -126,9 +126,14 @@ hears the files alone. They can also make one with Share on an asset's page, on
 a candidate in the Inbox, its closer look, or the batch itself, and see or stop
 them all at the top of the Library. Make a link only when they ask for one, and
 give them the link it prints; never send it anywhere yourself. A link made with
-`S share` works once the server has it: commit `shares/<id>.json` and the files
-it names and push (or `S save`), and it is live a minute later. Stopping one is
-the same.
+`S share` works once the server has it: the Studio's next sync takes
+`shares/<id>.json`, its still `shares/<id>.jpg` and the files it names (or
+commit them and push, or `S save`), and it is live a minute or two later.
+Stopping one is the same. A Studio with no copy on the server refuses to make a
+link, since none could open; it is put there with the studio-phone skill. When
+the first file is a clip, the link carries a still of it (made with ffmpeg when
+it is on PATH) so Discord shows and plays it, and a link of one clip also prints
+a link straight to the clip.
 
 ## When the user says to process their verdicts
 

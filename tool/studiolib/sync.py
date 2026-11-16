@@ -73,8 +73,8 @@ def _sessions_live(studio: Studio) -> bool:
     return bool(notebox.alive(studio.home))
 
 
-def page_wrote(home, since_ns: int, path: str) -> None:
-    """Remember which files a click on the page changed, and send them now. A Studio that does not sync is left alone."""
+def page_wrote(home, since_ns: int, path: str, now: bool = True) -> None:
+    """Remember which files a click on the page changed, and send them now (or with the next sync). A Studio that does not sync is left alone."""
     studio = Studio(home)
     if "sync" not in studio.config:
         return
@@ -92,11 +92,13 @@ def page_wrote(home, since_ns: int, path: str) -> None:
                     found.add(f.relative_to(studio.home).as_posix())
             except OSError:
                 continue
-    for name in [f for f in found if f.startswith("shares/sh-")]:  # a link made: the files it names go with it, so it works on the server's copy
+    for name in [f for f in found if f.startswith("shares/sh-") and f.endswith(".json")]:  # a link made: the files it names go with it, so it works on the server's copy
         try:
             rec = read_json(studio.home / name, {}) or {}
         except StudioError:
             continue
+        if rec.get("still") is True and (studio.home / (name[:-5] + ".jpg")).is_file():
+            found.add(name[:-5] + ".jpg")  # the frame a chat shows for its clip
         for f in rec.get("files") or []:
             rel = str(f.get("path") or "") if isinstance(f, dict) else ""
             for path in ([rel] + (["/".join(rel.split("/")[:2]) + "/batch.json"] if rel.startswith("batches/") else [])):
@@ -106,7 +108,8 @@ def page_wrote(home, since_ns: int, path: str) -> None:
         return
     listed = studio.home / "live" / CLICKED
     write_json(listed, sorted(set(read_json(listed, []) or []) | found))
-    kick(studio.home)
+    if now:
+        kick(studio.home)
 
 
 def kick(home) -> None:

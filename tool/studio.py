@@ -22,6 +22,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -126,14 +127,24 @@ def cmd_serve_all(a):
 def cmd_share(a):
     from studiolib import share
     s = Studio(find_home(a.home))
+    started = time.time_ns()
     if a.action == "make":
-        rec = share.make(s, a.items, title=a.title, hours=a.time, by=os.environ.get("STUDIO_SESSION") or "claude-code")
+        rec = share.make(s, a.items, title=a.title, hours=a.time, by=os.environ.get("STUDIO_SESSION") or "claude-code", grab=True)
+        sync.page_wrote(s.home, started, "/api/share", now=False)  # the next sync sends it, even while a session works here
         print(f"{rec['id']}: {len(rec['files'])} file(s) until {rec['expires']}")
         print(rec["url"] or f"(no public address set: [share] url in hub.toml or studio.toml) token {rec['token']}")
+        if rec["clip_url"]:
+            print(f"Straight to the clip: {rec['clip_url']}")
+        if rec["clip"] and not rec["still"]:
+            import shutil
+            print("No still of the clip (" + ("ffmpeg could not take a frame" if shutil.which("ffmpeg") else "ffmpeg is not on PATH")
+                  + "), so a chat such as Discord shows the link as a plain card.")
+        print("It opens once the Studio's sync has taken it to the server, a minute or two from now.")
         return
     if a.action == "stop":
         for sid in a.items:
             print(f"{share.stop(s, sid)['id']}: stopped")
+        sync.page_wrote(s.home, started, "/api/share", now=False)
         return
     rows = share.listing(s)
     for r in rows:

@@ -3613,25 +3613,72 @@
   // ------------------------------------------------------------ share links
   const SHARE_TIMES = [['1h', '1 hour'], ['12h', '12 hours'], ['1d', '1 day'], ['3d', '3 days'], ['7d', '7 days'], ['30d', '30 days'], ['90d', '90 days']];
   const whenEnds = (iso) => new Date(iso).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  const isClip = (url) => /\.(mp4|webm|mov|m4v)$/i.test(String(url || ''));
+  // one frame of a clip for a chat's preview of the link: about a second in (the middle of a shorter clip), as JPEG at most 1280 px on its long side; null when the clip will not give one
+  function grabStill(url) {
+    return new Promise((done) => {
+      let over = false, timer = null;
+      const v = h('video', { muted: true, playsinline: true, preload: 'auto' });
+      const end = (out) => { if (over) return; over = true; clearTimeout(timer); v.removeAttribute('src'); v.load(); done(out); };
+      timer = setTimeout(() => end(null), 8000);
+      v.addEventListener('error', () => end(null));
+      v.addEventListener('loadedmetadata', () => { const d = v.duration; v.currentTime = isFinite(d) && d > 0 ? (d >= 2 ? 1 : d / 2) : 1; });
+      v.addEventListener('seeked', () => {
+        try {
+          const w = v.videoWidth, hh = v.videoHeight;
+          if (!w || !hh) { end(null); return; }
+          const k = Math.min(1, 1280 / Math.max(w, hh));
+          const c = document.createElement('canvas');
+          c.width = Math.max(1, Math.round(w * k)); c.height = Math.max(1, Math.round(hh * k));
+          c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
+          const fits = (s) => s.startsWith('data:image/jpeg;base64,') && (s.length - 23) * 3 / 4 <= 1024 * 1024;
+          let out = c.toDataURL('image/jpeg', 0.85);
+          if (!fits(out)) out = c.toDataURL('image/jpeg', 0.6);
+          end(fits(out) ? out : null);
+        } catch (e) { end(null); }
+      });
+      v.src = rel(url);
+    });
+  }
   function shareResult(rec, onStop) {
     const box = h('div', { class: 'shareout' });
+    // a new link reaches the server with the next sync: the PC's server asks the public address every few seconds, for three minutes at most
+    const live = h('p', { class: 'muted', role: 'status' }, 'On its way to the server. A new link opens in a minute or two; this says when it works.');
+    let tries = 0;
+    const ask = async () => {
+      if (rec.state !== 'live' || (tries && !box.isConnected)) return;
+      tries++;
+      let res = null;
+      try { res = await API.share({ action: 'check', id: rec.id }); } catch (e) { res = null; }
+      if (rec.state !== 'live') return;
+      if (res && !res.public) { live.hidden = true; return; }
+      if (res && res.live) { live.textContent = 'It works now: the link opens for anyone who has it.'; return; }
+      if (tries >= 36) { live.textContent = 'Not on the server after three minutes. The Studio\'s sync may be held up; the link opens once a sync goes through.'; return; }
+      setTimeout(ask, 5000);
+    };
     const draw = () => {
       if (rec.state !== 'live') { box.replaceChildren(h('p', { class: 'muted' }, 'Stopped. The link no longer works (on the phone copy within a minute or two).')); return; }
       const stopBtn = h('button', { class: 'btn small', type: 'button', onclick: async () => {
         stopBtn.disabled = true;
         try { rec = (await API.share({ action: 'stop', id: rec.id })).share; draw(); if (onStop) onStop(rec); } catch (e) { toast(e.message); stopBtn.disabled = false; }
       } }, 'Stop sharing');
-      box.replaceChildren(
-        rec.url ? h('div', { class: 'shareline' }, h('input', { class: 'field mono', readonly: true, value: rec.url, 'aria-label': 'The link', onfocus: (e) => e.target.select() }), copyButton(rec.url, 'Copy link'))
+      const field = (url, label) => h('input', { class: 'field mono', readonly: true, value: url, 'aria-label': label, onfocus: (e) => e.target.select() });
+      box.replaceChildren(...[
+        rec.url ? h('div', { class: 'shareline' }, field(rec.url, 'The link'), copyButton(rec.url, 'Copy link'))
           : h('p', { class: 'muted' }, 'Made, but no public address is set yet, so there is no link to send. It is the [share] url setting.'),
-        h('p', { class: 'muted' }, 'Anyone with the link sees ' + (rec.files.length === 1 ? 'this one file' : 'these ' + rec.files.length + ' files') + ' and nothing else, until ' + whenEnds(rec.expires) + '. It works about a minute after it is made.'),
-        h('div', {}, stopBtn));
+        rec.url ? live : null,
+        rec.clip_url ? h('div', { class: 'shareline' }, h('span', { class: 'muted' }, 'Link straight to the clip'), field(rec.clip_url, 'Link straight to the clip'), copyButton(rec.clip_url, 'Copy')) : null,
+        rec.url && rec.clip ? h('p', { class: 'muted' }, (rec.still ? 'In Discord the link shows a still of the ' + (rec.files.length > 1 ? 'first ' : '') + 'clip and plays it.' : 'No still could be taken of the clip, so Discord shows the link as a plain card.')
+          + (rec.clip_url ? ' The link straight to the clip plays in the chat by itself.' : '')) : null,
+        h('p', { class: 'muted' }, 'Anyone with the link sees ' + (rec.files.length === 1 ? 'this one file' : 'these ' + rec.files.length + ' files') + ' and nothing else, until ' + whenEnds(rec.expires) + '.'),
+        h('div', {}, stopBtn)].filter(Boolean));
     };
     draw();
+    if (rec.url && rec.state === 'live') ask();
     return box;
   }
-  // `items` in place of ticks: a batch or one candidate of it, shared whole, with `said` for what they will see
-  function sharePanel(files, title, items, said) {
+  // `items` in place of ticks: a batch or one candidate of it, shared whole, with `said` for what they will see and `lead` for the file the link opens with
+  function sharePanel(files, title, items, said, lead) {
     const el = h('div', { class: 'sharepanel', hidden: true });
     const button = h('button', { class: 'btn small', type: 'button', 'aria-expanded': 'false', onclick: () => { el.hidden = !el.hidden; button.setAttribute('aria-expanded', String(!el.hidden)); if (!el.hidden) draw(); } }, 'Share');
     function draw() {
@@ -3643,8 +3690,12 @@
         const chosen = items || ticks.filter((t) => t.box.checked).map((t) => t.box.dataset.path);
         if (!chosen.length) { toast('Tick at least one file'); return; }
         make.disabled = true;
-        try { const rec = (await API.share({ files: chosen, title: name.value, time: time.value })).share; out.replaceChildren(shareResult(rec)); make.textContent = 'Make another link'; }
-        catch (e) { toast(e.message); }
+        const first = items ? lead : (ticks.find((t) => t.box.checked) || {}).f;  // a clip first: one frame of it goes with the link, for a chat's preview
+        let still = null;
+        if (first && isClip(first.url)) { make.textContent = 'Taking a still of the clip'; still = await grabStill(first.url); }
+        make.textContent = 'Making the link';
+        try { const rec = (await API.share({ files: chosen, title: name.value, time: time.value, still })).share; out.replaceChildren(shareResult(rec)); make.textContent = 'Make another link'; }
+        catch (e) { toast(e.message); out.replaceChildren(h('p', { class: 'muted' }, e.message.charAt(0).toUpperCase() + e.message.slice(1) + '.')); make.textContent = 'Make the link'; }
         make.disabled = false;
       } }, 'Make the link');
       el.replaceChildren(...[
@@ -3661,7 +3712,8 @@
     if (STATIC || b.sample || !n) return null;
     const said = 'A link for someone outside: they see and hear ' + (n === 1 ? 'this one file' : 'these ' + n + ' files') + (cand ? ' of ' + cand.title : ', under each candidate\'s name')
       + ', and nothing else: no verdict, notes or marks. It works until it runs out.';
-    const panel = sharePanel([], b.title, [b.id + (cand ? '/' + cand.id : '')], said);
+    const f = (cand ? [cand] : b.candidates).flatMap((c) => c.files || [])[0];
+    const panel = sharePanel([], b.title, [b.id + (cand ? '/' + cand.id : '')], said, f && { url: fileUrl(b.id, f.path) });
     panel.button.title = cand ? 'A link to ' + cand.title + '\'s files, for someone outside' : 'A link to every candidate\'s files, for someone outside';
     return panel;
   }
@@ -3674,6 +3726,7 @@
       const row = (x) => h('div', { class: 'row' },
         h('div', { class: 'grow' }, h('div', { class: 'title' }, x.title), h('div', { class: 'sub' }, (x.files.length === 1 ? '1 file' : x.files.length + ' files') + ((x.batches || []).length ? ' from the Inbox (' + [...new Set(x.files.map((f) => f.group).filter(Boolean))].join(', ') + ')' : '') + ' · ' + (x.state === 'live' ? 'until ' + whenEnds(x.expires) : x.state === 'expired' ? 'ran out ' + whenEnds(x.expires) : 'stopped'))),
         x.state === 'live' && x.url ? copyButton(x.url, 'Copy link') : null,
+        x.state === 'live' && x.clip_url ? copyButton(x.clip_url, 'Copy clip link') : null,
         x.state === 'live' ? h('button', { class: 'btn small', type: 'button', onclick: async (e) => {
           e.target.disabled = true;
           try { await API.share({ action: 'stop', id: x.id }); toast('Stopped'); render(); } catch (err) { toast(err.message); e.target.disabled = false; }

@@ -1198,6 +1198,16 @@ def main() -> int:
         # share links: only the files named, only from the library, only until they run out or are stopped
         from studiolib import share
         (home / "library/test.script/v1/page.html").write_text("<script>alert(1)</script>", encoding="utf-8")
+        try:
+            share.make(studio, ["library/test.script/v1"]); unsynced = ""
+        except StudioError as err:
+            unsynced = str(err)
+        said = tool_cli("share", "make", "library/test.script/v1")
+        check("no copy on the server" in unsynced and "studio-phone" in unsynced and not (home / "shares").exists()
+              and said.returncode == 2 and "no copy on the server" in said.stderr,
+              "a Studio with no copy on the server makes no link, since none could open, and says how to put it there")
+        (home / "studio.local.toml").write_text("[sync]\nevery_seconds = 0\n", encoding="utf-8")  # a copy on the server, synced by hand
+        studio.config = studio._load_config()
         for bad in (["batches/" + script["id"] + "/files/a/script.md"], ["library/../studio.toml"], [str(src / "script.md")], []):
             try:
                 share.make(studio, bad); check(False, f"sharing {bad} is refused")
@@ -1238,13 +1248,136 @@ def main() -> int:
         rec_file = home / "shares" / f"{other['id']}.json"
         old = json.loads(rec_file.read_text(encoding="utf-8")); old["expires"] = "2020-01-01T00:00:00Z"
         rec_file.write_text(json.dumps(old), encoding="utf-8")
-        check(sget(rec["token"] + "/")[0] == 404 and sget(other["token"] + "/")[0] == 404
-              and sorted(x["state"] for x in share.listing(studio)) == ["expired", "stopped"],
-              "a stopped link and a run-out link both answer as if they never were")
+        dead = {"stopped": sget(rec["token"] + "/"), "ended": sget(other["token"] + "/"), "unknown": sget("x" * 43 + "/"),
+                "stopped file": sget(f"{rec['token']}/{idx['script.md']}/script.md"), "ended file": sget(f"{other['token']}/0/script.md")}
+        words = {k: v[2].decode("utf-8") for k, v in dead.items()}
+        check({v[0] for v in dead.values()} == {404} and sorted(x["state"] for x in share.listing(studio)) == ["expired", "stopped"]
+              and "This link was stopped." in words["stopped"] and "This link was stopped." in words["stopped file"]
+              and "This link ended on 01 Jan 2020, 00:00 UTC." in words["ended"] and "This link ended on 01 Jan 2020" in words["ended file"]
+              and "This link is not here. A new link takes a minute or two to reach the server; try again shortly." in words["unknown"]
+              and not any(t in w for w in words.values() for t in (rec["token"], other["token"], "script.md", "page.html", "Take one"))
+              and sget(rec["token"] + "/", method="HEAD")[0] == 404,
+              "a link that does not open says whether it ended, was stopped or is not here yet, all as 404, with no token or file named")
         try:
             share.make(studio, ["library/test.script/v1"], hours="91d"); check(False, "a link longer than 90 days is refused")
         except StudioError:
             check(True, "every link ends: 90 days at most")
+
+        # a link to a clip: a still of it and the tags a chat reads (Discord runs no script), a link straight to the clip
+        import base64
+        import re
+        from studiolib.checks import video_facts
+        for sub in ("test.clip/v1", "test.pic/v1", "test.snd/v1"):
+            (home / "library" / sub).mkdir(parents=True, exist_ok=True)
+        shutil.copy(Path(__file__).resolve().parent / "samples_src/video/clip_bars.mp4", home / "library/test.clip/v1/clip.mp4")
+        make_png(home / "library/test.pic/v1/pic.png", 32, 120)
+        shutil.copy(src / "quiet_a.wav", home / "library/test.snd/v1/tone.wav")
+        vf = video_facts(home / "library/test.clip/v1/clip.mp4")
+
+        def fake_jpeg(w: int, hgt: int, pad: int = 0) -> bytes:
+            return (b"\xff\xd8\xff\xc0" + struct.pack(">HBHHB", 17, 8, hgt, w, 3) + b"\x01\x22\x00\x02\x11\x01\x03\x11\x01"
+                    + b"\x00" * pad + b"\xff\xd9")
+        still = fake_jpeg(640, 360)
+        kept_before = sorted(p.name for p in (home / "shares").iterdir())
+        refused = []
+        for bad in (fake_jpeg(1600, 900), fake_jpeg(640, 360, pad=share.STILL_MAX), b"GIF89a, not a JPEG", "data:image/jpeg;base64,@@@"):
+            try:
+                share.make(studio, ["library/test.clip/v1/clip.mp4"], still=bad); refused.append("")
+            except StudioError as err:
+                refused.append(str(err))
+        check(all(refused) and "1280" in refused[0] and "over 1 MB" in refused[1]
+              and sorted(p.name for p in (home / "shares").iterdir()) == kept_before,
+              "a still too wide, over 1 MB, or not a JPEG is refused, and no link is made with it")
+        clip = share.make(studio, ["library/test.clip/v1/clip.mp4"], title="Bars & <tone>", still="data:image/jpeg;base64," + base64.b64encode(still).decode())
+        pic = share.make(studio, ["library/test.pic/v1/pic.png"], still=still)
+        snd = share.make(studio, ["library/test.snd/v1/tone.wav"])
+        crec = json.loads((home / "shares" / f"{clip['id']}.json").read_text(encoding="utf-8"))
+        check(clip["still"] and crec["still"] is True and (home / "shares" / f"{clip['id']}.jpg").read_bytes() == still
+              and crec["base"] == "https://example.test/share/" and not pic["still"] and not (home / "shares" / f"{pic['id']}.jpg").exists()
+              and clip["clip_url"] == f"https://example.test/share/{clip['token']}/0/clip.mp4" and not pic["clip_url"] and not snd["clip_url"],
+              "a clip's link keeps its still beside the record, a picture's takes none, and only a link of one clip has a link straight to it")
+        st, hd, body = sget(f"{clip['token']}/still.jpg")
+        part = sget(f"{clip['token']}/0/clip.mp4", headers={"Range": "bytes=0-99"})
+        check(st == 200 and body == still and hd.get("Content-Type") == "image/jpeg" and part[0] == 206 and len(part[2]) == 100
+              and part[1].get("Content-Type") == "video/mp4" and part[1].get("Content-Range", "").startswith("bytes 0-99/")
+              and "still.jpg" in hd.get("Content-Disposition", "") and clip["id"] not in hd.get("Content-Disposition", ""),
+              "the still is served at <token>/still.jpg, and the clip straight from its link in parts, as a chat's player asks")
+        csp = part[1].get("Content-Security-Policy", "")
+        dl = sget(f"{clip['token']}/0/clip.mp4?dl=1", method="HEAD")[1]
+        check(csp.startswith("default-src 'none'") and "script" not in csp and "media-src 'self'" in csp and part[1].get("X-Content-Type-Options") == "nosniff"
+              and dl.get("Content-Security-Policy", "").startswith("sandbox") and hd.get("Content-Security-Policy", "").startswith("sandbox"),
+              "a clip opened on its own plays in the browser (no sandbox, which would bar the player from its own file) and still runs no script; a download and a picture stay sandboxed")
+        forged = dict(crec, id=clip["id"], token="y" * 43)  # another record that names this link's id: it never reaches its still
+        share.write_json(home / "shares" / "sh-0000cafe.json", forged)
+        share.write_json(home / "shares" / "sh-0000cafd.json", dict(crec, id="../" + clip["id"], token="z" * 43))
+        check([sget(p)[0] for p in (f"{pic['token']}/still.jpg", f"{clip['token']}/{clip['id']}.jpg", f"{clip['token']}/0/still.jpg",
+                                    f"{clip['token']}/../shares/{clip['id']}.jpg", "y" * 43 + "/still.jpg", "z" * 43 + "/still.jpg")] == [404] * 6
+              and share.still_file(home, dict(crec, id="sh-zz")) is None,
+              "a still is served under its own token alone: never for a link with none, another path, a bad id, or a record that borrows an id")
+        (home / "shares" / "sh-0000cafe.json").unlink(); (home / "shares" / "sh-0000cafd.json").unlink()
+
+        def tags_of(token):
+            st, _, body = sget(token + "/")
+            text = body.decode("utf-8")
+            return st, dict(re.findall(r'<meta (?:property|name)="([^"]+)" content="([^"]*)">', text)), text
+        _, ct, ctext = tags_of(clip["token"])
+        page_at = f"https://example.test/share/{clip['token']}/"
+        check(ct.get("og:title") == "Bars &amp; &lt;tone&gt;" and ct.get("og:site_name") == "NocStudio" and ct.get("og:type") == "video.other"
+              and ct.get("og:video") == ct.get("og:video:secure_url") == clip["clip_url"] and ct.get("og:video:type") == "video/mp4"
+              and (ct.get("og:video:width"), ct.get("og:video:height")) == (str(vf["width"]), str(vf["height"]))
+              and ct.get("og:image") == page_at + "still.jpg" and ct.get("og:image:width") == "640" and ct.get("twitter:card") == "player"
+              and ct.get("twitter:player:stream") == clip["clip_url"] and ct.get("og:url") == page_at and "<script" not in ctext,
+              "a clip's page tells a chat its title, the clip's full address, type and size, and its still, so Discord plays it")
+        _, pt, _ = tags_of(pic["token"])
+        _, nt, _ = tags_of(snd["token"])
+        check(pt.get("og:image") == f"https://example.test/share/{pic['token']}/0/pic.png" and pt.get("twitter:card") == "summary_large_image"
+              and "og:video" not in pt and nt.get("og:title") == "v1" and nt.get("og:description", "").startswith("1 file, shared until ")
+              and not any(k.startswith(("og:video", "og:image", "twitter:player")) for k in nt) and nt.get("twitter:card") == "summary",
+              "a picture's page shows the picture in a chat, and a sound's only its title and a plain line")
+        old = share.make(studio, ["library/test.clip/v1/clip.mp4"], title="From before")
+        oldrec = json.loads((home / "shares" / f"{old['id']}.json").read_text(encoding="utf-8"))
+        oldrec.pop("base", None)
+        share.write_json(home / "shares" / f"{old['id']}.json", oldrec)
+        st, ot, otext = tags_of(old["token"])
+        check(st == 200 and not old["still"] and ot.get("og:title") == "From before" and "og:video" not in ot and "og:image" not in ot
+              and otext.split("</head>")[1] == share.page(oldrec, [True]).split("</head>")[1],
+              "a link made before stills opens as it did: the same page, its title for a chat, and no player, since Discord needs the still")
+        bare = subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "studio.py"), "--home", str(home), "share", "make",
+                               "library/test.clip/v1/clip.mp4"], capture_output=True, text=True, encoding="utf-8",
+                              env=dict(os.environ, PATH=str(Path(sys.executable).parent)))
+        bare_id = bare.stdout.split(":")[0].strip()
+        marked = json.loads((home / "live" / "page-wrote.json").read_text(encoding="utf-8")) if (home / "live" / "page-wrote.json").exists() else []
+        check(bare.returncode == 0 and "ffmpeg is not on PATH" in bare.stdout and "plain card" in bare.stdout
+              and "Straight to the clip: https://example.test/share/" in bare.stdout and not (home / "shares" / f"{bare_id}.jpg").exists()
+              and f"shares/{bare_id}.json" in marked and "library/test.clip/v1/clip.mp4" in marked,
+              "the command makes a clip's link with no still when ffmpeg is not on PATH and says so, and the next sync takes the link")
+        if shutil.which("ffmpeg"):
+            said = tool_cli("share", "make", "library/test.clip/v1/clip.mp4")
+            sid_cli = said.stdout.split(":")[0].strip()
+            got = home / "shares" / f"{sid_cli}.jpg"
+            size = share.jpeg_size(got.read_bytes()) if got.is_file() else None
+            marked = json.loads((home / "live" / "page-wrote.json").read_text(encoding="utf-8"))
+            check(said.returncode == 0 and size and max(size) <= 1280 and size[0] > size[1] and "No still" not in said.stdout
+                  and f"shares/{sid_cli}.jpg" in marked, "with ffmpeg on PATH the command takes a still of the clip, and the next sync takes it too")
+        else:
+            print("  SKIP  ffmpeg is not on PATH here: the command's still is not tried")
+
+        # whether a new link has reached the server: the PC asks the public address, here a local share server standing in
+        os.environ["STUDIO_SHARE_URL"] = sbase
+        answers = [share.check_live(studio, clip["id"]), share.check_live(studio, rec["id"])]
+        os.environ["STUDIO_SHARE_URL"], os.environ["STUDIO_HUB"] = "https://example.test/share", str(tmp / "no-hub.toml")
+        bad_ids = []
+        for bad in ("sh-00000000", "../studio", ""):
+            try:
+                share.check_live(studio, bad)
+            except StudioError:
+                bad_ids.append(bad)
+        del os.environ["STUDIO_SHARE_URL"]
+        answers.append(share.check_live(studio, clip["id"]))
+        os.environ["STUDIO_SHARE_URL"] = "https://example.test/share"
+        del os.environ["STUDIO_HUB"]
+        check(answers == [{"public": True, "live": True}, {"public": True, "live": False}, {"public": False, "live": False}] and len(bad_ids) == 3,
+              "the check says a live link answers on the public server and a stopped one does not, says nothing with no public address, and takes only a share's id")
 
         # share links from the inbox: a batch's or one candidate's own files, under its name, and nothing else in the batch
         shot = studio.load_batch(batch["id"])
@@ -1336,6 +1469,11 @@ def main() -> int:
                 share.stop(studio, x["id"])
         sh.shutdown(); sh.server_close(); del os.environ["STUDIO_SHARE_URL"]
         (home / "library/test.script/v1/page.html").unlink()
+        for sub in ("test.clip", "test.pic", "test.snd"):
+            shutil.rmtree(home / "library" / sub)
+        (home / "studio.local.toml").unlink()
+        (home / "live" / "page-wrote.json").unlink(missing_ok=True)
+        studio.config = studio._load_config()
         # a video's parts in its own Library group: working copies the user hears, and a script they edit there
         studio.set_slot("test.vid.script", title="Script", kind="text", group="Video: test", status="in_review")
         (src / "vo.md").write_text("# Shot 1\n\nHello there.\n", encoding="utf-8")
@@ -1562,6 +1700,37 @@ def main() -> int:
               and (phone / f"batches/{lent['id']}/batch.json").is_file() and there
               and not any(x.get("id") == "half-done-2" for x in Studio(phone).hands()),
               "a candidate shared from the PC page while a session works takes its file and its batch's record to the phone, where the link opens it")
+        shares.stop(studio, made["share"]["id"])
+        # a clip shared from the PC page: its still reaches the server's copy with the record, and the page's check finds the link there
+        reel = studio.new_batch("reel", title="Reel", kind="video", ask="Which?", look_at=["x"])
+        studio.add_candidate(reel["id"], [Path(__file__).resolve().parent / "samples_src/video/clip_zoom.mp4"], title="Zoom")
+        studio.add_candidate(reel["id"], [Path(__file__).resolve().parent / "samples_src/video/clip_cells.mp4"], title="Cells")
+        filed = studio.publish(reel["id"])["ready"]
+        far_side = ThreadingHTTPServer(("127.0.0.1", 0), shares.make_share_handler([phone]))
+        threading.Thread(target=far_side.serve_forever, daemon=True).start()
+        os.environ["STUDIO_SHARE_URL"] = f"http://127.0.0.1:{far_side.server_address[1]}/"
+        frame = fake_jpeg(640, 360)
+        pcbase = f"http://127.0.0.1:{pc.server_address[1]}"
+        status, made = http("POST", pcbase + "/api/share", {"files": [reel["id"]], "title": "Reel", "still": "data:image/jpeg;base64," + base64.b64encode(frame).decode()})
+        _, early = http("POST", pcbase + "/api/share", {"action": "check", "id": made["share"]["id"]})
+        time.sleep(0.2)
+        for _ in range(150):
+            if not sync.KICKS[str(home.resolve())].locked():
+                break
+            time.sleep(0.1)
+        sync.step(Studio(phone), "always")
+        _, later = http("POST", pcbase + "/api/share", {"action": "check", "id": made["share"]["id"]})
+        with urllib.request.urlopen(f"http://127.0.0.1:{far_side.server_address[1]}/{made['share']['token']}/still.jpg", timeout=10) as res:
+            served = res.read()
+        with urllib.request.urlopen(f"http://127.0.0.1:{far_side.server_address[1]}/{made['share']['token']}/", timeout=10) as res:
+            there = res.read().decode("utf-8")
+        far_side.shutdown(); far_side.server_close(); del os.environ["STUDIO_SHARE_URL"]
+        check(filed and status == 200 and made["share"]["still"] and made["share"]["clip"] and made["share"]["clip_url"] == ""
+              and early == {"ok": True, "public": True, "live": False} and later == {"ok": True, "public": True, "live": True}
+              and (phone / "shares" / f"{made['share']['id']}.jpg").read_bytes() == frame and served == frame
+              and 'property="og:video:type" content="video/mp4"' in there and 'property="og:video:width" content="640"' in there,
+              "a batch of clips shared from the PC page takes the first clip's still to the server's copy, has no link straight to one clip, "
+              "and the page's check says the link works once it is there")
         shares.stop(studio, made["share"]["id"])
         (home / "live" / "s-busy.json").unlink()
         pc.shutdown(); pc.server_close()
