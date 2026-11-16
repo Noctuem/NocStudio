@@ -1266,6 +1266,21 @@ def main() -> int:
             except StudioError:
                 pass
         check(True, "a sample, a candidate not in the batch, a file named inside a batch, its record, its marks, or a path that climbs out are refused")
+        wip = studio.new_batch("wip", title="Work in progress", kind="audio")
+        studio.add_candidate(wip["id"], [src / "quiet_a.wav"], title="Half done")
+        refused = []
+        for bad in ([wip["id"]], [f"{wip['id']}/a"], [sid.upper()], [f"{sid.upper()}/a"]):
+            try:
+                share.make(studio, bad)
+            except StudioError as e:
+                refused.append(str(e))
+        check(len(refused) == 4 and "not filed yet" in refused[0] and "not filed yet" in refused[1]
+              and share.candidate_file(home, f"batches/{wip['id']}/files/a/quiet_a.wav") is None
+              and share.candidate_file(home, f"batches/{sid.upper()}/files/a/quiet_a.wav") is None
+              and share.candidate_file(home, f"batches/{sid}/files/a/QUIET_A.wav") is None
+              and share.candidate_file(home, f"batches/{sid}/files/a/quiet_a.wav") is not None,
+              "a batch not yet filed is never shared, and a batch or file named in the wrong case is refused, so a link never names a path the server's copy lacks")
+        shutil.rmtree(studio.batch_dir(wip["id"]))
         kept = (bfolder / "batch.json").read_text(encoding="utf-8")
         raw = json.loads(kept)
         raw["candidates"][0]["files"] += [{"path": p} for p in ("files/a/../../batch.json", "verdict.json", "files/_context/x.png", "marks/a.png", "files/a/link.wav")]
@@ -1522,7 +1537,8 @@ def main() -> int:
               "a note typed on the PC page reaches the phone at once while a session works, and the session's own changes wait for its save")
         lent = studio.new_batch("lend", title="Lend", kind="audio", ask="Which?", look_at=["x"])
         studio.add_candidate(lent["id"], [src / "quiet_b.wav"], title="Soft")
-        studio.publish(lent["id"])
+        studio.add_candidate(lent["id"], [src / "quiet_a.wav"], title="Softer")
+        check(studio.publish(lent["id"])["ready"], "the batch to lend is filed, as only a filed batch is shared")
         studio.set_hand("half-done-2", title="Another unfinished row of the session's", status="open")
         bad_status, bad = http("POST", f"http://127.0.0.1:{pc.server_address[1]}/api/share", {"files": ["sample-sounds"]})
         status, made = http("POST", f"http://127.0.0.1:{pc.server_address[1]}/api/share", {"files": [lent["id"] + "/a"], "title": "For a friend", "time": "12h"})

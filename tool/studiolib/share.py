@@ -137,12 +137,12 @@ def candidate_file(home: Path, rel: str) -> Path | None:
     home = Path(home).resolve()
     want = home.joinpath(*parts)
     try:
-        if want.resolve() != want or not want.is_file():  # a link anywhere on the way leads somewhere else: refused
+        if want.resolve().as_posix() != want.as_posix() or not want.is_file():  # a link on the way, or a name in the wrong case: refused
             return None
         batch = read_json(home / "batches" / parts[1] / "batch.json")
     except (OSError, StudioError):
         return None
-    if not isinstance(batch, dict) or batch.get("sample"):
+    if not isinstance(batch, dict) or batch.get("sample") or not batch.get("filed"):
         return None
     for cand in batch.get("candidates") or []:
         if isinstance(cand, dict) and cand.get("id") == parts[3]:
@@ -161,10 +161,12 @@ def _batch_files(studio: Studio, item: str) -> tuple[dict, list[tuple[Path, str]
     if parts[0].startswith(SAMPLE):
         raise StudioError(f"{parts[0]}: a sample is made up and is never shared; share a real batch")
     batch = read_json(studio.batches_dir / parts[0] / "batch.json")
-    if not isinstance(batch, dict):
+    if not isinstance(batch, dict) or batch.get("id") != parts[0]:
         raise StudioError(f"no batch {parts[0]!r}; see: studio.py status")
     if batch.get("sample"):
         raise StudioError(f"{parts[0]}: a sample is made up and is never shared; share a real batch")
+    if not batch.get("filed"):
+        raise StudioError(f"{parts[0]} is not filed yet; share it once it is in the Inbox")
     cands = [c for c in batch.get("candidates") or [] if isinstance(c, dict)]
     if len(parts) == 2:
         cands = [c for c in cands if c.get("id") == parts[1]]
