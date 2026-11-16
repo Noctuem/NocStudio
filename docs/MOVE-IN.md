@@ -134,7 +134,8 @@ Studio's home. Both parts:
 - **The section.** Merge `<home>\CLAUDE-section.md` into the project's instructions file, near
   the top: `CLAUDE.md` for Claude Code, `AGENTS.md` for Codex (it reads the same for both). Make
   the file if there is none. Paste it as it is; it names the home, which is what ticks the line.
-  Trim it only if the file sets a length rule for itself.
+  Trim it only if the file limits its own length ("keep this file under 40 lines"); a limit on
+  the code is not one.
 - Where the instructions send the user to folders, to picks in chat, or to another review
   tool, change them to send the user to the Studio. Leave history as it is.
 - Commit only the skill and the instructions file, by path, with a message like
@@ -162,7 +163,9 @@ with every open point in it. A plan has:
   two lines step 5 gives, and whether you may install them. For Codex, ask them also to type
   `/hooks` in Codex once and trust NocStudio's.
 
-Wait for their answer. Then write the plan in at once, from a file outside the project (your
+Wait for their answer. If it does not fit what the files say (a different project, a goal the
+code has nothing of), say so and ask again before you write anything. Then write the plan in at
+once, from a file outside the project (your
 temp folder), so the project gets no stray file:
 
 ```
@@ -177,7 +180,8 @@ S plan <file.json>
                  "steps": [{"id": "<short-id>", "name": "<the step, as they would say it>", "status": "planned"}]}]}
 ```
 
-- `S plan` with no file prints what is there now, not this shape.
+- `S plan` with no file prints what is there now (empty on a new Studio). The file may also
+  hold `"asks"` and `"slots"` lists, or you can add those with the commands below.
 - A milestone takes `"eta": "<a date>"` and a `next` line takes ` :: <when>` only when the
   user or the files give the date.
 - Step statuses: `planned`, `building`, `built`, `tested`, `done`, `parked`, `dropped`. A step
@@ -218,7 +222,7 @@ project, these status rules, and that it must not commit or change the project.
 the user types in the Studio. If not, the two lines for the user (in the step 3 message):
 installing adds one entry per event to their own agent settings (Claude Code:
 `~\.claude\settings.json`; Codex: `~\.codex\hooks.json`) and keeps a copy of that file as it
-was; it works for every project that has a Studio and for none that has not; and a session
+was, if there was one; it works for every project that has a Studio and for none that has not; and a session
 waits a moment at the end of a turn and after each tool call, so their notes can reach it.
 When they have agreed:
 
@@ -233,8 +237,8 @@ nothing until the user has trusted it with `/hooks` in Codex.
 
 - `S status` shows no Getting organised list (it is gone once the needed lines are ticked), or
   only the asset line on a project with no assets, and no advice about the board.
-- `S hooks status` shows your agent reporting and handed notes. The hooks line is ticked when
-  any agent's hooks are in, so check your own.
+- `S hooks status` says your agent reports in and its sessions are handed the user's notes.
+  The hooks line is ticked when any agent's hooks are in, so check your own.
 - `S log note "Moved into NocStudio"`, then `S save`, which commits the Studio's home. A new
   Studio has no git remote, so `NOT pushed: no remote is set` is expected; say so in one line.
 - Tell the user in a few lines: that `K studios` lists the project, so it is in the NocStudio

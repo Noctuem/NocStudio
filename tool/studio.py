@@ -103,7 +103,8 @@ def cmd_create(a):
     print(f"  S is      {made['s']}")
     print(f"\nNext, in {made['repo']}: merge {made['section']} into {' and '.join(made['docs'])}, near the top,")
     print("then move the project in: the goal, milestones, slots, live reporting. The steps are in\n"
-          f"{Path(__file__).resolve().parents[1] / 'docs' / 'MOVE-IN.md'} (or the studio-create skill); S status lists what is left.")
+          f"{Path(__file__).resolve().parents[1] / 'docs' / 'MOVE-IN.md'}"
+          + (" (or the studio-create skill)" if "claude" in (a.agents or ["claude"]) else "") + "; S status lists what is left.")
 
 
 def cmd_studios(a):
@@ -276,7 +277,7 @@ def cmd_status(a):
         print(f"  {b['id']}  {b['title']}  -> {b['action']}")
     hands = [x for x in s.hands() if x.get("status") == "open"]
     if hands:
-        print(f"\nOnly the user can do: {len(hands)}")
+        print(f"\nIn Needs you, for the user to do or answer: {len(hands)}")
         for x in hands:
             print(f"  {x['id']}  {x['title']}")
     unseen = s.unseen_hands()
@@ -677,7 +678,8 @@ def cmd_hooks(a):
         for who in a.agents or list(setup.AGENTS):
             name, flag = setup.agent(who)["name"], "" if who == "claude" else f" --for {who}"
             events = setup.hooks_installed(who=who)
-            print(f"{name} reports {len(events)} kinds of event to {setup.HOOK}" if events
+            print(f"{name} reports {len(events)} kinds of event to {setup.HOOK}"
+                  + (", and its sessions are handed the user's notes" if setup.hooks_hand_over(who=who) else "") if events
                   else f"{name}: not installed: studio.py hooks install{flag}   (it edits {setup.hooks_file(who)})")
             if events and not setup.hooks_hand_over(who=who):
                 print(f"They were installed before the notes box, so sessions are not handed the user's notes: studio.py hooks install{flag}")
